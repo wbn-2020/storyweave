@@ -1,0 +1,107 @@
+export const SCHEMA_VERSION = 2
+export const STUDIO_APPLICATION_ID = 0x53545753
+export const BOOK_APPLICATION_ID = 0x53545742
+
+export const STUDIO_SCHEMA = `
+  CREATE TABLE studio_meta (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    format TEXT NOT NULL CHECK (format = 'storyweave-studio')
+  ) STRICT;
+  INSERT INTO studio_meta (singleton, format) VALUES (1, 'storyweave-studio');
+  CREATE TABLE books (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    genre TEXT NOT NULL DEFAULT '',
+    synopsis TEXT NOT NULL DEFAULT '',
+    archived_at TEXT,
+    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+`
+
+export const BOOK_SCHEMA = `
+  CREATE TABLE book_meta (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    id TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    genre TEXT NOT NULL DEFAULT '',
+    synopsis TEXT NOT NULL DEFAULT '',
+    archived_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    knowledge_revision INTEGER NOT NULL DEFAULT 0 CHECK (knowledge_revision >= 0),
+    index_publication_version INTEGER NOT NULL DEFAULT 0 CHECK (index_publication_version >= 0)
+  ) STRICT;
+  CREATE TABLE volumes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE chapters (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+    volume_id TEXT REFERENCES volumes(id) ON DELETE SET NULL,
+    goal TEXT NOT NULL DEFAULT '',
+    viewpoint TEXT NOT NULL DEFAULT '',
+    target_characters INTEGER,
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'writing', 'review', 'finalized')),
+    current_revision_id TEXT NOT NULL,
+    finalized_revision_id TEXT,
+    finalized_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (id, current_revision_id) REFERENCES chapter_revisions(chapter_id, id)
+      DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (id, finalized_revision_id) REFERENCES chapter_revisions(chapter_id, id)
+      DEFERRABLE INITIALLY DEFERRED,
+    CHECK (target_characters IS NULL OR target_characters >= 0),
+    CHECK ((finalized_revision_id IS NULL) = (finalized_at IS NULL))
+  ) STRICT;
+  CREATE TABLE chapter_revisions (
+    id TEXT PRIMARY KEY,
+    chapter_id TEXT NOT NULL REFERENCES chapters(id),
+    parent_revision_id TEXT,
+    document_json TEXT NOT NULL,
+    plain_text TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    character_count INTEGER NOT NULL CHECK (character_count >= 0),
+    sequence INTEGER NOT NULL UNIQUE,
+    reason TEXT NOT NULL CHECK (reason IN ('created', 'saved', 'restored', 'imported')),
+    restored_from_revision_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (chapter_id, id),
+    FOREIGN KEY (chapter_id, parent_revision_id) REFERENCES chapter_revisions(chapter_id, id),
+    FOREIGN KEY (chapter_id, restored_from_revision_id) REFERENCES chapter_revisions(chapter_id, id)
+  ) STRICT;
+  CREATE INDEX revisions_by_chapter ON chapter_revisions(chapter_id, sequence DESC);
+  CREATE TRIGGER immutable_revision_update BEFORE UPDATE ON chapter_revisions
+  BEGIN SELECT RAISE(ABORT, 'Chapter revisions are immutable'); END;
+  CREATE TRIGGER immutable_revision_delete BEFORE DELETE ON chapter_revisions
+  BEGIN SELECT RAISE(ABORT, 'Chapter revisions are immutable'); END;
+  CREATE TABLE outbox (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('chapter.changed', 'book.metadata', 'book.structure', 'chapter.metadata', 'chapter.finalized')),
+    chapter_id TEXT REFERENCES chapters(id),
+    revision_id TEXT REFERENCES chapter_revisions(id),
+    book_revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'processed'))
+  ) STRICT;
+  CREATE INDEX outbox_pending ON outbox(state, created_at, id);
+  CREATE UNIQUE INDEX outbox_chapter_changed_once ON outbox(chapter_id, revision_id) WHERE kind = 'chapter.changed';
+  CREATE TABLE import_sources (
+    id TEXT PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    encoding TEXT NOT NULL CHECK (encoding IN ('utf-8', 'utf-16le', 'utf-16be', 'gb18030')),
+    relative_path TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,
+    byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
+    created_at TEXT NOT NULL
+  ) STRICT;
+`

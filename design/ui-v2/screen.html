@@ -1,0 +1,82 @@
+<div id="sw-night-v2">
+  <!--STYLES-->
+  <div class="sw-app" aria-label="织章夜航知识星系设计演示">
+    <header class="sw-topbar">
+      <div class="sw-brand"><span class="sw-brand-mark" aria-hidden="true"></span>织章</div>
+      <div class="sw-work-name">潮汐档案 <small>第一卷 / 退潮之前</small></div>
+      <div class="sw-top-status"><i aria-hidden="true"></i>r18 · 保存状态样例</div>
+      <span class="sw-chip">离线设计演示</span>
+    </header>
+    <div class="sw-layout">
+      <nav class="sw-rail" aria-label="作品任务区">
+        <button class="sw-nav" type="button" data-page="writing" aria-pressed="false"><b aria-hidden="true">章</b>创作</button>
+        <button class="sw-nav" type="button" data-page="galaxy" aria-pressed="true"><b aria-hidden="true">星</b>知识</button>
+        <button class="sw-nav" type="button" data-page="review" aria-pressed="false"><b aria-hidden="true">阅</b>审阅</button>
+        <div class="sw-rail-note">把故事织成星系</div>
+      </nav>
+      <section class="sw-section" data-screen="galaxy" aria-label="全书知识星系">
+        <div class="sw-section-head">
+          <div><div class="sw-eyebrow">STORY ATLAS / 夜航知识星系</div><h1>在星系里，看见故事的联系。</h1></div>
+          <div class="sw-controls"><button class="sw-btn" type="button" data-view="space" aria-pressed="true">3D 星系</button><button class="sw-btn" type="button" data-view="list" aria-pressed="false">对象列表</button><button class="sw-btn" type="button" data-go="writing">回到正文 →</button></div>
+        </div>
+        <div class="sw-graph-work">
+          <aside class="sw-directory" aria-label="知识范围">
+            <div class="sw-small-title">知识群落</div>
+            <button class="sw-group" type="button" data-cluster="all" aria-pressed="true"><span class="sw-group-dot" style="background:#b5c9d5"></span>全书星系</button>
+            <button class="sw-group" type="button" data-cluster="people" aria-pressed="false"><span class="sw-group-dot" style="background:#76b9ce"></span>人物与知情</button>
+            <button class="sw-group" type="button" data-cluster="events" aria-pressed="false"><span class="sw-group-dot" style="background:#9dabdc"></span>北堤事件</button>
+            <button class="sw-group" type="button" data-cluster="rules" aria-pressed="false"><span class="sw-group-dot" style="background:#8ccbb7"></span>潮钟规则</button>
+            <button class="sw-group" type="button" data-cluster="clues" aria-pressed="false"><span class="sw-group-dot" style="background:#deb881"></span>伏笔与承诺</button>
+            <button class="sw-group" type="button" data-cluster="sources" aria-pressed="false"><span class="sw-group-dot" style="background:#af9ccd"></span>港务资料</button>
+            <button class="sw-group" type="button" data-cluster="plans" aria-pressed="false"><span class="sw-group-dot" style="background:#d491a1"></span>未决与计划</button>
+            <div class="sw-directory-note"><strong>全书可见 ≠ 本场可用</strong><br>未来计划与未确认项<br>可以探索，但不进入写作事实。<br><br>710 展示对象：14 故事对象<br>＋696 密度演示对象。<br>不是全书提取或记忆覆盖。</div>
+          </aside>
+          <div class="sw-sky-panel">
+            <div class="sw-sky-top"><span data-count>710 对象 · 1,615 关系 · 全部为展示样例</span><form class="sw-search" data-search><label class="sw-sr" for="sw-galaxy-query">定位故事对象</label><input id="sw-galaxy-query" type="search" placeholder="人物、规则、场景…" autocomplete="off"><button class="sw-btn" type="submit">定位</button></form></div>
+            <div class="sw-sky" data-galaxy>
+              <canvas aria-label="密集三维知识星系，可拖动旋转；对应对象列表支持键盘选择"></canvas>
+              <div class="sw-sky-labels" data-labels></div>
+              <div class="sw-sky-caption">夜航 / 作者全书视角</div>
+              <div class="sw-fallback-label" data-renderer>本地三维投影</div>
+              <div class="sw-map-help">拖动旋转 · 滚轮缩放 · 点击选中<br>星系距离不代表确定因果</div>
+              <div class="sw-map-actions"><button class="sw-btn" type="button" data-camera="in" aria-label="放大星系">＋</button><button class="sw-btn" type="button" data-camera="out" aria-label="缩小星系">−</button><button class="sw-btn" type="button" data-camera="reset">全景</button></div>
+            </div>
+            <div class="sw-object-list" data-list hidden></div>
+            <div class="sw-sky-bottom"><div class="sw-legend"><span><i style="background:#76b9ce"></i>人物</span><span><i style="background:#8ccbb7"></i>规则</span><span><i style="background:#deb881"></i>伏笔</span><span><i class="sw-dash"></i>计划 / 待核</span></div><span>虚拟密度，不作写作记忆</span></div>
+            <div class="sw-status-line" data-search-status role="status" aria-live="polite"></div>
+          </div>
+          <aside class="sw-detail" aria-label="选中知识的详情" aria-live="polite">
+            <div class="sw-detail-kind" data-detail-kind>规则 / 已确认 · 来源有效</div><h2 data-detail-title>潮钟的边界</h2>
+            <p class="sw-detail-description" data-detail-text>只能重放声音，不能重放影像。否定条件完整保留，不把“重放现场”当作规则。</p>
+            <dl class="sw-metadata"><dt>出处</dt><dd data-detail-source>作者采用为规则（样例）· 正文 r18 / b42</dd><dt>层级</dt><dd data-detail-level>事实</dd><dt>写作</dt><dd data-detail-use>本场适用 · 不隐藏 · 保留证据</dd></dl>
+            <hr class="sw-detail-divider"><div class="sw-small-title">关系 / 证据</div><ul class="sw-relations" data-detail-relations></ul>
+            <div class="sw-controls"><button class="sw-btn" type="button" data-source-toggle aria-expanded="false">查看原文</button><button class="sw-btn" type="button" data-go="writing">去本场</button></div>
+            <div class="sw-source-box" data-source-panel hidden></div>
+            <div class="sw-detail-warning">来源改动后需复核；已确认不代表永远有效。图上聚落不自动确认关系。</div>
+            <details class="sw-keyboard-list"><summary>键盘选择故事对象</summary><div class="sw-keyboard-options" data-keyboard-list></div></details>
+          </aside>
+        </div>
+      </section>
+      <section class="sw-section" data-screen="writing" aria-label="正文与本场记忆" hidden>
+        <div class="sw-section-head"><div><div class="sw-eyebrow">MANUSCRIPT / 正文与本场记忆</div><h1>继续写，不必重新讲完整本书。</h1></div><div class="sw-controls"><span class="sw-chip">只读正文样例</span><button class="sw-btn" type="button" data-go="galaxy">全书星系 ↗</button><button class="sw-btn" type="button" data-input-toggle aria-expanded="false">预览实际输入</button></div></div>
+        <div class="sw-write-work">
+          <aside class="sw-directory" aria-label="章节与场景"><div class="sw-small-title">退潮之前 / 手稿</div><button class="sw-scene-item" type="button" data-select-scene="s1" aria-pressed="false"><small>第一章 · 01</small>甲板回声</button><button class="sw-scene-item" type="button" data-select-scene="s2" aria-pressed="false"><small>第一章 · 02</small>错号证词</button><button class="sw-scene-item" type="button" data-select-scene="s3" aria-pressed="false"><small>第二章 · 03</small>巡堤队封锁</button><button class="sw-scene-item" type="button" data-select-scene="s4" aria-pressed="true"><small>第二章 · 04</small>仓库对证</button><button class="sw-scene-item" type="button" data-select-scene="s5" aria-pressed="false"><small>第三章 · 05 / 计划</small>重放失败</button><button class="sw-scene-item" type="button" data-select-scene="s6" aria-pressed="false"><small>第三章 · 06 / 计划</small>留下倒页</button><div class="sw-directory-note">此演示只提供“仓库对证”的三段正文；其他场景可查看对象，不伪造可写内容。</div></aside>
+          <div class="sw-writing-body"><article class="sw-book"><div class="sw-book-meta">第二章 / 换页的账本 · 场景 s04</div><h2>仓库对证</h2><p class="sw-scene-goal">场景目标：找到证词可以被追问的人，而不是让钟声替人作证。</p><div class="sw-prose"><p>林岑把账本推到潮钟旁，纸边被盐水泡得发软。第十七页的位置留着一道新鲜的裁痕。</p><p class="is-linked">“潮钟只会吐出声音，仓门外的脚步不会留下影像。”宋遥没有碰钟，只指向门槛上被雨冲淡的泥印。</p><p>林岑收回了先前的判断。若钟声只能证明时间，那份证词就还缺一个可以被追问的人。</p></div><div class="sw-book-foot">b42 / 精确来源示例 · r18 / 当前正文示例<br>正文保留原文；AI 提议确认前不会覆盖。此处不是可保存的编辑器。</div></article></div>
+          <aside class="sw-memory-side" aria-label="当前场景记忆包"><div class="sw-memory-title">本场知识脉络 <span>只显示关联，不等于全部纳入</span></div><div class="sw-local-sky" data-local-galaxy><canvas aria-label="本场局部三维星系"></canvas><div class="sw-sky-labels" data-labels></div></div><div class="sw-memory-title">适用记忆 / 状态示例 <span>版本样例 r18</span></div><div class="sw-memory-entry"><strong>潮钟的边界</strong><p>只能重放声音，不能重放影像。</p><small>作者已采用样例 · 来源 b42 · 保留否定</small></div><div class="sw-memory-entry"><strong>反写编号 17</strong><p>第一章已引入异常；第三章只是计划回收。</p><small>已写线索状态样例 ≠ 未来事件</small></div><div class="sw-memory-title sw-memory-gap-title">待补 / 暂不纳入 <span>缺少知情依据</span></div><div class="sw-memory-entry sw-memory-gap"><strong>宋遥 / 知情待核</strong><p>原文证实宋遥说过潮钟限制，不自动确证其真实知情。</p><small>知情来源与时点待补；不入本场记忆包</small></div><div class="sw-exclusion">排除：未来回收、未确认解释、未核验前场摘要、密度演示对象。<br>没有检索依据时留空，不替作者编记忆。</div><button class="sw-btn sw-btn-primary" type="button" data-input-toggle aria-expanded="false">查看本场输入范围 →</button></aside>
+          <section class="sw-input-panel" data-input-panel aria-label="本场实际输入预览示例" hidden><h3>本场输入范围 / 设计示例</h3><div class="sw-input-grid"><div class="sw-small-title">拟纳入 / 当前状态样例<ul><li>本场正文 r18 · s04 / b42 完整引文。</li><li>作者已采用的潮钟规则样例，否定条件完整保留。</li><li>编号 17 的已写线索状态样例，不含未来回收。</li></ul></div><div class="sw-small-title">排除 / 范围或证据不合格<ul><li>第三章计划回收；作者隐藏秘密；未确认解释。</li><li>宋遥知情来源/时点待补；前场摘要 s03 的依赖未核验。</li><li>失效、冲突或范围待复核条目；696 密度演示对象。</li></ul></div></div><div class="sw-input-meta"><span>提供者 / 授权 / 金额预算：未配置，此演示零出站。</span><span>正式产品须固定实际文本快照；本页不生成请求或快照回执。</span><button class="sw-btn" type="button" disabled>仅设计演示 · 不发起生成</button></div></section>
+        </div>
+      </section>
+      <section class="sw-section" data-screen="review" aria-label="记忆候选与失效审阅" hidden>
+        <div class="sw-section-head"><div><div class="sw-eyebrow">MEMORY REVIEW / 独立确认前状态样例</div><h1>记忆要有出处，也要经得起改稿。</h1></div><div class="sw-controls"><span class="sw-chip">决定仅在本次演示中</span><button class="sw-btn" type="button" data-go="galaxy">查看星系 ↗</button></div></div>
+        <div class="sw-review-work">
+          <aside class="sw-review-list" aria-label="待审条目"><div class="sw-small-title">候选与待复核 / 原创样例</div><button class="sw-review-item" type="button" data-review="boundary" aria-pressed="true"><small>规则候选 · b42 / r18</small>潮钟只能重放声音，不能重放影像。<span class="sw-state">来源完整 · 待作者确认</span></button><button class="sw-review-item" type="button" data-review="stale" aria-pressed="false"><small>摘要条目 · 旧 r17</small>潮钟可以重放现场。<span class="sw-state">来源已变 / 否定条件丢失</span></button><button class="sw-review-item" type="button" data-review="belief" aria-pressed="false"><small>作者想法 · 未确认解释</small>第二次铃响来自空船。<span class="sw-state">无正式事实证据</span></button><button class="sw-review-item" type="button" data-review="future" aria-pressed="false"><small>伏笔状态 · 第三章计划</small>反写编号 17 已回收。<span class="sw-state">只有计划，不能当已发生</span></button></aside>
+          <article class="sw-review-main"><div class="sw-detail-kind" data-review-kind>规则候选 / 尚未入正式记忆</div><h2 data-review-title>把限制完整留下来。</h2><div class="sw-proposal" data-proposal>潮钟只能重放声音，不能重放影像。</div><div class="sw-review-badges"><span data-review-version>正文 r18 · 来源 b42</span><span data-review-scope>全书规则 · 作者需确认</span><span data-review-state>尚未确认</span></div><div class="sw-evidence-paper"><small data-review-source-title>原文证据 / 第二章 · 仓库对证</small><blockquote data-review-quote>“潮钟只会吐出声音，仓门外的脚步不会留下影像。”宋遥没有碰钟，只指向门槛上被雨冲淡的泥印。</blockquote></div><p class="sw-review-rule" data-review-explanation>这句话首先是角色说法。作者确认它为世界规则后，才形成正式事实；摘要不得丢掉“不能重放影像”的限制。</p><div class="sw-controls"><button class="sw-btn sw-btn-primary" type="button" data-decision="confirm">确认采用</button><button class="sw-btn" type="button" data-decision="edit">编辑后确认</button><button class="sw-btn" type="button" data-decision="reject">拒绝</button><button class="sw-btn" type="button" data-decision="later">稍后处理</button></div><div class="sw-review-feedback" data-review-feedback role="status" aria-live="polite" hidden></div><div class="sw-detail-warning">本页为独立确认前样例，全书页为已确认状态样例。演示决定不写正文、不改变星系事实，不持久保存；真实产品需版本检查、来源复核与决定回执。</div></article>
+          <aside class="sw-review-side" aria-label="记忆维护规则"><h3>记忆如何保持可信</h3><div class="sw-health-item"><strong>源正文已保存</strong><br>正文 r18 为样例版本。保存成功与记忆更新是两种状态。</div><div class="sw-health-item"><strong>派生摘要可能过时</strong><br>原文、范围或知情变化后，旧摘要隔离，不继续当当前证据。</div><div class="sw-health-item"><strong>确认只改变采用状态</strong><br>不自动改全书正文，不抹去原拒绝，不把角色说法自动升格。</div><div class="sw-detail-warning">索引与图谱布局可以重建；作者决定、事实历史与原文不能靠检索结果重建。</div></aside>
+        </div>
+      </section>
+    </div>
+    <footer class="sw-footer"><span>UI v0.2 / 原创离线展示 · 无模型、数据库或可靠保存 · 710 对象为密度样例</span><span data-runtime-status>可探索星系、查看记忆范围与演示审阅</span></footer>
+  </div>
+  <!--DATA-->
+  <!--SCRIPT-->
+</div>

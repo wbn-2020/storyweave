@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>织章 · StoryWeave｜四版 UI 设计</title>
+<style>
+:root{color-scheme:light;--sw-bg:#f3efe6;--sw-paper:#fffdf8;--sw-ink:#292720;--sw-muted:#706b61;--sw-line:#ddd7cb;--sw-terra:#9a4636;--sw-soft:#f1e1d7}
+*{box-sizing:border-box}body{margin:0;background:var(--sw-bg);color:var(--sw-ink);font:15px/1.65 "Microsoft YaHei","PingFang SC",sans-serif}a{color:inherit}button{font:inherit}header{padding:28px 5vw 22px;border-bottom:1px solid var(--sw-line);background:var(--sw-paper)}.brand{font-family:"SimSun",serif;font-size:28px;letter-spacing:2px;margin:0}.eyebrow{color:var(--sw-terra);font-size:12px;letter-spacing:1px;margin:8px 0}.lead{color:var(--sw-muted);margin:10px 0 0;max-width:920px}.top{display:flex;justify-content:space-between;gap:24px;align-items:center}.doclink{white-space:nowrap;text-underline-offset:5px}main{padding:26px 4vw 64px}.variants{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:18px}.variants button{border:1px solid var(--sw-line);background:var(--sw-paper);color:var(--sw-ink);padding:10px 16px;border-radius:5px;cursor:pointer}.variants button[aria-pressed="true"]{background:var(--sw-terra);color:var(--sw-paper);border-color:var(--sw-terra)}button:focus-visible,a:focus-visible{outline:3px solid #446773;outline-offset:4px}.description{display:grid;grid-template-columns:1fr auto;gap:18px;margin:0 0 18px;align-items:center}.description h1{font-size:23px;margin:0 0 5px;font-weight:600}.description p{margin:0;color:var(--sw-muted);max-width:1000px}.original{border:1px solid var(--sw-line);border-radius:4px;padding:8px 14px;text-decoration:none;background:var(--sw-paper);white-space:nowrap}.frame{margin:0;background:var(--sw-paper);border:1px solid var(--sw-line);border-radius:7px;overflow:hidden}.frame img{display:block;width:100%;height:auto}.frame figcaption{padding:13px 18px;color:var(--sw-muted);font-size:13px;border-top:1px solid var(--sw-line)}section{margin-top:48px}h2{font-size:24px;font-family:"SimSun",serif;margin:0 0 8px}.section-note{margin:0 0 20px;color:var(--sw-muted)}.comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.preview{margin:0;border:1px solid var(--sw-line);border-radius:5px;background:var(--sw-paper);overflow:hidden}.preview a{display:block;text-decoration:none}.preview img{width:100%;height:auto;display:block}.preview figcaption{padding:12px 16px}.preview strong{display:block;font-size:17px}.preview span{color:var(--sw-muted);font-size:13px}.two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}.decision{border-top:1px solid var(--sw-line);padding-top:26px}.decision p{max-width:1040px}.decision strong{color:var(--sw-terra)}footer{padding:24px 4vw;border-top:1px solid var(--sw-line);color:var(--sw-muted);font-size:13px}.print-only{display:none}@media(max-width:760px){header{padding:22px 5vw}.top{align-items:start;flex-direction:column;gap:12px}main{padding:22px 4vw 42px}.description{grid-template-columns:1fr}.comparison,.two-col{grid-template-columns:1fr}.variants button{min-height:44px;flex:1 1 44%;padding:9px}.description h1{font-size:21px}.frame{overflow:auto}.frame img{min-width:900px}.section-note{font-size:14px}}@media print{.variants,.doclink{display:none}header,main{padding:12px}.comparison{grid-template-columns:1fr}.frame{break-inside:avoid}.frame img{min-width:0}body{background:#fff}}
+</style>
+</head>
+<body>
+<header>
+<div class="top"><div><p class="eyebrow">PRODUCT DESIGN / 2026.11.03 / v0.1</p><p class="brand">织章 · StoryWeave</p></div><a class="doclink" href="../../docs/10-prd.md">阅读 PRD →</a></div>
+<p class="lead">四版同内容、不同空间组织的创作工作台。先选择工作方式，再收敛视觉细节；不是四套都要开发。以下为直接绘制的静态 UI 设计图，不是模型生成图片、正式应用或真实保存结果。</p>
+</header>
+<main>
+<nav class="variants" aria-label="选择设计方向">
+<button type="button" data-key="a" aria-pressed="true">A · 章序经纬　推荐</button>
+<button type="button" data-key="b" aria-pressed="false">B · 线索群岛</button>
+<button type="button" data-key="c" aria-pressed="false">C · 书页旁注</button>
+<button type="button" data-key="d" aria-pressed="false">D · 章节分镜</button>
+</nav>
+<div class="description" aria-live="polite"><div><h1 id="direction-title">A · 章序经纬</h1><p id="direction-summary">章序成为稳定骨架，人物、规则与伏笔在侧轨支撑当前场景；正文按需在右侧展开。适合持续写长篇与修改影响审阅。</p></div><a class="original" id="original-link" href="a-chapter-weave.png" target="_blank" rel="noopener">查看原尺寸设计图 ↗</a></div>
+<figure class="frame"><img id="main-design" src="a-chapter-weave.png" alt="A 章序经纬：左侧章序、中间场景与证据侧轨、右侧正文联动"><figcaption>同一原创《潮汐档案》 · 三章六场 + 八个辅助对象 · 当前场景“仓库对证” · 同三段正文与 b42 / r18 高亮。设计稿中的保存、版本与按钮均为状态示意。</figcaption></figure>
+<section>
+<h2>四版总览</h2><p class="section-note">差异在结构，不在换颜色。点击缩略图可打开原图。</p>
+<div class="comparison">
+<figure class="preview"><a href="a-chapter-weave.png" target="_blank" rel="noopener"><img loading="lazy" src="a-chapter-weave.png" alt="A 章序关系画布"><figcaption><strong>A · 章序经纬</strong><span>章序 + 证据侧轨 + 右侧正文，长篇主工作台。</span></figcaption></a></figure>
+<figure class="preview"><a href="b-clue-islands.png" target="_blank" rel="noopener"><img loading="lazy" src="b-clue-islands.png" alt="B 主题线索聚落"><figcaption><strong>B · 线索群岛</strong><span>主题问题 + 自由材料聚落 + 独立章序书签。</span></figcaption></a></figure>
+<figure class="preview"><a href="c-manuscript-margin.png" target="_blank" rel="noopener"><img loading="lazy" src="c-manuscript-margin.png" alt="C 正文与旁注"><figcaption><strong>C · 书页旁注</strong><span>正文主导 + 轻章序 + 关联旁注，适合长时间写作。</span></figcaption></a></figure>
+<figure class="preview"><a href="d-chapter-storyboard.png" target="_blank" rel="noopener"><img loading="lazy" src="d-chapter-storyboard.png" alt="D 横向章节分镜"><figcaption><strong>D · 章节分镜</strong><span>横向章序 + 关系分层 + 底部正文，适合比较节奏。</span></figcaption></a></figure>
+</div>
+</section>
+<section><h2>窄屏不是缩小的桌面</h2><p class="section-note">A 回到场景列表，B 回到主题列表，C 保留书页阅读，D 回到纵向章节。主要关系操作有列表与表单替代。</p><figure class="frame"><a href="mobile-directions.png" target="_blank" rel="noopener"><img loading="lazy" src="mobile-directions.png" alt="四版窄屏界面：场景列表、主题列表、正文旁注、纵向章节"></a><figcaption>390px 设计视口示意，不是设备测试或已实现移动应用。</figcaption></figure></section>
+<section><h2>四版共用的关键状态</h2><p class="section-note">空作品、保存结果未知、实际输入预览与提议过期，都要能保护作者当前成果。</p><figure class="frame"><a href="shared-states.png" target="_blank" rel="noopener"><img loading="lazy" src="shared-states.png" alt="空作品、保存结果未知、实际输入预览和提议过期四种状态"></a><figcaption>状态是产品契约；按钮为设计示意，设计稿不会发起模型请求、保存正文或上传文件。</figcaption></figure></section>
+<section class="decision"><h2>推荐：A 做结构工作台，吸收 C 的写作舒适度</h2><p><strong>先看工作方式是否符合你，而不是先选圆角与颜色。</strong>A 更直接地把章序、规则和正文连接起来；C 适合作为同一产品的正文视图。B 与 D 保留为明确不同的比较方向，不默认变成首发四套界面。</p><p>可以直接反馈“A 的结构，但正文更像 C”“B 太散”“D 更适合我”，无需打开任何子智能体或恢复旧工作流。</p><a href="../../docs/11-ui-designs.md">查看布局、状态与取舍说明 →</a></section>
+</main>
+<footer>本轮只交 PRD 与 UI 供审阅；没有正式前后端、数据库、模型接入、可靠保存或生产性能结论。全部故事内容为本次原创样例。</footer>
+<script>
+(() => {
+  const designs = {
+    a: {title:'A · 章序经纬',src:'a-chapter-weave.png',summary:'章序成为稳定骨架，人物、规则与伏笔在侧轨支撑当前场景；正文按需在右侧展开。适合持续写长篇与修改影响审阅。',alt:'A 章序经纬：左侧章序、中间场景与证据侧轨、右侧正文联动'},
+    b: {title:'B · 线索群岛',src:'b-clue-islands.png',summary:'围绕“错误的证词”“潮钟的限制”“第17页的去向”组织材料聚落；章序放在独立书签轨。适合从谜题、资料与未定情节开始。',alt:'B 线索群岛：三组主题材料、独立章序书签和右侧正文'},
+    c: {title:'C · 书页旁注',src:'c-manuscript-margin.png',summary:'把可读正文放在中央，章序在左、当前规则与线索在页边；结构按需打开，不让画布和 AI 聊天框抢走写作空间。',alt:'C 书页旁注：中央宽书页、左侧章节、右侧规则与线索旁注'},
+    d: {title:'D · 章节分镜',src:'d-chapter-storyboard.png',summary:'横向比较章节推进，每章的场景与证据分层排列；选中场景从底部展开正文。适合检查前置条件、节奏与伏笔回收。',alt:'D 章节分镜：横向三章、分层场景和底部正文展开'}
+  };
+  const buttons = [...document.querySelectorAll('[data-key]')];
+  function show(key){
+    const d=designs[key]; if(!d)return;
+    document.getElementById('direction-title').textContent=d.title;
+    document.getElementById('direction-summary').textContent=d.summary;
+    const image=document.getElementById('main-design'); image.src=d.src; image.alt=d.alt;
+    document.getElementById('original-link').href=d.src;
+    buttons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.key===key)));
+  }
+  buttons.forEach(button=>button.addEventListener('click',()=>show(button.dataset.key)));
+})();
+</script>
+</body>
+</html>

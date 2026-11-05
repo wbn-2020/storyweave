@@ -1,0 +1,39 @@
+:root {
+  color-scheme: dark;
+  --color-bg: #10151b;
+  --color-sidebar: #11181f;
+  --color-surface: #171f28;
+  --color-raised: #1d2833;
+  --color-line: #2b3743;
+  --color-ink: #e9edf0;
+  --color-muted: #a5b2bf;
+  --color-accent: #d8bd91;
+  --color-success: #9bcec1;
+  --color-danger: #e8a69b;
+  --color-paper: #f4f0e7;
+  --color-paper-ink: #363832;
+  --color-paper-muted: #68695f;
+  --font-ui: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  --font-manuscript: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif;
+  font: 14px/1.65 var(--font-ui);
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 360px; }
+button, input, select, textarea { font: inherit; }
+button { color: inherit; cursor: pointer; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button, input { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { font-weight: 500; text-wrap: balance; }
+button, a { touch-action: manipulation; }
+::selection { background: #d8bd9166; }
+.fatal-screen { max-width: 680px; padding: 55px 35px; margin: 0 auto; }
+.fatal-screen h1 { font-size: 22px; margin-bottom: 20px; }
+.fatal-screen p { font-size: 13px; line-height: 1.9; color: var(--color-muted); margin-top: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

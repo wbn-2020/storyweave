@@ -1,0 +1,85 @@
+/* Run with the existing Codex runtime. No install or server is required. */
+'use strict';
+const fs=require('node:fs');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const {chromium}=require('C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const root=__dirname;
+const url='file:///'+path.join(root,'index.html').replaceAll('\\','/');
+const pages=['shelf','write','outline','intent','galaxy','characters','world','timeline','threads','notes','review','history','settings'];
+const report={date:'2026-11-04',scope:'Offline UI prototype, Chrome browser, no backend or model claims',checks:[],errors:[],externalRequests:[],overflow:[],screenshots:[]};
+const ok=(name,detail)=>{report.checks.push({name,result:'pass',detail});console.log('PASS '+name)};
+(async()=>{
+ const browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
+ try{
+  const page=await browser.newPage({viewport:{width:1600,height:1050},deviceScaleFactor:1,reducedMotion:'reduce',acceptDownloads:true});
+  page.on('pageerror',e=>report.errors.push(e.message));page.on('request',r=>{if(/^https?:/.test(r.url()))report.externalRequests.push(r.url())});
+  const go=async p=>{await page.evaluate(p=>navigate(p),p);await page.waitForTimeout(35)};
+  const click=async(sel)=>{await page.locator(sel).first().click()};
+  const action=async(a)=>click(`[data-action="${a}"]`);
+  const close=async()=>{await page.keyboard.press('Escape')};
+  const load=async()=>{await page.goto(url);await page.waitForSelector('.shelf-feature')};
+  await load();
+  for(const width of [1440,1024,390,320]){
+   await page.setViewportSize({width,height:900});
+   for(const route of pages){await go(route);const size=await page.evaluate(()=>({width:innerWidth,body:document.body.scrollWidth}));if(size.body>width+1)report.overflow.push({route,...size});}
+  }
+  assert.deepEqual(report.overflow,[]);ok('Responsive routes','13 pages × 4 widths (1440/1024/390/320), document scrollWidth <= viewport + 1px');
+  await page.setViewportSize({width:1600,height:1050});await load();
+  for(const route of pages){await click(`#sidebar [data-page="${route}"]`);assert.equal(await page.title(),`${await page.locator('#topbar .breadcrumb strong').textContent()} · 织章`)}
+  ok('Visible navigation','All 13 sidebar page buttons render their page');
+  await go('write');const before=await page.locator('#manuscript').innerText();
+  await action('focus');assert(await page.locator('body').evaluate(e=>e.classList.contains('focus-mode')));await page.keyboard.press('Escape');
+  await click('.desktop-memory [data-action="source"][data-id="bell"]');assert.equal(await page.locator('#drawer').getAttribute('open'),'');await close();assert.equal(await page.evaluate(()=>document.activeElement.dataset.id),'bell');
+  await click('.desktop-memory [data-action="source"][data-id="bell"]');await action('locate-source');assert((await page.evaluate(()=>getSelection().toString())).includes('潮钟只会吐出声音'));assert.equal(await page.locator('#manuscript').innerText(),before);
+  ok('Writing focus and evidence','Focus mode exits with Escape; dialog returns focus; source selects the exact passage without changing text');
+  await action('input-preview');assert((await page.locator('#modal').innerText()).includes('费用：不会产生调用费用'));await action('generate');await page.waitForSelector('[data-action="review-proposal"]');assert(await page.locator('[data-action="apply-proposal"]').isDisabled());await action('review-proposal');
+  await action('defer-check');assert.equal(await page.locator('[data-action="resolve-check"]').isDisabled(),false);await action('resolve-check');
+  for(const i of [1,2]){await click(`[data-action="review-item"][data-index="${i}"]`);await action('resolve-check')}
+  await action('proposal');assert.equal(await page.locator('[data-action="apply-proposal"]').isDisabled(),false);await action('apply-proposal');
+  const after=await page.locator('#manuscript').innerText();assert(after.startsWith(before));assert(after.includes('潮钟吐出两声沉闷的脚步'));assert(!after.includes('投出了仓门外的影像'));
+  await go('review');await click('[data-action="review-tab"][data-tab="candidates"]');assert.equal(await page.locator('[data-action="accept-candidate"]').count(),1);await action('accept-candidate');assert(await page.locator('[data-action="accept-candidate"]').isDisabled());assert.equal(await page.evaluate(()=>work().objects.filter(o=>o.type==='事件').length),1);
+  await click('[data-action="review-tab"][data-tab="impact"]');assert(await page.locator('[data-action="acknowledge-dirty"]').isVisible());
+  ok('Memory-assisted writing journey','Input → simulated proposal → 3 review decisions → append revised text → independent event confirmation; source-review flag remains separate');
+  await load();await go('write');await action('input-preview');await action('generate');await page.waitForSelector('[data-action="review-proposal"]');await close();await page.locator('#manuscript').fill(before+'\n\n新的作者文字。');await go('review');await action('proposal');assert.equal(await page.locator('[data-action="apply-proposal"]').count(),0);assert((await page.locator('#modal').innerText()).includes('正文或设定已变化'));
+  await close();await go('write');await page.locator('#manuscript').fill('完全不同的新稿。');await click('.desktop-memory [data-action="source"][data-id="bell"]');assert(await page.locator('[data-action="locate-source"]').isDisabled());assert((await page.locator('#drawer').innerText()).includes('定位已失效'));await close();
+  ok('Stale proposal and source guards','Editing revision disables old proposal adoption; removing a quoted passage disables source positioning');
+  await load();await go('write');await action('input-preview');await action('generate');await action('cancel-task');await page.waitForTimeout(1000);assert.equal(await page.locator('#manuscript').innerText(),before);assert.equal(await page.evaluate(()=>currentTask().status),'cancelled');
+  ok('Cancelled task','Cancelled simulated task does not reopen a completed proposal or modify manuscript');
+  await go('galaxy');await click('[data-action="galaxy-filter"][data-type="人物"]');assert.equal(await page.locator('.star-label').count(),3);await click('[data-action="galaxy-filter"][data-type="全部"]');await page.locator('#galaxy-search').fill('17');assert.equal(await page.locator('.star-label').count(),1);await click('.star-label');assert((await page.locator('#sky-detail h2').innerText()).includes('17'));await page.locator('#galaxy-search').fill('');await click('[data-action="galaxy-mode"][data-mode="list"]');assert.equal(await page.locator('#sky-list button').count(),14);await click('[data-action="galaxy-mode"][data-mode="sky"]');
+  await page.mouse.move(650,500);await page.mouse.down();await page.mouse.move(735,500);await page.mouse.up();assert.notEqual(await page.evaluate(()=>state.graphAngle),0);await action('reset-graph');
+  ok('Knowledge galaxy','Filters, search, selected detail, 14-object list, pointer rotation and reset');
+  await go('characters');await page.locator('#time-lens').selectOption('s1');assert((await page.locator('.profile-columns').innerText()).includes('受伤事件尚未发生'));await page.locator('#time-lens').selectOption('future');assert((await page.locator('.profile-columns').innerText()).includes('不从计划推断当前事实'));await click('[data-action="select-person"][data-id="song"]');await page.locator('#time-lens').selectOption('s4');assert((await page.locator('.profile-columns').innerText()).includes('知情范围待作者补充'));await page.locator('#person-search').fill('林岑');assert.equal(await page.locator('.person-item:visible').count(),1);
+  ok('Character time lens','Early/warehouse/future differ; Song Yao remains unconfirmed; person search works');
+  await go('world');await action('edit-object');await page.locator('#object-summary').fill('潮钟只能重放声音，重放时需有人触碰钟壁。');await action('save-object');assert((await page.locator('.world-hero').innerText()).includes('需有人触碰'));assert(await page.evaluate(()=>work().knowledgeDirty));
+  await go('outline');await click('[data-action="move-scene"][data-id="s2"]');await page.locator('#move-chapter').selectOption('3');await action('confirm-move');await go('timeline');await click('[data-action="time-mode"][data-mode="narrative"]');const narrative=await page.locator('.event-body h3').allTextContents();assert(narrative.indexOf('错号证词')>narrative.indexOf('仓库对证'));await click('[data-action="time-mode"][data-mode="story"]');const chronological=await page.locator('.event-body h3').allTextContents();assert(chronological.indexOf('错号证词')<chronological.indexOf('仓库对证'));
+  ok('World revision and order separation','Editing rule marks review; moving a scene changes narrative order but keeps original story order');
+  await go('threads');await click('[data-action="thread-detail"][data-id="number"]');await page.locator('#thread-window').fill('第五章 · 计划');await action('save-thread-window');assert.equal(await page.evaluate(()=>work().threads.find(t=>t.id==='number').status),'已埋设');await click('[data-action="thread-detail"][data-id="number"]');await action('thread-evidence');await page.locator('#thread-evidence').fill('不在任何正文中的句子');await page.locator('#evidence-confirm').check();await action('confirm-evidence');assert.equal(await page.evaluate(()=>work().threads.find(t=>t.id==='number').status),'已埋设');await close();
+  ok('Foreshadowing evidence','Changing planned window does not mark payoff; absent quote cannot be confirmed as payoff evidence');
+  await go('notes');await action('new-note');await page.locator('#note-title').fill('测试笔记');await page.locator('#note-body').fill('海风会在入夜后改变。');await go('shelf');await go('notes');assert.equal(await page.locator('#note-body').inputValue(),'海风会在入夜后改变。');await action('note-to-object');await action('save-object');assert(await page.evaluate(()=>work().objects.some(o=>o.name==='测试笔记')));
+  await action('search');await page.locator('#global-search').fill('测试笔记');assert.equal(await page.locator('.search-result').count(),2);await close();
+  ok('Notes and search','Edits survive internal navigation; explicit conversion creates author setting; search finds note and object');
+  await go('history');await action('checkpoint');await page.locator('#checkpoint-name').fill('检验检查点');await action('save-checkpoint');const cp=await page.evaluate(()=>work().checkpoints.find(c=>c.name==='检验检查点').id);await go('write');await page.locator('#manuscript').fill('后续新写的文字。');await go('history');await click(`[data-action="restore-preview"][data-id="${cp}"]`);await action('restore-checkpoint');assert.equal(await page.locator('#manuscript').innerText(),before);assert(await page.evaluate(()=>work().checkpoints.some(c=>c.text==='后续新写的文字。')));
+  ok('Checkpoint restoration','Compare, restore, and preserve newer draft as a separate checkpoint');
+  await go('settings');await page.locator('#font-size').fill('22');await page.locator('#paper-tone').selectOption('dark');await go('write');assert.equal(await page.locator('#manuscript').evaluate(e=>getComputedStyle(e).fontSize),'22px');assert.equal(await page.locator('.paper').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(27, 37, 44)');
+  for(const st of ['failed','unknown','conflict','stale','interrupted']){await action('writing-states');await click(`[data-action="simulate-state"][data-state="${st}"]`);assert(await page.locator('.state-banner').isVisible())}
+  await action('writing-states');await click('[data-action="simulate-state"][data-state="conflict"]');await action('conflict');await action('resolve-conflict');assert(await page.evaluate(()=>work().checkpoints.some(c=>c.name==='冲突对方稿 · 演示')));
+  ok('Preferences and failure states','Font/paper updates; five failure states; simulated conflict retains both drafts');
+  await go('shelf');await action('new-work');await page.locator('#new-title').fill('远山来信');await action('create-work');assert((await page.locator('#main').innerText()).includes('还没有场景'));for(const p of ['characters','world','threads','notes','galaxy']){await go(p);assert(await page.locator('.empty').isVisible())}await go('write');await action('new-scene');await page.locator('#new-scene-title').fill('山路');await action('create-scene');await page.locator('#manuscript').fill('山风翻过那封信。');await go('outline');assert((await page.locator('#main').innerText()).includes('山路'));assert(!(await page.locator('#main').innerText()).includes('雨夜来信'));await go('galaxy');assert.equal(await page.locator('.star-label').count(),0);
+  await go('shelf');await action('switch-work');await click('#modal [data-action="choose-work"][data-id="tide"]');await go('write');assert(!(await page.locator('#manuscript').innerText()).includes('山风翻过那封信'));
+  ok('New work and isolation','New work has genuine empty views; unique scene and content; tide story remains separate');
+  await go('shelf');await action('import');await page.locator('#import-title').fill('导入演示');await page.locator('#import-text').fill('<script>window.evil=true</script>\n\n纯文本的雨夜。');await action('import-preview');await action('import-back');assert((await page.locator('#import-text').inputValue()).includes('纯文本'));await action('import-preview');await action('import-confirm');assert.equal(await page.evaluate(()=>window.evil),undefined);assert((await page.locator('#manuscript').innerText()).includes('<script>'));
+  await go('settings');await click('[data-action="settings-tab"][data-tab="data"]');await action('export-preview');const downloadPromise=page.waitForEvent('download');await action('export-md');const download=await downloadPromise;const file=await download.path();const exported=fs.readFileSync(file,'utf8');assert(exported.includes('纯文本的雨夜'));assert(!exported.includes('反写编号'));await close();
+  ok('Import/export and literal content','Paste preview/back/import works; HTML remains inert text; actual Markdown download only contains selected work manuscript');
+  await load();await page.setViewportSize({width:390,height:844});await action('menu');await click('#sidebar [data-page="write"]');assert(!await page.locator('body').evaluate(e=>e.classList.contains('nav-open')));await action('memory');assert(await page.locator('#drawer').isVisible());await close();await action('scenes');await click('#drawer [data-action="open-scene"][data-id="s2"]');assert((await page.locator('.paper h1').innerText()).includes('错号证词'));
+  ok('Mobile primary actions','Drawer navigation, memory, scene switch, and Escape');
+  const fallback=await browser.newPage({viewport:{width:1440,height:900}});await fallback.addInitScript(()=>HTMLCanvasElement.prototype.getContext=()=>null);await fallback.goto(url+'#galaxy');assert.equal(await fallback.locator('#sky-list button').count(),14);await fallback.locator('#sky-list [data-id="bell"]').click();await fallback.locator('#sky-detail [data-action="source"]').first().click();assert(await fallback.locator('#drawer').isVisible());await fallback.close();ok('Canvas fallback','Unavailable 2D context gives 14 accessible object rows with source dialogs');
+  await load();await page.setViewportSize({width:1600,height:1050});
+  const labelOverlap=[];for(const width of [1440,1024,390,320]){await page.setViewportSize({width,height:900});await go('galaxy');const clashes=await page.evaluate(()=>{const rows=[...document.querySelectorAll('.star-label')].map(e=>({name:e.textContent,r:e.getBoundingClientRect()}));const out=[];for(let i=0;i<rows.length;i++)for(let j=i+1;j<rows.length;j++){const a=rows[i],b=rows[j];if(Math.min(a.r.right,b.r.right)>Math.max(a.r.left,b.r.left)+1&&Math.min(a.r.bottom,b.r.bottom)>Math.max(a.r.top,b.r.top)+1)out.push([a.name,b.name])}return out});if(clashes.length)labelOverlap.push({width,clashes})}assert.deepEqual(labelOverlap,[]);ok('Galaxy label readability','Default object labels do not overlap at 1440/1024/390/320; mobile shows focused relations');
+  await page.setViewportSize({width:1600,height:1050});
+  for(const route of pages){await go(route);await page.waitForTimeout(80);const name=route+'-desktop.png';await page.screenshot({path:path.join(root,name),fullPage:true});report.screenshots.push(name)}
+  await page.setViewportSize({width:390,height:844});for(const route of ['shelf','write','galaxy','characters','review']){await go(route);await page.waitForTimeout(80);const name=route+'-mobile.png';await page.screenshot({path:path.join(root,name),fullPage:true});report.screenshots.push(name)}
+  assert.deepEqual(report.errors,[]);assert.deepEqual(report.externalRequests,[]);ok('Runtime and network','No browser pageerror; no HTTP(S) requests');
+  report.result='pass';fs.writeFileSync(path.join(root,'validation.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({result:report.result,checks:report.checks.length,screenshots:report.screenshots.length}));
+ }finally{await browser.close()}
+})().catch(e=>{report.result='failed';report.failure=e.stack;fs.writeFileSync(path.join(root,'validation.json'),JSON.stringify(report,null,2));console.error(e);process.exitCode=1});

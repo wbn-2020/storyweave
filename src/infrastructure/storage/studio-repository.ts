@@ -1,0 +1,889 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, opendirSync, realpathSync, writeFileSync } from 'node:fs'
+import { join, normalize, resolve } from 'node:path'
+import Database from 'better-sqlite3'
+import {
+  DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText,
+  type BookInput, type BookSnapshot, type BookSummary, type ChapterInput,
+  type ChapterSnapshot, type ChapterSummary, type CreateBookInput,
+  type CreateChapterInput, type SaveChapterInput, type SaveChapterOutput,
+  type WorkspaceSnapshot, type UpdateBookInput, type CreateVolumeInput, type RenameVolumeInput,
+  type ReorderVolumesInput, type ReorderChaptersInput, type UpdateChapterInput, type FinalizeChapterInput,
+  type ListRevisionsInput, type RevisionInput, type RestoreRevisionInput, type RevisionPage,
+  type RevisionSnapshot, type RevisionSummary, type VolumeSummary, type OrphanScan,
+  type TextEncoding, type ExportBookInput, type ChapterStatus,
+} from '../../contracts/api'
+import { countCharacters, documentToText, emptyDocument, parseManuscript, type ManuscriptDocument } from '../../contracts/manuscript'
+import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
+import { BOOK_APPLICATION_ID, BOOK_SCHEMA, SCHEMA_VERSION, STUDIO_APPLICATION_ID, STUDIO_SCHEMA } from './schema'
+
+interface BookRow {
+  id: string; title: string; genre: string; synopsis: string; archived_at: string | null
+  revision: number; created_at: string; updated_at: string
+}
+interface ChapterRow {
+  id: string; title: string; position: number; current_revision_id: string
+  character_count: number; updated_at: string
+  volume_id: string | null; goal: string; viewpoint: string; target_characters: number | null
+  notes: string; status: ChapterStatus; finalized_revision_id: string | null; finalized_at: string | null
+}
+interface RevisionRow extends ChapterRow {
+  document_json: string; plain_text: string; content_hash: string
+}
+interface OpenBook { id: string; db: Database.Database }
+interface HistoryRow {
+  id: string; sequence: number; parent_revision_id: string | null; restored_from_revision_id: string | null
+  reason: RevisionSummary['reason']; character_count: number; created_at: string
+  document_json: string; plain_text: string; content_hash: string
+}
+export interface ImportBookData {
+  title: string; sourceName: string; encoding: TextEncoding; sourceBytes: Uint8Array
+  chapters: { title: string; document: ManuscriptDocument }[]
+}
+
+const MAX_BOOKS = 1_000
+const MAX_CHAPTERS = 20_000
+const MAX_VOLUMES = 1_000
+const BOOK_COLUMNS = 'id, title, genre, synopsis, archived_at, revision, created_at, updated_at'
+const CHAPTER_COLUMNS = `c.id, c.title, c.position, c.current_revision_id, c.updated_at, r.character_count,
+  c.volume_id, c.goal, c.viewpoint, c.target_characters, c.notes, c.status, c.finalized_revision_id, c.finalized_at`
+
+function storageFailure(): DomainError {
+  return new DomainError({ code: 'STORAGE_ERROR', message: '本地资料读写失败，当前草稿请继续保留。请检查目录、磁盘空间及文件是否可用。' })
+}
+
+function perform<T>(operation: () => T): T {
+  try { return operation() } catch (error) {
+    if (error instanceof DomainError) throw error
+    throw storageFailure()
+  }
+}
+
+function payload(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new DomainError({ code: 'INVALID_INPUT', message: '操作参数无效。' })
+  return value
+}
+
+function samePath(first: string, second: string): boolean {
+  const a = normalize(resolve(first))
+  const b = normalize(resolve(second))
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+function requireLocalDiskSyntax(path: string): void {
+  if (process.platform !== 'win32' || !/^[a-z]:[\\/]/i.test(path) || !/^[a-z]:[\\/]/i.test(normalize(path))) {
+    throw new DomainError({ code: 'INVALID_INPUT', message: '请选择 Windows 本地磁盘目录；当前书库不支持网络共享、网络映射盘或设备路径。' })
+  }
+}
+
+function localCanonicalPath(path: string): string {
+  requireLocalDiskSyntax(path)
+  let canonical: string
+  try { canonical = realpathSync.native(path) } catch {
+    throw new DomainError({ code: 'INVALID_INPUT', message: '无法确认这份路径属于可访问的本地磁盘，请重新选择已存在的本地书库目录。' })
+  }
+  // Windows native realpath 依据最终句柄解析路径；映射到 UNC 的目录不能进入 WAL 书库。
+  requireLocalDiskSyntax(canonical)
+  return canonical
+}
+
+// 子目录和库文件都应属于所选书库；拒绝将内部路径重定向到其他位置的链接。
+function assertLocalPath(path: string, directory: boolean): string {
+  const canonical = localCanonicalPath(path)
+  const stat = lstatSync(path)
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile()) || !samePath(path, canonical)) {
+    throw new DomainError({ code: 'STORAGE_ERROR', message: '书库内发现链接或不符合预期的文件类型，已停止访问。' })
+  }
+  return canonical
+}
+
+function ensureDirectory(path: string): void {
+  if (!existsSync(path)) mkdirSync(path)
+  assertLocalPath(path, true)
+}
+
+function assertDatabasePaths(path: string): boolean {
+  const exists = lstatSync(path, { throwIfNoEntry: false }) !== undefined
+  if (exists) assertLocalPath(path, false)
+  for (const suffix of ['-journal', '-wal', '-shm']) {
+    const sidecar = `${path}${suffix}`
+    if (lstatSync(sidecar, { throwIfNoEntry: false })) assertLocalPath(sidecar, false)
+  }
+  return exists
+}
+
+function verifyDatabase(db: Database.Database, applicationId: number): void {
+  const version = db.pragma('user_version', { simple: true })
+  if (db.pragma('application_id', { simple: true }) === applicationId && version === 1) {
+    throw new DomainError({ code: 'STORAGE_ERROR', message: '此书库使用旧版 v1 格式，需要专门的迁移工具。当前版本未修改旧库，也不支持直接恢复旧格式。' })
+  }
+  if (db.pragma('application_id', { simple: true }) !== applicationId || version !== SCHEMA_VERSION) {
+    throw new DomainError({ code: 'STORAGE_ERROR', message: '数据库格式或版本不受当前程序支持，未修改该数据库。' })
+  }
+}
+
+function verifyExistingFile(path: string, applicationId: number): void {
+  const probe = new Database(path, { readonly: true, fileMustExist: true, timeout: 2000 })
+  try { verifyDatabase(probe, applicationId) } finally { probe.close() }
+}
+
+function configure(db: Database.Database): void {
+  db.pragma('foreign_keys = ON')
+  db.pragma('busy_timeout = 2000')
+  db.pragma('trusted_schema = OFF')
+}
+
+function bookSummary(row: BookRow): BookSummary {
+  return {
+    id: row.id, title: row.title, genre: row.genre, synopsis: row.synopsis, archivedAt: row.archived_at,
+    revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at,
+  }
+}
+
+function chapterSummary(row: ChapterRow): ChapterSummary {
+  return {
+    id: row.id, title: row.title, position: row.position, revisionId: row.current_revision_id,
+    characterCount: row.character_count, updatedAt: row.updated_at,
+    volumeId: row.volume_id, goal: row.goal, viewpoint: row.viewpoint, targetCharacters: row.target_characters,
+    notes: row.notes, status: row.status, finalizedRevisionId: row.finalized_revision_id, finalizedAt: row.finalized_at,
+  }
+}
+
+function historySummary(row: HistoryRow): RevisionSummary {
+  return {
+    id: row.id, sequence: row.sequence, parentRevisionId: row.parent_revision_id,
+    restoredFromRevisionId: row.restored_from_revision_id, reason: row.reason,
+    characterCount: row.character_count, createdAt: row.created_at,
+  }
+}
+
+function verifyDocument(row: { document_json: string; content_hash: string; plain_text: string; character_count: number }): ManuscriptDocument {
+  let document: ManuscriptDocument
+  try { document = parseManuscript(JSON.parse(row.document_json)) } catch { throw storageFailure() }
+  if (createHash('sha256').update(row.document_json, 'utf8').digest('hex') !== row.content_hash ||
+      documentToText(document) !== row.plain_text || countCharacters(row.plain_text) !== row.character_count) throw storageFailure()
+  return document
+}
+
+export class StudioRepository {
+  private rootPath: string | null = null
+  private studio: Database.Database | null = null
+  private activeBook: OpenBook | null = null
+
+  getWorkspace(): WorkspaceSnapshot {
+    return perform(() => {
+      if (!this.studio || !this.rootPath) return { rootPath: null, books: [] }
+      const rows = this.studio.prepare(`SELECT ${BOOK_COLUMNS} FROM books ORDER BY updated_at DESC, id LIMIT ?`).all(MAX_BOOKS + 1) as BookRow[]
+      if (rows.length > MAX_BOOKS) throw new DomainError({ code: 'STORAGE_ERROR', message: `当前版本每个书库最多支持 ${MAX_BOOKS} 部作品。` })
+      return { rootPath: this.rootPath, books: rows.map(bookSummary) }
+    })
+  }
+
+  openWorkspace(rootPath: string): WorkspaceSnapshot {
+    return perform(() => {
+      if (typeof rootPath !== 'string') {
+        throw new DomainError({ code: 'INVALID_INPUT', message: '请选择已存在的本地书库目录。' })
+      }
+      const canonicalRoot = assertLocalPath(rootPath, true)
+      if (this.rootPath && samePath(canonicalRoot, this.rootPath)) return this.getWorkspace()
+      const databasePath = join(canonicalRoot, 'studio.sqlite')
+      const isExisting = assertDatabasePaths(databasePath)
+      let next: Database.Database | null = null
+      try {
+        if (isExisting) verifyExistingFile(databasePath, STUDIO_APPLICATION_ID)
+        next = new Database(databasePath, { timeout: 2000, fileMustExist: isExisting })
+        if (isExisting) verifyDatabase(next, STUDIO_APPLICATION_ID)
+        configure(next)
+        // 工作室目录库保持独占连接锁，第二个实例不能同时接管同一书库的写入。
+        next.pragma('journal_mode = DELETE')
+        next.pragma('locking_mode = EXCLUSIVE')
+        next.exec('BEGIN EXCLUSIVE; COMMIT;')
+        if (!isExisting) {
+          const db = next
+          db.transaction(() => {
+            db.exec(STUDIO_SCHEMA)
+            db.pragma(`application_id = ${STUDIO_APPLICATION_ID}`)
+            db.pragma(`user_version = ${SCHEMA_VERSION}`)
+          })()
+        }
+        const meta = next.prepare('SELECT format FROM studio_meta WHERE singleton = 1').get() as { format: string } | undefined
+        if (meta?.format !== 'storyweave-studio') throw storageFailure()
+        const rows = next.prepare(`SELECT ${BOOK_COLUMNS} FROM books ORDER BY updated_at DESC, id LIMIT ?`).all(MAX_BOOKS + 1) as BookRow[]
+        if (rows.length > MAX_BOOKS) throw new DomainError({ code: 'STORAGE_ERROR', message: `当前版本每个书库最多支持 ${MAX_BOOKS} 部作品。` })
+        ensureDirectory(join(canonicalRoot, 'books'))
+        this.close()
+        this.studio = next
+        this.rootPath = canonicalRoot
+        next = null
+        return { rootPath: canonicalRoot, books: rows.map(bookSummary) }
+      } catch (error) {
+        if (next?.open) next.close()
+        if (isRecord(error) && (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED')) {
+          throw new DomainError({ code: 'WORKSPACE_BUSY', message: '这份书库正在被另一个程序实例使用，请关闭另一实例后再打开。' })
+        }
+        throw error
+      }
+    })
+  }
+
+  createBook(input: CreateBookInput): BookSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const title = requiredText(data.title, '作品名', 120)
+      const studio = this.requireStudio()
+      const count = studio.prepare('SELECT COUNT(*) AS count FROM books').get() as { count: number }
+      if (count.count >= MAX_BOOKS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前书库已达到 ${MAX_BOOKS} 部作品的上限。` })
+      const id = randomUUID()
+      const now = new Date().toISOString()
+      const directory = join(this.requireRoot(), 'books', id)
+      assertLocalPath(join(this.requireRoot(), 'books'), true)
+      mkdirSync(directory)
+      assertLocalPath(directory, true)
+      const db = new Database(join(directory, 'book.sqlite'))
+      try {
+        configure(db)
+        db.pragma('journal_mode = WAL')
+        db.pragma('synchronous = FULL')
+        db.transaction(() => {
+          db.exec(BOOK_SCHEMA)
+          db.pragma(`application_id = ${BOOK_APPLICATION_ID}`)
+          db.pragma(`user_version = ${SCHEMA_VERSION}`)
+          db.prepare('INSERT INTO book_meta (singleton, id, title, created_at, updated_at) VALUES (1, ?, ?, ?, ?)').run(id, title, now, now)
+        })()
+        // 每书主库先成为完整资产，再登记工作室目录；登记失败时保留已创建文件。
+        studio.prepare('INSERT INTO books (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)').run(id, title, now, now)
+      } finally {
+        db.close()
+      }
+      return { book: { id, title, genre: '', synopsis: '', archivedAt: null, revision: 0, createdAt: now, updatedAt: now }, chapters: [], volumes: [] }
+    })
+  }
+
+  getBook(input: BookInput): BookSnapshot {
+    return perform(() => {
+      const bookId = requiredId(payload(input).bookId).toLowerCase()
+      const db = this.openBook(bookId)
+      const book = this.readBookMetadata(db, bookId)
+      const rows = db.prepare(`SELECT ${CHAPTER_COLUMNS}
+        FROM chapters c JOIN chapter_revisions r ON r.id = c.current_revision_id AND r.chapter_id = c.id
+        ORDER BY c.position, c.id LIMIT ?`).all(MAX_CHAPTERS + 1) as ChapterRow[]
+      if (rows.length > MAX_CHAPTERS) throw new DomainError({ code: 'STORAGE_ERROR', message: `当前版本每部作品最多支持 ${MAX_CHAPTERS} 章。` })
+      const volumes = db.prepare('SELECT id, title, position FROM volumes ORDER BY position, id LIMIT ?').all(MAX_VOLUMES + 1) as VolumeSummary[]
+      if (volumes.length > MAX_VOLUMES) throw storageFailure()
+      this.updateCatalog(book)
+      return { book, chapters: rows.map(chapterSummary), volumes }
+    })
+  }
+
+  createChapter(input: CreateChapterInput): ChapterSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const title = requiredText(data.title, '章节名', 120)
+      const db = this.openBook(bookId)
+      const volumeId = data.volumeId == null ? null : requiredId(data.volumeId).toLowerCase()
+      const chapterId = randomUUID()
+      const revisionId = randomUUID()
+      const document = emptyDocument()
+      const documentJson = JSON.stringify(document)
+      const now = new Date().toISOString()
+      db.transaction(() => {
+        this.requireWritable(db, bookId)
+        this.requireVolume(db, volumeId)
+        const current = db.prepare('SELECT COALESCE(MAX(position), -1) AS maximum, COUNT(*) AS count FROM chapters').get() as { maximum: number; count: number }
+        if (current.count >= MAX_CHAPTERS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前作品已达到 ${MAX_CHAPTERS} 章的上限。` })
+        db.prepare('INSERT INTO chapters (id, title, position, volume_id, current_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(chapterId, title, current.maximum + 1, volumeId, revisionId, now, now)
+        db.prepare(`INSERT INTO chapter_revisions
+          (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason)
+          VALUES (?, ?, NULL, ?, '', ?, 0, ?, ?, 'created')`).run(revisionId, chapterId, documentJson, this.hash(documentJson), now, this.nextSequence(db))
+        this.normalizeChapterPositions(db, now)
+        this.recordChapterChange(db, chapterId, revisionId, now)
+      }).immediate()
+      this.updateCatalog(this.readBookMetadata(db, bookId))
+      return this.readChapter({ bookId, chapterId })
+    })
+  }
+
+  readChapter(input: ChapterInput): ChapterSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const db = this.openBook(bookId)
+      const row = this.readChapterRow(db, chapterId)
+      const document = verifyDocument(row)
+      return { ...chapterSummary(row), bookId, document, plainText: row.plain_text, bookRevision: this.readBookMetadata(db, bookId).revision }
+    })
+  }
+
+  saveChapter(input: SaveChapterInput): SaveChapterOutput {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const expectedRevisionId = requiredId(data.expectedRevisionId).toLowerCase()
+      const document = parseManuscript(data.document)
+      const documentJson = JSON.stringify(document)
+      const contentHash = this.hash(documentJson)
+      const plainText = documentToText(document)
+      const characterCount = countCharacters(plainText)
+      const db = this.openBook(bookId)
+      const changed = db.transaction(() => {
+        this.requireWritable(db, bookId)
+        const current = this.readChapterRow(db, chapterId)
+        if (current.current_revision_id !== expectedRevisionId) {
+          throw new DomainError({ code: 'REVISION_CONFLICT', message: '章节已有更新版本。当前草稿已保留，请重新读取后比较，不能直接覆盖。', currentRevisionId: current.current_revision_id })
+        }
+        if (current.content_hash === contentHash && current.document_json === documentJson) return false
+        const revisionId = randomUUID()
+        const now = new Date().toISOString()
+        db.prepare(`INSERT INTO chapter_revisions
+          (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'saved')`).run(revisionId, chapterId, expectedRevisionId, documentJson, plainText, contentHash, characterCount, now, this.nextSequence(db))
+        const updated = db.prepare("UPDATE chapters SET current_revision_id = ?, updated_at = ?, status = 'writing' WHERE id = ? AND current_revision_id = ?")
+          .run(revisionId, now, chapterId, expectedRevisionId)
+        if (updated.changes !== 1) throw new DomainError({ code: 'REVISION_CONFLICT', message: '章节版本已变化，本次保存没有覆盖新稿。' })
+        this.recordChapterChange(db, chapterId, revisionId, now)
+        return true
+      }).immediate()
+      if (changed) this.updateCatalog(this.readBookMetadata(db, bookId))
+      return { chapter: this.readChapter({ bookId, chapterId }), changed }
+    })
+  }
+
+  updateBook(input: UpdateBookInput): BookSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const title = requiredText(data.title, '作品名', 120)
+      const genre = optionalText(data.genre, '类型', 120)
+      const synopsis = optionalText(data.synopsis, '简介', 20_000)
+      if (typeof data.archived !== 'boolean') throw new DomainError({ code: 'INVALID_INPUT', message: '归档状态无效。' })
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        const book = this.requireBookRevision(db, bookId, expected)
+        // 归档资产只能查看；显式取消归档后才能继续编辑。
+        if (book.archivedAt && data.archived) throw new DomainError({ code: 'FORBIDDEN', message: '请先取消归档再修改作品。' })
+        const now = new Date().toISOString()
+        db.prepare('UPDATE book_meta SET title = ?, genre = ?, synopsis = ?, archived_at = ? WHERE singleton = 1')
+          .run(title, genre, synopsis, data.archived ? now : null)
+        this.recordMutation(db, 'book.metadata', now)
+      }).immediate()
+      return this.getBook({ bookId })
+    })
+  }
+
+  createVolume(input: CreateVolumeInput): BookSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const title = requiredText(data.title, '卷名', 120)
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        this.requireWritable(db, bookId, expected)
+        const current = db.prepare('SELECT COUNT(*) AS count, COALESCE(MAX(position), -1) AS maximum FROM volumes').get() as { count: number; maximum: number }
+        if (current.count >= MAX_VOLUMES) throw new DomainError({ code: 'INVALID_INPUT', message: `每部作品最多支持 ${MAX_VOLUMES} 卷。` })
+        const now = new Date().toISOString()
+        db.prepare('INSERT INTO volumes (id, title, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(randomUUID(), title, current.maximum + 1, now, now)
+        this.recordMutation(db, 'book.structure', now)
+      }).immediate()
+      return this.getBook({ bookId })
+    })
+  }
+
+  renameVolume(input: RenameVolumeInput): BookSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const volumeId = requiredId(data.volumeId).toLowerCase()
+      const title = requiredText(data.title, '卷名', 120)
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        this.requireWritable(db, bookId, expected)
+        this.requireVolume(db, volumeId)
+        const now = new Date().toISOString()
+        db.prepare('UPDATE volumes SET title = ?, updated_at = ? WHERE id = ?').run(title, now, volumeId)
+        this.recordMutation(db, 'book.structure', now)
+      }).immediate()
+      return this.getBook({ bookId })
+    })
+  }
+
+  reorderVolumes(input: ReorderVolumesInput): BookSnapshot {
+    return this.reorder(input, 'volumes', 'volumeIds', MAX_VOLUMES)
+  }
+
+  reorderChapters(input: ReorderChaptersInput): BookSnapshot {
+    return this.reorder(input, 'chapters', 'chapterIds', MAX_CHAPTERS)
+  }
+
+  updateChapter(input: UpdateChapterInput): ChapterSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const title = requiredText(data.title, '章节名', 120)
+      const volumeId = data.volumeId === null ? null : requiredId(data.volumeId).toLowerCase()
+      const goal = optionalText(data.goal, '章节目标', 10_000)
+      const viewpoint = optionalText(data.viewpoint, '章节视角', 500)
+      const notes = optionalText(data.notes, '章节备注', 20_000)
+      const target = data.targetCharacters === null ? null : requiredInteger(data.targetCharacters, '目标字数', 1_000_000)
+      if (!['planned', 'writing', 'review'].includes(String(data.status))) throw new DomainError({ code: 'INVALID_INPUT', message: '章节状态无效，请通过定稿操作保存定稿。' })
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        this.requireWritable(db, bookId, expected)
+        const current = this.readChapterRow(db, chapterId)
+        this.requireVolume(db, volumeId)
+        const now = new Date().toISOString()
+        db.prepare(`UPDATE chapters SET title = ?, volume_id = ?, goal = ?, viewpoint = ?, target_characters = ?, notes = ?, status = ?, updated_at = ? WHERE id = ?`)
+          .run(title, volumeId, goal, viewpoint, target, notes, data.status, now, chapterId)
+        if (current.volume_id !== volumeId) this.normalizeChapterPositions(db, now)
+        this.recordMutation(db, 'chapter.metadata', now, chapterId)
+      }).immediate()
+      this.updateCatalog(this.readBookMetadata(db, bookId))
+      return this.readChapter({ bookId, chapterId })
+    })
+  }
+
+  finalizeChapter(input: FinalizeChapterInput): ChapterSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const revisionId = requiredId(data.expectedRevisionId).toLowerCase()
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        this.requireWritable(db, bookId, expected)
+        const chapter = this.readChapterRow(db, chapterId)
+        if (chapter.current_revision_id !== revisionId) this.revisionConflict(chapter.current_revision_id)
+        const now = new Date().toISOString()
+        db.prepare("UPDATE chapters SET finalized_revision_id = ?, finalized_at = ?, status = 'finalized', updated_at = ? WHERE id = ?")
+          .run(revisionId, now, now, chapterId)
+        this.recordMutation(db, 'chapter.finalized', now, chapterId)
+      }).immediate()
+      this.updateCatalog(this.readBookMetadata(db, bookId))
+      return this.readChapter({ bookId, chapterId })
+    })
+  }
+
+  listRevisions(input: ListRevisionsInput): RevisionPage {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const before = data.beforeSequence === undefined ? Number.MAX_SAFE_INTEGER : requiredInteger(data.beforeSequence, '历史游标')
+      const db = this.openBook(bookId)
+      this.readChapterRow(db, chapterId)
+      const rows = db.prepare(`SELECT id, sequence, parent_revision_id, restored_from_revision_id, reason, character_count, created_at
+        FROM chapter_revisions WHERE chapter_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT 51`).all(chapterId, before) as HistoryRow[]
+      const items = rows.slice(0, 50).map(historySummary)
+      return { items, nextBeforeSequence: rows.length > 50 ? items[items.length - 1]!.sequence : null }
+    })
+  }
+
+  readRevision(input: RevisionInput): RevisionSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const revisionId = requiredId(data.revisionId).toLowerCase()
+      const row = this.historyRow(this.openBook(bookId), chapterId, revisionId)
+      return { ...historySummary(row), bookId, chapterId, document: verifyDocument(row), plainText: row.plain_text }
+    })
+  }
+
+  restoreRevision(input: RestoreRevisionInput): ChapterSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const chapterId = requiredId(data.chapterId).toLowerCase()
+      const sourceId = requiredId(data.revisionId).toLowerCase()
+      const expected = requiredId(data.expectedRevisionId).toLowerCase()
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        this.requireWritable(db, bookId)
+        const current = this.readChapterRow(db, chapterId)
+        if (current.current_revision_id !== expected) this.revisionConflict(current.current_revision_id)
+        const source = this.historyRow(db, chapterId, sourceId)
+        verifyDocument(source)
+        const revisionId = randomUUID()
+        const now = new Date().toISOString()
+        // 恢复总是新增历史节点；当前稿和旧定稿仍然保留，来源追溯不倒退。
+        db.prepare(`INSERT INTO chapter_revisions
+          (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason, restored_from_revision_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'restored', ?)`)
+          .run(revisionId, chapterId, expected, source.document_json, source.plain_text, source.content_hash, source.character_count, now, this.nextSequence(db), sourceId)
+        const updated = db.prepare("UPDATE chapters SET current_revision_id = ?, updated_at = ?, status = 'writing' WHERE id = ? AND current_revision_id = ?")
+          .run(revisionId, now, chapterId, expected)
+        if (updated.changes !== 1) this.revisionConflict(current.current_revision_id)
+        this.recordChapterChange(db, chapterId, revisionId, now)
+      }).immediate()
+      this.updateCatalog(this.readBookMetadata(db, bookId))
+      return this.readChapter({ bookId, chapterId })
+    })
+  }
+
+  findOrphanBooks(): OrphanScan {
+    return perform(() => {
+      const studio = this.requireStudio()
+      const directory = join(this.requireRoot(), 'books')
+      assertLocalPath(directory, true)
+      const registered = new Set((studio.prepare('SELECT id FROM books').all() as { id: string }[]).map((row) => row.id))
+      const scan: OrphanScan = { books: [], skipped: 0 }
+      const handle = opendirSync(directory)
+      let examined = 0
+      try {
+        for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+          examined += 1
+          if (examined > 5_000) throw new DomainError({ code: 'STORAGE_ERROR', message: '书库目录项超过 5,000 个，请先人工核对目录内容。' })
+          if (registered.has(entry.name)) continue
+          let db: Database.Database | null = null
+          try {
+            const id = requiredId(entry.name).toLowerCase()
+            if (!entry.isDirectory() || entry.isSymbolicLink() || id !== entry.name) { scan.skipped += 1; continue }
+            db = this.openOrphanReadOnly(id)
+            const book = this.readBookMetadata(db, id)
+            const chapterCount = (db.prepare('SELECT COUNT(*) AS count FROM chapters').get() as { count: number }).count
+            const volumeCount = (db.prepare('SELECT COUNT(*) AS count FROM volumes').get() as { count: number }).count
+            if (chapterCount > MAX_CHAPTERS || volumeCount > MAX_VOLUMES) { scan.skipped += 1; continue }
+            scan.books.push({ book, chapterCount })
+          } catch { scan.skipped += 1 } finally { if (db?.open) db.close() }
+        }
+      } finally { handle.closeSync() }
+      scan.books.sort((a, b) => b.book.updatedAt.localeCompare(a.book.updatedAt) || a.book.id.localeCompare(b.book.id))
+      return scan
+    })
+  }
+
+  registerOrphanBook(input: BookInput): BookSnapshot {
+    return perform(() => {
+      const bookId = requiredId(payload(input).bookId).toLowerCase()
+      const studio = this.requireStudio()
+      if (studio.prepare('SELECT id FROM books WHERE id = ?').get(bookId)) return this.getBook({ bookId })
+      this.checkBookCapacity(studio)
+      const db = this.openOrphanReadOnly(bookId)
+      try {
+        const book = this.readBookMetadata(db, bookId)
+        const check = db.pragma('quick_check', { simple: true })
+        if (check !== 'ok' || (db.pragma('foreign_key_check') as unknown[]).length > 0) throw storageFailure()
+        const chapterCount = (db.prepare('SELECT COUNT(*) AS count FROM chapters').get() as { count: number }).count
+        const volumeCount = (db.prepare('SELECT COUNT(*) AS count FROM volumes').get() as { count: number }).count
+        if (chapterCount > MAX_CHAPTERS || volumeCount > MAX_VOLUMES) throw storageFailure()
+        this.insertCatalog(studio, book)
+      } finally { db.close() }
+      return this.getBook({ bookId })
+    })
+  }
+
+  importBook(input: ImportBookData): BookSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const title = requiredText(data.title, '作品名', 120)
+      const sourceName = requiredText(data.sourceName, '来源文件名', 255)
+      if (!(data.sourceBytes instanceof Uint8Array) || data.sourceBytes.byteLength > MAX_IMPORT_BYTES) throw new DomainError({ code: 'INVALID_INPUT', message: '导入原稿字节无效或超过 32 MiB。' })
+      if (!['utf-8', 'utf-16le', 'utf-16be', 'gb18030'].includes(String(data.encoding))) throw new DomainError({ code: 'INVALID_INPUT', message: '导入编码无效。' })
+      const sourceBytes = data.sourceBytes
+      const encoding = data.encoding as TextEncoding
+      if (!Array.isArray(data.chapters) || data.chapters.length === 0 || data.chapters.length > MAX_CHAPTERS) throw new DomainError({ code: 'INVALID_INPUT', message: '导入章节数量无效。' })
+      let totalLength = 0
+      const chapters = Array.from(data.chapters, (item: unknown) => {
+        const chapter = payload(item)
+        const document = parseManuscript(chapter.document)
+        totalLength += documentToText(document).length
+        if (totalLength > MAX_IMPORT_BYTES) throw new DomainError({ code: 'INVALID_INPUT', message: '导入正文总量超过当前上限，请拆分后导入。' })
+        return { title: requiredText(chapter.title, '章节名', 120), document }
+      })
+      const studio = this.requireStudio()
+      this.checkBookCapacity(studio)
+      const bookId = randomUUID()
+      const sourceId = randomUUID()
+      const now = new Date().toISOString()
+      const directory = join(this.requireRoot(), 'books', bookId)
+      assertLocalPath(join(this.requireRoot(), 'books'), true)
+      mkdirSync(directory)
+      assertLocalPath(directory, true)
+      const sourceDirectory = join(directory, 'sources')
+      mkdirSync(sourceDirectory)
+      assertLocalPath(sourceDirectory, true)
+      const relativeSource = `sources/${sourceId}.original`
+      // 原稿按不可变标识另存；失败保留新目录，绝不覆盖或删除用户原文件。
+      writeFileSync(join(sourceDirectory, `${sourceId}.original`), sourceBytes, { flag: 'wx', flush: true })
+      const db = new Database(join(directory, 'book.sqlite'))
+      try {
+        configure(db)
+        db.pragma('journal_mode = WAL')
+        db.pragma('synchronous = FULL')
+        db.transaction(() => {
+          db.exec(BOOK_SCHEMA)
+          db.pragma(`application_id = ${BOOK_APPLICATION_ID}`)
+          db.pragma(`user_version = ${SCHEMA_VERSION}`)
+          db.prepare('INSERT INTO book_meta (singleton, id, title, created_at, updated_at) VALUES (1, ?, ?, ?, ?)').run(bookId, title, now, now)
+          db.prepare(`INSERT INTO import_sources (id, source_name, encoding, relative_path, sha256, byte_length, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+            .run(sourceId, sourceName, encoding, relativeSource, createHash('sha256').update(sourceBytes).digest('hex'), sourceBytes.byteLength, now)
+          const insertChapter = db.prepare(`INSERT INTO chapters (id, title, position, current_revision_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'writing', ?, ?)`)
+          const insertRevision = db.prepare(`INSERT INTO chapter_revisions
+            (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason)
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'imported')`)
+          for (let position = 0; position < chapters.length; position += 1) {
+            const chapter = chapters[position]!
+            const chapterId = randomUUID()
+            const revisionId = randomUUID()
+            const json = JSON.stringify(chapter.document)
+            const plainText = documentToText(chapter.document)
+            insertChapter.run(chapterId, chapter.title, position, revisionId, now, now)
+            insertRevision.run(revisionId, chapterId, json, plainText, this.hash(json), countCharacters(plainText), now, position + 1)
+            this.recordChapterChange(db, chapterId, revisionId, now)
+          }
+        }).immediate()
+        this.insertCatalog(studio, this.readBookMetadata(db, bookId))
+      } finally { db.close() }
+      return this.getBook({ bookId })
+    })
+  }
+
+  exportBookText(input: ExportBookInput, write: (chunk: string) => void): { chapterCount: number; characterCount: number; bookRevision: number } {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      if ((data.format !== 'txt' && data.format !== 'markdown') || (data.scope !== 'working' && data.scope !== 'finalized') || typeof data.includeChapterTitles !== 'boolean' || typeof write !== 'function') {
+        throw new DomainError({ code: 'INVALID_INPUT', message: '导出选项无效。' })
+      }
+      const format = data.format
+      const includeTitles = data.includeChapterTitles
+      const db = this.openBook(bookId)
+      return db.transaction(() => {
+        const book = this.requireBookRevision(db, bookId, expected)
+        // 一次读事务固定目录与版本；按章输出，不将全书正文和历史装入同一个对象。
+        const column = data.scope === 'finalized' ? 'finalized_revision_id' : 'current_revision_id'
+        const rows = db.prepare(`SELECT c.title, r.document_json, r.plain_text, r.content_hash, r.character_count
+          FROM chapters c JOIN chapter_revisions r ON r.id = c.${column} AND r.chapter_id = c.id
+          ORDER BY c.position, c.id LIMIT ?`).iterate(MAX_CHAPTERS + 1) as Iterable<{ title: string; document_json: string; plain_text: string; content_hash: string; character_count: number }>
+        let chapterCount = 0
+        let characterCount = 0
+        for (const row of rows) {
+          if (chapterCount >= MAX_CHAPTERS) throw storageFailure()
+          const document = verifyDocument(row)
+          if (chapterCount > 0) write('\n\n')
+          write(renderTextExport([{ title: row.title, document }], format, includeTitles))
+          chapterCount += 1
+          characterCount += row.character_count
+        }
+        if (chapterCount === 0) throw new DomainError({ code: 'INVALID_INPUT', message: data.scope === 'finalized' ? '这部作品还没有定稿章节。' : '这部作品还没有正文章节。' })
+        return { chapterCount, characterCount, bookRevision: book.revision }
+      })()
+    })
+  }
+
+  close(): void {
+    if (this.activeBook?.db.open) this.activeBook.db.close()
+    this.activeBook = null
+    if (this.studio?.open) this.studio.close()
+    this.studio = null
+    this.rootPath = null
+  }
+
+  private requireStudio(): Database.Database {
+    if (!this.studio) throw new DomainError({ code: 'WORKSPACE_REQUIRED', message: '请先选择本地书库目录。' })
+    return this.studio
+  }
+
+  private requireRoot(): string {
+    this.requireStudio()
+    if (!this.rootPath) throw storageFailure()
+    return this.rootPath
+  }
+
+  private openBook(bookId: string): Database.Database {
+    const studio = this.requireStudio()
+    const registered = studio.prepare('SELECT id FROM books WHERE id = ?').get(bookId)
+    if (!registered) throw new DomainError({ code: 'NOT_FOUND', message: '当前书库中不存在这部作品。' })
+    if (this.activeBook?.id === bookId) {
+      this.readBookMetadata(this.activeBook.db, bookId)
+      return this.activeBook.db
+    }
+    const directory = join(this.requireRoot(), 'books', bookId)
+    assertLocalPath(join(this.requireRoot(), 'books'), true)
+    assertLocalPath(directory, true)
+    const databasePath = join(directory, 'book.sqlite')
+    assertLocalPath(databasePath, false)
+    assertDatabasePaths(databasePath)
+    verifyExistingFile(databasePath, BOOK_APPLICATION_ID)
+    const db = new Database(databasePath, { timeout: 2000, fileMustExist: true })
+    try {
+      verifyDatabase(db, BOOK_APPLICATION_ID)
+      configure(db)
+      this.readBookMetadata(db, bookId)
+      db.pragma('journal_mode = WAL')
+      db.pragma('synchronous = FULL')
+    } catch (error) {
+      db.close()
+      throw error
+    }
+    if (this.activeBook?.db.open) this.activeBook.db.close()
+    this.activeBook = { id: bookId, db }
+    return db
+  }
+
+  private readBookMetadata(db: Database.Database, expectedId: string): BookSummary {
+    const row = db.prepare(`SELECT ${BOOK_COLUMNS} FROM book_meta WHERE singleton = 1`).get() as BookRow | undefined
+    if (!row || row.id !== expectedId) throw new DomainError({ code: 'STORAGE_ERROR', message: '作品数据库身份与当前目录不一致，已停止访问。' })
+    return bookSummary(row)
+  }
+
+  private readChapterRow(db: Database.Database, chapterId: string): RevisionRow {
+    const row = db.prepare(`SELECT ${CHAPTER_COLUMNS}, r.document_json, r.plain_text, r.content_hash
+      FROM chapters c JOIN chapter_revisions r ON r.id = c.current_revision_id AND r.chapter_id = c.id
+      WHERE c.id = ?`).get(chapterId) as RevisionRow | undefined
+    if (!row) throw new DomainError({ code: 'NOT_FOUND', message: '当前作品中不存在这个章节。' })
+    return row
+  }
+
+  private requireBookRevision(db: Database.Database, bookId: string, expected: number): BookSummary {
+    const book = this.readBookMetadata(db, bookId)
+    if (book.revision !== expected) throw new DomainError({ code: 'REVISION_CONFLICT', message: '作品目录或资料已更新，请刷新后再执行这项操作。' })
+    return book
+  }
+
+  private requireWritable(db: Database.Database, bookId: string, expected?: number): BookSummary {
+    const book = expected === undefined ? this.readBookMetadata(db, bookId) : this.requireBookRevision(db, bookId, expected)
+    if (book.archivedAt) throw new DomainError({ code: 'FORBIDDEN', message: '作品已归档，请先取消归档再继续编辑。' })
+    return book
+  }
+
+  private requireVolume(db: Database.Database, volumeId: string | null): void {
+    if (volumeId !== null && !db.prepare('SELECT id FROM volumes WHERE id = ?').get(volumeId)) {
+      throw new DomainError({ code: 'NOT_FOUND', message: '当前作品中不存在这个卷。' })
+    }
+  }
+
+  private revisionConflict(currentRevisionId: string): never {
+    throw new DomainError({ code: 'REVISION_CONFLICT', message: '章节已有更新版本，当前操作没有覆盖新稿。', currentRevisionId })
+  }
+
+  private historyRow(db: Database.Database, chapterId: string, revisionId: string): HistoryRow {
+    const row = db.prepare(`SELECT id, sequence, parent_revision_id, restored_from_revision_id, reason,
+      character_count, created_at, document_json, plain_text, content_hash FROM chapter_revisions WHERE chapter_id = ? AND id = ?`)
+      .get(chapterId, revisionId) as HistoryRow | undefined
+    if (!row) throw new DomainError({ code: 'NOT_FOUND', message: '当前章节中不存在这个历史版本。' })
+    return row
+  }
+
+  private nextSequence(db: Database.Database): number {
+    const row = db.prepare('SELECT COALESCE(MAX(sequence), 0) AS maximum FROM chapter_revisions').get() as { maximum: number }
+    if (!Number.isSafeInteger(row.maximum) || row.maximum >= Number.MAX_SAFE_INTEGER - 1) throw storageFailure()
+    return row.maximum + 1
+  }
+
+  private reorder(input: ReorderVolumesInput | ReorderChaptersInput, table: 'volumes' | 'chapters', field: 'volumeIds' | 'chapterIds', maximum: number): BookSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const rawIds = data[field]
+      if (!Array.isArray(rawIds) || rawIds.length > maximum) throw new DomainError({ code: 'INVALID_INPUT', message: '排序列表无效。' })
+      const ids = Array.from(rawIds, (value: unknown) => requiredId(value).toLowerCase())
+      if (new Set(ids).size !== ids.length) throw new DomainError({ code: 'INVALID_INPUT', message: '排序列表包含重复项目。' })
+      const db = this.openBook(bookId)
+      db.transaction(() => {
+        this.requireWritable(db, bookId, expected)
+        const rows = db.prepare(`SELECT id, position FROM ${table} ORDER BY position, id LIMIT ?`).all(maximum + 1) as { id: string; position: number }[]
+        const existing = new Set(rows.map((row) => row.id))
+        if (rows.length !== ids.length || ids.some((id) => !existing.has(id))) throw new DomainError({ code: 'REVISION_CONFLICT', message: '排序必须包含当前作品的全部项目，请刷新后重试。' })
+        if (ids.every((id, index) => rows[index]?.id === id)) return
+        const now = new Date().toISOString()
+        const maxPosition = rows.reduce((max, row) => Math.max(max, row.position), -1)
+        if (!Number.isSafeInteger(maxPosition) || maxPosition > Number.MAX_SAFE_INTEGER / 3) throw storageFailure()
+        // UNIQUE(position) 在逐行更新时生效，先搬到不重叠的临时区间再写最终次序。
+        db.prepare(`UPDATE ${table} SET position = position + ?`).run(maxPosition + ids.length + 1)
+        const update = db.prepare(`UPDATE ${table} SET position = ?, updated_at = ? WHERE id = ?`)
+        ids.forEach((id, index) => update.run(index, now, id))
+        this.normalizeChapterPositions(db, now)
+        this.recordMutation(db, 'book.structure', now)
+      }).immediate()
+      return this.getBook({ bookId })
+    })
+  }
+
+  private normalizeChapterPositions(db: Database.Database, now: string): void {
+    const rows = db.prepare(`SELECT c.id, c.position FROM chapters c LEFT JOIN volumes v ON v.id = c.volume_id
+      ORDER BY CASE WHEN c.volume_id IS NULL THEN 0 ELSE 1 END, v.position, c.position, c.id LIMIT ?`)
+      .all(MAX_CHAPTERS + 1) as { id: string; position: number }[]
+    if (rows.length > MAX_CHAPTERS) throw storageFailure()
+    if (rows.every((row, index) => row.position === index)) return
+    const maximum = rows.reduce((max, row) => Math.max(max, row.position), -1)
+    if (!Number.isSafeInteger(maximum) || maximum > Number.MAX_SAFE_INTEGER / 3) throw storageFailure()
+    // 全书章号固定为未分卷、卷顺序、卷内顺序；界面与导出共同读取这一持久顺序。
+    db.prepare('UPDATE chapters SET position = position + ?').run(maximum + rows.length + 1)
+    const update = db.prepare('UPDATE chapters SET position = ?, updated_at = ? WHERE id = ?')
+    rows.forEach((row, index) => update.run(index, now, row.id))
+  }
+
+  private openOrphanReadOnly(bookId: string): Database.Database {
+    const directory = join(this.requireRoot(), 'books', bookId)
+    assertLocalPath(join(this.requireRoot(), 'books'), true)
+    assertLocalPath(directory, true)
+    const path = join(directory, 'book.sqlite')
+    assertLocalPath(path, false)
+    assertDatabasePaths(path)
+    const db = new Database(path, { readonly: true, fileMustExist: true, timeout: 2000 })
+    try {
+      verifyDatabase(db, BOOK_APPLICATION_ID)
+      configure(db)
+      this.readBookMetadata(db, bookId)
+      return db
+    } catch (error) { db.close(); throw error }
+  }
+
+  private checkBookCapacity(studio: Database.Database): void {
+    const count = (studio.prepare('SELECT COUNT(*) AS count FROM books').get() as { count: number }).count
+    if (count >= MAX_BOOKS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前书库已达到 ${MAX_BOOKS} 部作品的上限。` })
+  }
+
+  private insertCatalog(studio: Database.Database, book: BookSummary): void {
+    studio.prepare(`INSERT INTO books (id, title, genre, synopsis, archived_at, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(book.id, book.title, book.genre, book.synopsis, book.archivedAt, book.revision, book.createdAt, book.updatedAt)
+  }
+
+  private recordMutation(db: Database.Database, kind: 'book.metadata' | 'book.structure' | 'chapter.metadata' | 'chapter.finalized', now: string, chapterId: string | null = null): void {
+    let revisionId: string | null = null
+    if (kind === 'chapter.metadata' || kind === 'chapter.finalized') {
+      if (!chapterId) throw storageFailure()
+      const chapter = db.prepare('SELECT current_revision_id FROM chapters WHERE id = ?').get(chapterId) as { current_revision_id: string } | undefined
+      if (!chapter) throw storageFailure()
+      // 在变更事务中固定当时的正文来源；同一正文允许多次资料修改或定稿事件。
+      revisionId = chapter.current_revision_id
+    }
+    db.prepare('UPDATE book_meta SET revision = revision + 1, updated_at = ? WHERE singleton = 1').run(now)
+    const row = db.prepare('SELECT revision FROM book_meta WHERE singleton = 1').get() as { revision: number }
+    db.prepare('INSERT INTO outbox (id, kind, chapter_id, revision_id, book_revision, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(randomUUID(), kind, chapterId, revisionId, row.revision, now)
+  }
+
+  private recordChapterChange(db: Database.Database, chapterId: string, revisionId: string, now: string): void {
+    db.prepare('UPDATE book_meta SET revision = revision + 1, updated_at = ? WHERE singleton = 1').run(now)
+    const row = db.prepare('SELECT revision FROM book_meta WHERE singleton = 1').get() as { revision: number }
+    db.prepare(`INSERT INTO outbox (id, kind, chapter_id, revision_id, book_revision, created_at)
+      VALUES (?, 'chapter.changed', ?, ?, ?, ?)`).run(randomUUID(), chapterId, revisionId, row.revision, now)
+  }
+
+  private updateCatalog(book: BookSummary): void {
+    // 正文已在每书事务内持久化；目录缓存失败不能把已提交保存伪装成失败。
+    try {
+      this.requireStudio().prepare('UPDATE books SET title = ?, genre = ?, synopsis = ?, archived_at = ?, revision = ?, updated_at = ? WHERE id = ?')
+        .run(book.title, book.genre, book.synopsis, book.archivedAt, book.revision, book.updatedAt, book.id)
+    } catch {
+      console.warn('storyweave.catalog_refresh_failed')
+    }
+  }
+
+  private hash(value: string): string {
+    return createHash('sha256').update(value, 'utf8').digest('hex')
+  }
+}

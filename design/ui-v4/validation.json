@@ -1,0 +1,125 @@
+{
+  "date": "2026-11-04",
+  "scope": "Offline UI prototype, Chrome browser, no backend or model claims",
+  "checks": [
+    {
+      "name": "Responsive routes",
+      "result": "pass",
+      "detail": "13 pages × 4 widths (1440/1024/390/320), document scrollWidth <= viewport + 1px"
+    },
+    {
+      "name": "Visible navigation",
+      "result": "pass",
+      "detail": "All 13 sidebar page buttons render their page"
+    },
+    {
+      "name": "Writing focus and evidence",
+      "result": "pass",
+      "detail": "Focus mode exits with Escape; dialog returns focus; source selects the exact passage without changing text"
+    },
+    {
+      "name": "Memory-assisted writing journey",
+      "result": "pass",
+      "detail": "Input → simulated proposal → 3 review decisions → append revised text → independent event confirmation; source-review flag remains separate"
+    },
+    {
+      "name": "Stale proposal and source guards",
+      "result": "pass",
+      "detail": "Editing revision disables old proposal adoption; removing a quoted passage disables source positioning"
+    },
+    {
+      "name": "Cancelled task",
+      "result": "pass",
+      "detail": "Cancelled simulated task does not reopen a completed proposal or modify manuscript"
+    },
+    {
+      "name": "Knowledge galaxy",
+      "result": "pass",
+      "detail": "Filters, search, selected detail, 14-object list, pointer rotation and reset"
+    },
+    {
+      "name": "Character time lens",
+      "result": "pass",
+      "detail": "Early/warehouse/future differ; Song Yao remains unconfirmed; person search works"
+    },
+    {
+      "name": "World revision and order separation",
+      "result": "pass",
+      "detail": "Editing rule marks review; moving a scene changes narrative order but keeps original story order"
+    },
+    {
+      "name": "Foreshadowing evidence",
+      "result": "pass",
+      "detail": "Changing planned window does not mark payoff; absent quote cannot be confirmed as payoff evidence"
+    },
+    {
+      "name": "Notes and search",
+      "result": "pass",
+      "detail": "Edits survive internal navigation; explicit conversion creates author setting; search finds note and object"
+    },
+    {
+      "name": "Checkpoint restoration",
+      "result": "pass",
+      "detail": "Compare, restore, and preserve newer draft as a separate checkpoint"
+    },
+    {
+      "name": "Preferences and failure states",
+      "result": "pass",
+      "detail": "Font/paper updates; five failure states; simulated conflict retains both drafts"
+    },
+    {
+      "name": "New work and isolation",
+      "result": "pass",
+      "detail": "New work has genuine empty views; unique scene and content; tide story remains separate"
+    },
+    {
+      "name": "Import/export and literal content",
+      "result": "pass",
+      "detail": "Paste preview/back/import works; HTML remains inert text; actual Markdown download only contains selected work manuscript"
+    },
+    {
+      "name": "Mobile primary actions",
+      "result": "pass",
+      "detail": "Drawer navigation, memory, scene switch, and Escape"
+    },
+    {
+      "name": "Canvas fallback",
+      "result": "pass",
+      "detail": "Unavailable 2D context gives 14 accessible object rows with source dialogs"
+    },
+    {
+      "name": "Galaxy label readability",
+      "result": "pass",
+      "detail": "Default object labels do not overlap at 1440/1024/390/320; mobile shows focused relations"
+    },
+    {
+      "name": "Runtime and network",
+      "result": "pass",
+      "detail": "No browser pageerror; no HTTP(S) requests"
+    }
+  ],
+  "errors": [],
+  "externalRequests": [],
+  "overflow": [],
+  "screenshots": [
+    "shelf-desktop.png",
+    "write-desktop.png",
+    "outline-desktop.png",
+    "intent-desktop.png",
+    "galaxy-desktop.png",
+    "characters-desktop.png",
+    "world-desktop.png",
+    "timeline-desktop.png",
+    "threads-desktop.png",
+    "notes-desktop.png",
+    "review-desktop.png",
+    "history-desktop.png",
+    "settings-desktop.png",
+    "shelf-mobile.png",
+    "write-mobile.png",
+    "galaxy-mobile.png",
+    "characters-mobile.png",
+    "review-mobile.png"
+  ],
+  "result": "pass"
+}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>织章 StoryWeave · 小说创作工作台</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到工作区</a>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="主导航"></aside>
+    <div class="workspace">
+      <header class="topbar" id="topbar"></header>
+      <main id="main" tabindex="-1"></main>
+      <footer class="app-footer"><span><i class="status-dot"></i>演示工作区 <span class="footer-extra">· 数据仅在当前页面，刷新后还原</span></span><button data-action="help">原型说明 <span aria-hidden="true">↗</span></button></footer>
+    </div>
+  </div>
+  <dialog id="modal" aria-labelledby="modal-title"></dialog>
+  <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
+  <div class="toast" role="status" id="toast" hidden></div>
+</body>
+</html>
