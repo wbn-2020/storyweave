@@ -1,24 +1,45 @@
-.editor { max-width: 820px; min-height: 680px; margin: 0 auto; color: var(--color-paper-ink); background: var(--color-paper); border-radius: 3px; color-scheme: light; }
-.toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 16px; padding: 13px 22px; border-bottom: 1px solid #d7d3c9; }
+.editor { max-width: 820px; min-height: 680px; margin: 0 auto; color: var(--color-paper-ink); background: var(--color-paper); border-radius: 3px; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 16px; padding: 13px 22px; border-bottom: 1px solid var(--paper-line); }
 .toolGroup { display: flex; flex-wrap: wrap; gap: 3px; }
-.toolGroup button { border: 0; border-radius: 3px; padding: 5px 7px; min-height: 31px; background: transparent; color: #575c52; font-size: 11px; }
-.toolGroup button:hover:not(:disabled), .toolGroup button[aria-pressed='true'] { background: #dfdfd3; color: #263e36; }
-.toolGroup button:focus-visible { outline-color: #6c573c; }
+.toolGroup button { border: 0; border-radius: 3px; padding: 5px 7px; min-height: 31px; background: transparent; color: var(--paper-control-ink); font-size: 11px; }
+.toolGroup button:hover:not(:disabled), .toolGroup button[aria-pressed='true'] { background: var(--paper-control-hover); color: var(--paper-control-active-ink); }
+.toolGroup button:focus-visible { outline-color: var(--paper-focus); }
+.searchPanel { padding: 14px 22px; border-bottom: 1px solid var(--paper-line); background: var(--paper-search-panel); font: 11px/1.7 var(--font-ui); }
+.searchRow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.searchRow + .searchRow { margin-top: 10px; }
+.searchField { display: flex; align-items: center; gap: 9px; flex: 1 1 240px; min-width: 0; }
+.searchField > span { flex: 0 0 36px; color: var(--paper-control-ink); }
+.searchField input { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--paper-control-line); border-radius: 3px; color: var(--color-paper-ink); background: var(--paper-input); font-size: 12px; }
+.searchField input::placeholder { color: var(--color-paper-muted); opacity: 1; }
+.searchCount { min-width: 72px; color: var(--color-paper-muted); font-variant-numeric: tabular-nums; }
+.searchButtons { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.searchPanel button { min-height: 30px; border: 1px solid var(--paper-control-line); border-radius: 3px; padding: 4px 8px; background: transparent; color: var(--paper-control-ink); font-size: 11px; }
+.searchPanel button:hover:not(:disabled) { background: var(--paper-control-hover); }
+.searchPanel input:focus-visible, .searchPanel button:focus-visible { outline-color: var(--paper-focus); }
+.searchOptions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 9px 0; color: var(--color-paper-muted); }
+.searchOptions label { display: flex; gap: 6px; align-items: center; }
+.searchOptions input { margin: 0; accent-color: var(--paper-focus); }
+.searchOptions button { border: 0; padding: 2px 0; min-height: 25px; }
+.searchOptions > span { font-size: 10px; }
+.searchHint { margin-top: 7px; color: var(--color-paper-muted); font-size: 10px; }
+.searchWarning { margin-top: 8px; color: var(--paper-warning); font-size: 11px; }
+.content :global(.manuscript-search-match) { background: var(--paper-match); color: var(--paper-match-ink); border-bottom: 1px solid var(--paper-match-line); }
+.content :global(.manuscript-search-current) { background: var(--paper-current-match); color: var(--paper-current-ink); outline: 1px solid var(--paper-current-line); }
 .content { padding: 35px 42px 70px; }
-.content :global(.tiptap) { position: relative; min-height: 520px; font: 18px/2.05 var(--font-manuscript); outline: none; overflow-wrap: anywhere; white-space: pre-wrap; word-wrap: break-word; font-variant-ligatures: none; }
-.content :global(.tiptap:focus-visible) { outline: 1px dashed #8a806c; outline-offset: 10px; }
+.content :global(.tiptap) { position: relative; min-height: 520px; font: var(--manuscript-font-size, 18px)/var(--manuscript-line-height, 2.05) var(--font-manuscript); outline: none; overflow-wrap: anywhere; white-space: pre-wrap; word-wrap: break-word; font-variant-ligatures: none; }
+.content :global(.tiptap:focus-visible) { outline: 1px dashed var(--paper-focus); outline-offset: 10px; }
 .content :global(.tiptap p) { margin: 0 0 1em; }
 .content :global(.tiptap h1), .content :global(.tiptap h2), .content :global(.tiptap h3) { font-family: var(--font-manuscript); font-weight: 600; line-height: 1.65; margin: 1.5em 0 .7em; }
-.content :global(.tiptap h1) { font-size: 27px; }
-.content :global(.tiptap h2) { font-size: 23px; }
-.content :global(.tiptap h3) { font-size: 20px; }
+.content :global(.tiptap h1) { font-size: 1.5em; }
+.content :global(.tiptap h2) { font-size: 1.28em; }
+.content :global(.tiptap h3) { font-size: 1.12em; }
 .content :global(.tiptap > :first-child) { margin-top: 0; }
 .content :global(.tiptap strong) { font-weight: 700; }
-.content :global(.tiptap hr) { border: 0; border-top: 1px solid #a7aa9b; width: 24%; min-width: 50px; margin: 2.2em auto; }
-.content :global(.tiptap .ProseMirror-selectednode) { outline: 2px solid #8f805f; }
+.content :global(.tiptap hr) { border: 0; border-top: 1px solid var(--paper-control-line); width: 24%; min-width: 50px; margin: 2.2em auto; }
+.content :global(.tiptap .ProseMirror-selectednode) { outline: 2px solid var(--paper-focus); }
 .content :global(.tiptap .ProseMirror-gapcursor) { display: none; pointer-events: none; position: absolute; margin: 0; }
 .content :global(.tiptap .ProseMirror-gapcursor:after) { content: ''; display: block; position: absolute; top: -2px; width: 20px; border-top: 1px solid var(--color-paper-ink); }
 .content :global(.tiptap.ProseMirror-focused .ProseMirror-gapcursor) { display: block; }
 .loading { color: var(--color-muted); font-size: 12px; }
 @media (max-width: 1100px) { .content { padding: 28px 30px 55px; } .toolbar { padding-inline: 17px; } }
-@media (max-width: 850px) { .content { padding: 25px 23px 50px; } .content :global(.tiptap) { font-size: 17px; } .toolbar { padding-inline: 12px; } }
+@media (max-width: 850px) { .content { padding: 25px 23px 50px; } .toolbar, .searchPanel { padding-inline: 12px; } }

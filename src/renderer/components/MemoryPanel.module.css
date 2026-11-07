@@ -1,0 +1,49 @@
+.note { color: var(--color-muted); font-size: 12px; line-height: 1.9; margin: 12px 0; }
+.coverage { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px; padding: 22px 0 18px; border-top: 1px solid var(--color-line); margin-top: 20px; }
+.coverage > div > span { display: block; font-size: 11px; color: var(--color-muted); margin-bottom: 8px; }
+.coverage strong { font-size: 23px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.coverage small { font-size: 12px; color: var(--color-muted); font-weight: 400; }
+.coverage > p { grid-column: 1 / -1; margin: 0; font-size: 12px; line-height: 1.9; }
+.coverage > p > span { display: block; color: var(--color-muted); font-size: 11px; }
+.current { color: var(--color-accent); }
+.stale { color: var(--color-muted); }
+.task { padding: 18px 0 22px; border-top: 1px solid var(--color-line); }
+.taskHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.taskHeading h3 { font-weight: 500; font-size: 17px; }
+.task > p { font-size: 12px; line-height: 1.9; margin: 12px 0; }
+.task progress { display: block; height: 6px; width: 100%; accent-color: var(--color-accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.history { margin-top: 18px; color: var(--color-muted); font-size: 11px; }
+.history summary { cursor: pointer; padding: 6px 0; }
+.history ul { list-style: none; padding: 0; margin: 10px 0; }
+.history li { display: flex; flex-wrap: wrap; gap: 4px 20px; padding: 8px 0; border-top: 1px solid var(--color-line); line-height: 1.9; }
+.search { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 22px 0; border-top: 1px solid var(--color-line); }
+.search label { margin: 0; font-size: 12px; }
+.search .query { flex: 1 1 230px; }
+.search > label { flex: 1 1 130px; }
+.search input, .search select { margin-top: 8px; }
+.checks { display: flex; flex-wrap: wrap; gap: 10px 24px; flex-basis: 100%; color: var(--color-muted); }
+.checks label { display: flex; gap: 7px; align-items: center; font-size: 11px; }
+.checks input { width: auto; margin: 0; }
+.results > ol { list-style: none; margin: 0; padding: 0; }
+.results > ol > li { border-top: 1px solid var(--color-line); padding: 22px 0; }
+.resultHeading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.resultHeading h4 { font-size: 17px; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+.resultHeading > span { color: var(--color-muted); font-size: 10px; }
+.results blockquote { margin: 14px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.95; }
+.empty { padding: 24px 0; font-size: 13px; color: var(--color-muted); line-height: 1.9; }
+.evidence { background: var(--color-raised); padding: 16px; margin-top: 16px; border-radius: 4px; }
+.evidence p { font-size: 10px; color: var(--color-muted); line-height: 1.9; overflow-wrap: anywhere; }
+.evidence pre { font-family: inherit; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.95; margin: 12px 0; }
+.evidence small { color: var(--color-muted); font-size: 11px; line-height: 1.9; }
+.vector { border-top: 1px solid var(--color-line); padding: 22px 0; }
+.vectorForm { display: flex; flex-wrap: wrap; gap: 14px; }
+.vectorForm > label { flex: 1 1 220px; min-width: 0; margin: 0; }
+.vectorForm input, .vectorForm select { margin-top: 8px; }
+.vectorPreview { margin-top: 20px; padding: 18px; background: var(--color-raised); border-radius: 4px; min-width: 0; }
+.vectorPreview h4 { font-size: 14px; font-weight: 500; margin: 0; }
+.vectorPreview .note { overflow-wrap: anywhere; }
+.vectorPreview summary { cursor: pointer; font-size: 12px; margin: 12px 0; }
+.vectorPreview pre { font-family: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; line-height: 1.9; }
+.vectorRecovery { width: 100%; resize: vertical; margin-top: 10px; font-family: Consolas, monospace; font-size: 11px; line-height: 1.7; }
+@media (max-width: 600px) { .coverage { grid-template-columns: 1fr 1fr; gap: 16px; } .coverage > div:first-child { grid-column: 1 / -1; } .resultHeading { display: block; } .resultHeading > span { display: block; margin-top: 7px; } }

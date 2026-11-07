@@ -1,9 +1,16 @@
-import { useId, useState, type FormEvent } from 'react'
+import { useId, useLayoutEffect, useState, type FormEvent } from 'react'
 import type { BookSummary, ChapterSnapshot, ExportBookInput, UpdateBookInput, UpdateChapterInput, VolumeSummary } from '../../contracts/api'
 import { Dialog } from './Dialog'
 import styles from '../App.module.css'
 
 interface Common { busy: boolean; error?: string | null; onClose: () => void }
+interface DetailsRecoveryProps { message: string; checking: boolean; onCheck: () => void; onRecover: () => void }
+interface DetailsCommon extends Common {
+  onDirtyChange: (dirty: boolean) => void
+  confirmClose: boolean
+  onKeepEditing: () => void
+  pendingRecovery?: DetailsRecoveryProps
+}
 export type BookFields = Pick<UpdateBookInput, 'title' | 'genre' | 'synopsis' | 'archived'>
 export type ChapterFields = Omit<UpdateChapterInput, 'bookId' | 'chapterId' | 'expectedBookRevision'>
 export type ExportFields = Pick<ExportBookInput, 'format' | 'scope' | 'includeChapterTitles'>
@@ -18,23 +25,31 @@ export function NameDialog({ title, initialValue = '', submitLabel, onSubmit, ..
   </form></Dialog>
 }
 
-export function BookDetailsDialog({ book, onSubmit, ...common }: Common & { book: BookSummary; onSubmit: (fields: BookFields) => void }) {
-  const [fields, setFields] = useState<BookFields>({ title: book.title, genre: book.genre, synopsis: book.synopsis, archived: Boolean(book.archivedAt) })
+export function BookDetailsDialog({ book, onSubmit, onDirtyChange, confirmClose, onKeepEditing, pendingRecovery, ...common }: DetailsCommon & { book: BookSummary; onSubmit: (fields: BookFields) => void }) {
+  const [initialFields] = useState<BookFields>({ title: book.title, genre: book.genre, synopsis: book.synopsis, archived: Boolean(book.archivedAt) })
+  const [fields, setFields] = useState(initialFields)
+  const dirty = fields.title !== initialFields.title || fields.genre !== initialFields.genre || fields.synopsis !== initialFields.synopsis || fields.archived !== initialFields.archived
+  useDetailsDirty(dirty, onDirtyChange)
   function submit(event: FormEvent) { event.preventDefault(); if (!common.busy) onSubmit({ ...fields, title: fields.title.trim() }) }
   return <Dialog title="作品资料" {...common}><form onSubmit={submit} className={styles.fieldStack}>
+    {pendingRecovery && <DetailsRecovery {...pendingRecovery} content={JSON.stringify({ bookId: book.id, baseBookRevision: book.revision, fields }, null, 2)} />}
     <label>作品名<input autoFocus value={fields.title} onChange={(event) => setFields({ ...fields, title: event.target.value })} maxLength={120} required disabled={common.busy} /></label>
     <label>类型<input value={fields.genre} onChange={(event) => setFields({ ...fields, genre: event.target.value })} maxLength={120} placeholder="例如：悬疑 / 奇幻" disabled={common.busy} /></label>
     <label>简介<textarea value={fields.synopsis} onChange={(event) => setFields({ ...fields, synopsis: event.target.value })} maxLength={5000} rows={5} disabled={common.busy} /></label>
     <label className={styles.checkLabel}><input type="checkbox" checked={fields.archived} onChange={(event) => setFields({ ...fields, archived: event.target.checked })} disabled={common.busy} />归档作品</label>
     <p className={styles.helpText}>归档作品可阅读、查看版本和导出。继续创作前请先解除归档。</p>
-    <Actions {...common} label="保存资料" disabled={!fields.title.trim()} />
+    <DetailsActions {...common} onDirtyChange={onDirtyChange} confirmClose={confirmClose} onKeepEditing={onKeepEditing} label="保存资料" disabled={!fields.title.trim()} />
   </form></Dialog>
 }
 
-export function ChapterDetailsDialog({ chapter, volumes, onSubmit, ...common }: Common & { chapter: ChapterSnapshot; volumes: VolumeSummary[]; onSubmit: (fields: ChapterFields) => void }) {
-  const [fields, setFields] = useState<ChapterFields>({ title: chapter.title, volumeId: chapter.volumeId, goal: chapter.goal, viewpoint: chapter.viewpoint, targetCharacters: chapter.targetCharacters, notes: chapter.notes, status: chapter.status === 'finalized' ? 'writing' : chapter.status })
+export function ChapterDetailsDialog({ chapter, volumes, onSubmit, onDirtyChange, confirmClose, onKeepEditing, pendingRecovery, ...common }: DetailsCommon & { chapter: ChapterSnapshot; volumes: VolumeSummary[]; onSubmit: (fields: ChapterFields) => void }) {
+  const [initialFields] = useState<ChapterFields>({ title: chapter.title, volumeId: chapter.volumeId, goal: chapter.goal, viewpoint: chapter.viewpoint, targetCharacters: chapter.targetCharacters, notes: chapter.notes, status: chapter.status === 'finalized' ? 'writing' : chapter.status })
+  const [fields, setFields] = useState(initialFields)
+  const dirty = fields.title !== initialFields.title || fields.volumeId !== initialFields.volumeId || fields.goal !== initialFields.goal || fields.viewpoint !== initialFields.viewpoint || fields.targetCharacters !== initialFields.targetCharacters || fields.notes !== initialFields.notes || fields.status !== initialFields.status
+  useDetailsDirty(dirty, onDirtyChange)
   function submit(event: FormEvent) { event.preventDefault(); if (!common.busy) onSubmit({ ...fields, title: fields.title.trim() }) }
   return <Dialog title="本章资料" {...common}><form className={styles.fieldStack} onSubmit={submit}>
+    {pendingRecovery && <DetailsRecovery {...pendingRecovery} content={JSON.stringify({ bookId: chapter.bookId, chapterId: chapter.id, baseBookRevision: chapter.bookRevision, fields }, null, 2)} />}
     <label>章节名<input autoFocus value={fields.title} onChange={(event) => setFields({ ...fields, title: event.target.value })} maxLength={120} required disabled={common.busy} /></label>
     <div className={styles.twoColumns}><label>所属卷<select value={fields.volumeId ?? ''} onChange={(event) => setFields({ ...fields, volumeId: event.target.value || null })} disabled={common.busy}><option value="">未分卷</option>{volumes.map((volume) => <option value={volume.id} key={volume.id}>{volume.title}</option>)}</select></label>
       <label>工作状态<select value={fields.status} onChange={(event) => setFields({ ...fields, status: event.target.value as ChapterFields['status'] })} disabled={common.busy}><option value="planned">待写</option><option value="writing">草稿</option><option value="review">待审</option></select></label></div>
@@ -43,7 +58,7 @@ export function ChapterDetailsDialog({ chapter, volumes, onSubmit, ...common }: 
     <div className={styles.twoColumns}><label>叙事视角<input value={fields.viewpoint} onChange={(event) => setFields({ ...fields, viewpoint: event.target.value })} maxLength={120} disabled={common.busy} /></label>
       <label>目标字数<input type="number" min={0} max={1000000} step={1} value={fields.targetCharacters ?? ''} onChange={(event) => setFields({ ...fields, targetCharacters: event.target.value === '' ? null : Number(event.target.value) })} disabled={common.busy} /></label></div>
     <label>备注<textarea value={fields.notes} onChange={(event) => setFields({ ...fields, notes: event.target.value })} rows={4} maxLength={5000} disabled={common.busy} /></label>
-    <Actions {...common} label={chapter.status === 'finalized' ? '保存并重开工作稿' : '保存资料'} disabled={!fields.title.trim()} />
+    <DetailsActions {...common} onDirtyChange={onDirtyChange} confirmClose={confirmClose} onKeepEditing={onKeepEditing} label={chapter.status === 'finalized' ? '保存并重开工作稿' : '保存资料'} disabled={!fields.title.trim()} />
   </form></Dialog>
 }
 
@@ -61,6 +76,34 @@ export function ExportDialog({ title, finalizedCount, onSubmit, ...common }: Com
 
 export function ConfirmDialog({ title, children, label, onSubmit, ...common }: Common & { title: string; children: string; label: string; onSubmit: () => void }) {
   return <Dialog title={title} {...common}><p className={styles.helpText}>{children}</p><div className={styles.formActions}><button className={styles.button} type="button" onClick={common.onClose} disabled={common.busy}>取消</button><button className={styles.primaryButton} type="button" onClick={onSubmit} disabled={common.busy}>{common.busy ? '处理中…' : label}</button></div></Dialog>
+}
+
+function useDetailsDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
+  // 首次展示及字段改回原值都以表单基线为准；关窗检查在界面更新时同步取得状态。
+  useLayoutEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
+}
+
+function DetailsRecovery({ message, checking, onCheck, onRecover, content }: DetailsRecoveryProps & { content: string }) {
+  const [retainedContent, setRetainedContent] = useState<string | null>(null)
+  const retained = retainedContent === content
+  return <section role="alert" className={styles.fieldStack}><p className={styles.helpText}>{message}</p>
+    <label>待确认的资料修改<textarea readOnly rows={6} value={content} onFocus={(event) => event.target.select()} /></label>
+    <label className={styles.checkLabel}><input type="checkbox" checked={retained} disabled={checking} onChange={(event) => setRetainedContent(event.target.checked ? content : null)} />我已复制留存以上资料，允许进入恢复</label>
+    <div className={styles.formActions}><button type="button" className={styles.button} disabled={checking} onClick={onCheck}>{checking ? '正在核对…' : '查询原保存回执'}</button>
+      <button type="button" className={styles.button} disabled={checking || !retained} onClick={onRecover}>进入草稿与恢复</button></div>
+  </section>
+}
+
+function DetailsActions({ confirmClose, onKeepEditing, onDirtyChange, ...common }: DetailsCommon & { label: string; disabled?: boolean }) {
+  if (!confirmClose) return <Actions {...common} />
+  return <section role="alert"><p className={styles.helpText}>资料有未保存修改。请选择保存后关闭、放弃修改，或取消关闭继续编辑。关闭窗口请在处理后再次操作。</p><div className={styles.formActions}>
+    <button type="button" className={styles.button} disabled={common.busy} onClick={onKeepEditing}>取消关闭</button>
+    <button type="button" className={styles.button} disabled={common.busy} onClick={() => { onDirtyChange(false); common.onClose() }}>放弃修改并关闭</button>
+    <button type="submit" className={styles.primaryButton} disabled={common.busy || common.disabled}>{common.busy ? '处理中…' : '保存并关闭'}</button>
+  </div></section>
 }
 
 function Actions({ busy, onClose, label, disabled }: Common & { label: string; disabled?: boolean }) {

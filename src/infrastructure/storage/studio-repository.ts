@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, opendirSync, realpathSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, realpathSync, writeFileSync } from 'node:fs'
 import { join, normalize, resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import {
@@ -11,11 +11,21 @@ import {
   type ReorderVolumesInput, type ReorderChaptersInput, type UpdateChapterInput, type FinalizeChapterInput,
   type ListRevisionsInput, type RevisionInput, type RestoreRevisionInput, type RevisionPage,
   type RevisionSnapshot, type RevisionSummary, type VolumeSummary, type OrphanScan,
-  type TextEncoding, type ExportBookInput, type ChapterStatus,
+  type TextEncoding, type ExportBookInput, type ChapterStatus, type DraftImportData,
 } from '../../contracts/api'
 import { countCharacters, documentToText, emptyDocument, parseManuscript, type ManuscriptDocument } from '../../contracts/manuscript'
+import { MAX_DRAFT_FILE_BYTES, parseDraftFile } from '../../contracts/draft'
+import { MAX_KNOWLEDGE_SOURCES, parseKnowledgeSource, parseKnowledgeStatusInput, parseUpgradeKnowledgeInput, type KnowledgeSourceInput, type KnowledgeStatus, type SourceValidity, type UpgradeKnowledgeInput } from '../../contracts/knowledge'
+import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
+import { STORY_SCHEMA } from '../story/schema'
+import { MEMORY_SCHEMA } from '../memory/schema'
+import { AI_SCHEMA, AI_V6_TO_V7_SCHEMA } from '../ai/schema'
+import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
+import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
+import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
+import { NOTES_SCHEMA } from '../notes/schema'
 import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
-import { BOOK_APPLICATION_ID, BOOK_SCHEMA, SCHEMA_VERSION, STUDIO_APPLICATION_ID, STUDIO_SCHEMA } from './schema'
+import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION, STUDIO_APPLICATION_ID, STUDIO_SCHEMA, STUDIO_SCHEMA_VERSION } from './schema'
 
 interface BookRow {
   id: string; title: string; genre: string; synopsis: string; archived_at: string | null
@@ -31,6 +41,7 @@ interface RevisionRow extends ChapterRow {
   document_json: string; plain_text: string; content_hash: string
 }
 interface OpenBook { id: string; db: Database.Database }
+interface KnowledgeSourceState { validity: SourceValidity; referenceState?: 'current' | 'historical' }
 interface HistoryRow {
   id: string; sequence: number; parent_revision_id: string | null; restored_from_revision_id: string | null
   reason: RevisionSummary['reason']; character_count: number; created_at: string
@@ -47,6 +58,48 @@ const MAX_VOLUMES = 1_000
 const BOOK_COLUMNS = 'id, title, genre, synopsis, archived_at, revision, created_at, updated_at'
 const CHAPTER_COLUMNS = `c.id, c.title, c.position, c.current_revision_id, c.updated_at, r.character_count,
   c.volume_id, c.goal, c.viewpoint, c.target_characters, c.notes, c.status, c.finalized_revision_id, c.finalized_at`
+
+export const BOOK_RECOVERY_PENDING = 'recovery.pending.json'
+export const BOOK_RECOVERY_COMPLETE = 'recovery.complete.json'
+
+function assertRecoveryComplete(directory: string, bookId: string, required = false): void {
+  const pending = join(directory, BOOK_RECOVERY_PENDING)
+  const complete = join(directory, BOOK_RECOVERY_COMPLETE)
+  if (!required && !lstatSync(pending, { throwIfNoEntry: false }) && !lstatSync(complete, { throwIfNoEntry: false })) return
+  const read = (path: string): Buffer => {
+    assertLocalPath(path, false)
+    const before = lstatSync(path)
+    if (before.nlink !== 1 || before.size === 0 || before.size > 1024) throw storageFailure()
+    const fd = openSync(path, 'r')
+    try {
+      const opened = fstatSync(fd)
+      if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size || opened.mtimeMs !== before.mtimeMs) throw storageFailure()
+      const bytes = Buffer.alloc(before.size)
+      let offset = 0
+      while (offset < bytes.length) {
+        const count = readSync(fd, bytes, offset, bytes.length - offset, offset)
+        if (count === 0) throw storageFailure()
+        offset += count
+      }
+      const after = fstatSync(fd)
+      const current = lstatSync(path)
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs ||
+          current.dev !== before.dev || current.ino !== before.ino || current.nlink !== 1 || current.isSymbolicLink()) throw storageFailure()
+      return bytes
+    } finally { closeSync(fd) }
+  }
+  try {
+    const bytes = read(pending)
+    if (!bytes.equals(read(complete))) throw storageFailure()
+    const marker: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+    if (!isRecord(marker) || Object.keys(marker).sort().join(',') !== 'bookId,format,manifestHash,packageId' ||
+        marker.format !== 'storyweave-recovery-commit' || marker.bookId !== bookId ||
+        requiredId(marker.packageId) !== String(marker.packageId).toLowerCase() ||
+        typeof marker.manifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(marker.manifestHash)) throw storageFailure()
+  } catch {
+    throw new DomainError({ code: 'STORAGE_ERROR', message: `这部作品的恢复尚未完成或完成标记无效，已停止打开和登记。请保留目录：${directory}` })
+  }
+}
 
 function storageFailure(): DomainError {
   return new DomainError({ code: 'STORAGE_ERROR', message: '本地资料读写失败，当前草稿请继续保留。请检查目录、磁盘空间及文件是否可用。' })
@@ -87,11 +140,11 @@ function localCanonicalPath(path: string): string {
   return canonical
 }
 
-// 子目录和库文件都应属于所选书库；拒绝将内部路径重定向到其他位置的链接。
+// 子目录和库文件都应属于所选书库；共享硬链接也会使写入影响其他目录的资产。
 function assertLocalPath(path: string, directory: boolean): string {
   const canonical = localCanonicalPath(path)
   const stat = lstatSync(path)
-  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile()) || !samePath(path, canonical)) {
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1) || !samePath(path, canonical)) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '书库内发现链接或不符合预期的文件类型，已停止访问。' })
   }
   return canonical
@@ -117,7 +170,8 @@ function verifyDatabase(db: Database.Database, applicationId: number): void {
   if (db.pragma('application_id', { simple: true }) === applicationId && version === 1) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '此书库使用旧版 v1 格式，需要专门的迁移工具。当前版本未修改旧库，也不支持直接恢复旧格式。' })
   }
-  if (db.pragma('application_id', { simple: true }) !== applicationId || version !== SCHEMA_VERSION) {
+  const supported = applicationId === BOOK_APPLICATION_ID ? version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === BOOK_SCHEMA_VERSION : version === STUDIO_SCHEMA_VERSION
+  if (db.pragma('application_id', { simple: true }) !== applicationId || !supported) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '数据库格式或版本不受当前程序支持，未修改该数据库。' })
   }
 }
@@ -169,6 +223,7 @@ export class StudioRepository {
   private rootPath: string | null = null
   private studio: Database.Database | null = null
   private activeBook: OpenBook | null = null
+  private recoveryGeneration = 0
 
   getWorkspace(): WorkspaceSnapshot {
     return perform(() => {
@@ -203,7 +258,7 @@ export class StudioRepository {
           db.transaction(() => {
             db.exec(STUDIO_SCHEMA)
             db.pragma(`application_id = ${STUDIO_APPLICATION_ID}`)
-            db.pragma(`user_version = ${SCHEMA_VERSION}`)
+            db.pragma(`user_version = ${STUDIO_SCHEMA_VERSION}`)
           })()
         }
         const meta = next.prepare('SELECT format FROM studio_meta WHERE singleton = 1').get() as { format: string } | undefined
@@ -247,7 +302,7 @@ export class StudioRepository {
         db.transaction(() => {
           db.exec(BOOK_SCHEMA)
           db.pragma(`application_id = ${BOOK_APPLICATION_ID}`)
-          db.pragma(`user_version = ${SCHEMA_VERSION}`)
+          db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
           db.prepare('INSERT INTO book_meta (singleton, id, title, created_at, updated_at) VALUES (1, ?, ?, ?, ?)').run(id, title, now, now)
         })()
         // 每书主库先成为完整资产，再登记工作室目录；登记失败时保留已创建文件。
@@ -344,10 +399,13 @@ export class StudioRepository {
         const updated = db.prepare("UPDATE chapters SET current_revision_id = ?, updated_at = ?, status = 'writing' WHERE id = ? AND current_revision_id = ?")
           .run(revisionId, now, chapterId, expectedRevisionId)
         if (updated.changes !== 1) throw new DomainError({ code: 'REVISION_CONFLICT', message: '章节版本已变化，本次保存没有覆盖新稿。' })
+        // 在事务内核对真正落库的表示，失败时同时回滚历史和当前指针。
+        verifyDocument(this.readChapterRow(db, chapterId))
         this.recordChapterChange(db, chapterId, revisionId, now)
         return true
       }).immediate()
-      if (changed) this.updateCatalog(this.readBookMetadata(db, bookId))
+      // AI 采用借用同书外层事务，目录缓存只能在外层提交或回滚后更新。
+      if (changed && !db.inTransaction) this.updateCatalog(this.readBookMetadata(db, bookId))
       return { chapter: this.readChapter({ bookId, chapterId }), changed }
     })
   }
@@ -622,7 +680,7 @@ export class StudioRepository {
         db.transaction(() => {
           db.exec(BOOK_SCHEMA)
           db.pragma(`application_id = ${BOOK_APPLICATION_ID}`)
-          db.pragma(`user_version = ${SCHEMA_VERSION}`)
+          db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
           db.prepare('INSERT INTO book_meta (singleton, id, title, created_at, updated_at) VALUES (1, ?, ?, ?, ?)').run(bookId, title, now, now)
           db.prepare(`INSERT INTO import_sources (id, source_name, encoding, relative_path, sha256, byte_length, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
             .run(sourceId, sourceName, encoding, relativeSource, createHash('sha256').update(sourceBytes).digest('hex'), sourceBytes.byteLength, now)
@@ -638,12 +696,68 @@ export class StudioRepository {
             const plainText = documentToText(chapter.document)
             insertChapter.run(chapterId, chapter.title, position, revisionId, now, now)
             insertRevision.run(revisionId, chapterId, json, plainText, this.hash(json), countCharacters(plainText), now, position + 1)
+            verifyDocument(this.readChapterRow(db, chapterId))
             this.recordChapterChange(db, chapterId, revisionId, now)
           }
         }).immediate()
         this.insertCatalog(studio, this.readBookMetadata(db, bookId))
       } finally { db.close() }
       return this.getBook({ bookId })
+    })
+  }
+
+  importDraft(input: DraftImportData): ChapterSnapshot {
+    return perform(() => {
+      const data = payload(input)
+      const bookId = requiredId(data.bookId).toLowerCase()
+      const expected = requiredInteger(data.expectedBookRevision, '作品版本')
+      const title = requiredText(data.title, '新章节名', 120)
+      const sourceName = requiredText(data.sourceName, '来源文件名', 255)
+      if (!(data.sourceBytes instanceof Uint8Array) || data.sourceBytes.byteLength > MAX_DRAFT_FILE_BYTES) throw new DomainError({ code: 'INVALID_INPUT', message: '单章草稿文件无效或超过 16 MiB。' })
+      const sourceBytes = data.sourceBytes
+      const draft = parseDraftFile(sourceBytes)
+      const document = parseManuscript({
+        type: 'doc',
+        content: draft.document.content.map((block) => ({ ...block, attrs: { ...block.attrs, id: randomUUID() } })),
+      })
+      const documentJson = JSON.stringify(document)
+      const plainText = documentToText(document)
+      const characterCount = countCharacters(plainText)
+      const db = this.openBook(bookId)
+      this.requireWritable(db, bookId, expected)
+      const count = (db.prepare('SELECT COUNT(*) AS count FROM chapters').get() as { count: number }).count
+      if (count >= MAX_CHAPTERS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前作品已达到 ${MAX_CHAPTERS} 章的上限。` })
+
+      const sourceId = randomUUID()
+      const chapterId = randomUUID()
+      const revisionId = randomUUID()
+      const now = new Date().toISOString()
+      const bookDirectory = join(this.requireRoot(), 'books', bookId)
+      assertLocalPath(join(this.requireRoot(), 'books'), true)
+      assertLocalPath(bookDirectory, true)
+      const sourceDirectory = join(bookDirectory, 'sources')
+      ensureDirectory(sourceDirectory)
+      // 单章草稿恢复为独立新章，原字节与旧身份只用于追溯，不覆盖来源作品。
+      writeFileSync(join(sourceDirectory, `${sourceId}.original`), sourceBytes, { flag: 'wx', flush: true })
+      const notes = `从单章草稿恢复。原作品 ${draft.bookId}；原章节 ${draft.chapterId}；基准版本 ${draft.baseRevisionId}；草稿时间 ${draft.createdAt}；来源 ${sourceId}。`
+      db.transaction(() => {
+        this.requireWritable(db, bookId, expected)
+        const current = db.prepare('SELECT COUNT(*) AS count, COALESCE(MAX(position), -1) AS maximum FROM chapters').get() as { count: number; maximum: number }
+        if (current.count >= MAX_CHAPTERS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前作品已达到 ${MAX_CHAPTERS} 章的上限。` })
+        db.prepare(`INSERT INTO import_sources (id, source_name, encoding, relative_path, sha256, byte_length, created_at)
+          VALUES (?, ?, 'utf-8', ?, ?, ?, ?)`).run(sourceId, sourceName, `sources/${sourceId}.original`, createHash('sha256').update(sourceBytes).digest('hex'), sourceBytes.byteLength, now)
+        db.prepare(`INSERT INTO chapters (id, title, position, volume_id, current_revision_id, notes, status, created_at, updated_at)
+          VALUES (?, ?, ?, NULL, ?, ?, 'writing', ?, ?)`).run(chapterId, title, current.maximum + 1, revisionId, notes, now, now)
+        db.prepare(`INSERT INTO chapter_revisions
+          (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason)
+          VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'imported')`)
+          .run(revisionId, chapterId, documentJson, plainText, this.hash(documentJson), characterCount, now, this.nextSequence(db))
+        verifyDocument(this.readChapterRow(db, chapterId))
+        this.normalizeChapterPositions(db, now)
+        this.recordChapterChange(db, chapterId, revisionId, now)
+      }).immediate()
+      this.updateCatalog(this.readBookMetadata(db, bookId))
+      return this.readChapter({ bookId, chapterId })
     })
   }
 
@@ -681,7 +795,276 @@ export class StudioRepository {
     })
   }
 
+  getKnowledgeStatus(input: BookInput): KnowledgeStatus {
+    return perform(() => {
+      const { bookId } = parseKnowledgeStatusInput(input)
+      const db = this.openBook(bookId)
+      const schemaVersion = db.pragma('user_version', { simple: true })
+      const row = db.prepare('SELECT knowledge_revision FROM book_meta WHERE singleton = 1').get() as { knowledge_revision: number } | undefined
+      if ((schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4 && schemaVersion !== 5 && schemaVersion !== 6 && schemaVersion !== 7 && schemaVersion !== 8 && schemaVersion !== 9 && schemaVersion !== 10 && schemaVersion !== 11 && schemaVersion !== BOOK_SCHEMA_VERSION) || !row ||
+          !Number.isSafeInteger(row.knowledge_revision) || row.knowledge_revision < 0) throw storageFailure()
+      if (schemaVersion >= 3) {
+        // 状态查询只核对既有结构，不以读取为由补建表或修改旧作品。
+        db.prepare(`SELECT i.id, s.revision_id, r.fields_json, o.knowledge_revision_id
+          FROM knowledge_items i LEFT JOIN knowledge_sources s ON s.item_id = i.id
+          LEFT JOIN knowledge_item_revisions r ON r.item_id = i.id
+          LEFT JOIN knowledge_outbox o ON o.item_id = i.id LIMIT 0`).all()
+      }
+      if (schemaVersion >= 4) {
+        db.prepare(`SELECT r.id, s.revision_id, h.fields_json, o.story_revision_id,
+          e.entity_id, a.event_id FROM story_records r
+          LEFT JOIN story_sources s ON s.record_id = r.id
+          LEFT JOIN story_record_revisions h ON h.record_id = r.id
+          LEFT JOIN story_outbox o ON o.record_id = r.id
+          LEFT JOIN story_entity_refs e ON e.record_id = r.id
+          LEFT JOIN story_event_refs a ON a.record_id = r.id LIMIT 0`).all()
+      }
+      const book = this.readBookMetadata(db, bookId)
+      return { bookId, bookRevision: book.revision, updatedAt: book.updatedAt,
+        schemaVersion, knowledgeRevision: row.knowledge_revision, requiresUpgrade: schemaVersion === 2 }
+    })
+  }
+
+  async upgradeKnowledge(input: UpgradeKnowledgeInput): Promise<KnowledgeStatus> {
+    let backupPath: string | undefined
+    try {
+      const { bookId, expectedBookRevision } = parseUpgradeKnowledgeInput(input)
+      const status = this.getKnowledgeStatus({ bookId })
+      if (status.schemaVersion === BOOK_SCHEMA_VERSION) return status
+      const previousVersion = status.schemaVersion
+      const db = this.openBook(bookId)
+      this.requireWritable(db, bookId, expectedBookRevision)
+      if (expectedBookRevision >= Number.MAX_SAFE_INTEGER) throw storageFailure()
+      const directory = join(this.requireRoot(), 'books', bookId)
+      assertLocalPath(join(this.requireRoot(), 'books'), true)
+      assertLocalPath(directory, true)
+      const backups = join(directory, 'backups')
+      ensureDirectory(backups)
+      const backupDirectory = join(backups, `knowledge-v${previousVersion}-${randomUUID()}`)
+      mkdirSync(backupDirectory)
+      assertLocalPath(backupDirectory, true)
+      backupPath = join(backupDirectory, 'book.sqlite')
+
+      // better-sqlite3 会清理失败的新目标；先独占创建本次空文件，让失败备份也留存。
+      // 只接受本次创建的文件，不把任意旧备份交给会覆盖目标的 backup API。
+      const created = openSync(backupPath, 'wx')
+      let identity: ReturnType<typeof fstatSync>
+      try { identity = fstatSync(created); fsyncSync(created) } finally { closeSync(created) }
+      const checkBackupIdentity = () => {
+        assertLocalPath(backups, true)
+        assertLocalPath(backupDirectory, true)
+        assertLocalPath(backupPath!, false)
+        const current = lstatSync(backupPath!)
+        if (current.dev !== identity.dev || current.ino !== identity.ino) throw storageFailure()
+      }
+      checkBackupIdentity()
+      const copied = await db.backup(backupPath)
+      if (copied.remainingPages !== 0 || copied.totalPages <= 0) throw storageFailure()
+      checkBackupIdentity()
+      const probe = new Database(backupPath, { readonly: true, fileMustExist: true, timeout: 2000 })
+      try {
+        configure(probe)
+        verifyDatabase(probe, BOOK_APPLICATION_ID)
+        if (probe.pragma('user_version', { simple: true }) !== previousVersion) throw storageFailure()
+        this.requireBookRevision(probe, bookId, expectedBookRevision)
+        const check = probe.pragma('quick_check') as { quick_check: string }[]
+        if (check.length !== 1 || check[0]?.quick_check !== 'ok' || probe.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
+      } finally { probe.close() }
+      checkBackupIdentity()
+      const durable = openSync(backupPath, 'r+')
+      try {
+        const current = fstatSync(durable)
+        if (current.dev !== identity.dev || current.ino !== identity.ino) throw storageFailure()
+        fsyncSync(durable)
+      } finally { closeSync(durable) }
+
+      // 服务串行队列在 await 期间保留当前连接；事务内再次核对版本，避免升级旧快照。
+      const upgraded = db.transaction((): KnowledgeStatus => {
+        this.requireWritable(db, bookId, expectedBookRevision)
+        if (db.pragma('user_version', { simple: true }) !== previousVersion) throw storageFailure()
+        if (previousVersion === 2) db.exec(KNOWLEDGE_SCHEMA)
+        if (previousVersion < 4) db.exec(STORY_SCHEMA)
+        if (previousVersion < 5) db.exec(MEMORY_SCHEMA)
+        // v6 已有固定上下文与采用历史；只在本次备份后的事务内按原值复制并替换结构。
+        if (previousVersion === 6) db.exec(AI_V6_TO_V7_SCHEMA)
+        else if (previousVersion < 6) db.exec(AI_SCHEMA)
+        if (previousVersion < 8) db.exec(AI_MEMORY_TASK_SCHEMA)
+        if (previousVersion < 9) db.exec(AI_SUMMARY_SCHEMA)
+        if (previousVersion < 10) db.exec(MEMORY_VECTOR_SCHEMA)
+        if (previousVersion < 11) db.exec(AI_MEMORY_MAINTENANCE_SCHEMA)
+        if (previousVersion < 12) db.exec(NOTES_SCHEMA)
+        if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
+        db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
+        this.recordMutation(db, 'book.metadata', new Date().toISOString())
+        const book = this.readBookMetadata(db, bookId)
+        return { ...status, bookRevision: book.revision, updatedAt: book.updatedAt,
+          schemaVersion: BOOK_SCHEMA_VERSION, requiresUpgrade: false, backupPath }
+      }).immediate()
+      this.refreshKnowledgeCatalog(bookId)
+      return upgraded
+    } catch (error) {
+      if (backupPath) throw new DomainError({ code: 'STORAGE_ERROR', message: `知识库升级未完成，请保留当前作品与本次备份文件：${backupPath}。文件可能尚未完成复制，勿直接替换原库。` })
+      if (error instanceof DomainError) throw error
+      throw storageFailure()
+    }
+  }
+
+  getKnowledgeDatabase(bookId: string): { db: Database.Database; book: BookSummary } {
+    return perform(() => {
+      const id = requiredId(bookId).toLowerCase()
+      const db = this.openBook(id)
+      const version = db.pragma('user_version', { simple: true })
+      if (version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== BOOK_SCHEMA_VERSION) {
+        throw new DomainError({ code: 'FORBIDDEN', message: '请先在知识库页面备份并升级这部作品，再使用知识条目。' })
+      }
+      return { db, book: this.readBookMetadata(db, id) }
+    })
+  }
+
+  getStoryDatabase(bookId: string): { db: Database.Database; book: BookSummary } {
+    const context = this.getKnowledgeDatabase(bookId)
+    if ((context.db.pragma('user_version', { simple: true }) as number) < 4) {
+      throw new DomainError({ code: 'FORBIDDEN', message: '请先在故事记录面板备份并升级作品，再使用关系、时间线、伏笔和人物认知。' })
+    }
+    return context
+  }
+
+  getNotesDatabase(bookId: string): { db: Database.Database; book: BookSummary } {
+    return perform(() => {
+      const id = requiredId(bookId).toLowerCase()
+      const db = this.openBook(id)
+      if ((db.pragma('user_version', { simple: true }) as number) < 12) {
+        throw new DomainError({ code: 'FORBIDDEN', message: '请先在素材与笔记面板备份并升级这部作品，再使用独立笔记。' })
+      }
+      return { db, book: this.readBookMetadata(db, id) }
+    })
+  }
+
+  getMemoryDatabase(bookId: string): Database.Database {
+    return perform(() => {
+      const id = requiredId(bookId).toLowerCase()
+      const db = this.openBook(id)
+      this.readBookMetadata(db, id)
+      // 旧书可只读整理状态；领域仓储自行检查最低版本，读取不会触发隐式迁移。
+      return db
+    })
+  }
+
+  readKnowledgeSource(input: Extract<KnowledgeSourceInput, { sourceType: 'chapter_text' }>): KnowledgeSourceState {
+    const state = this.readKnowledgeSources([input])[0]
+    if (!state) throw storageFailure()
+    return state
+  }
+
+  readKnowledgeSources(inputs: readonly KnowledgeSourceInput[]): KnowledgeSourceState[] {
+    return perform(() => {
+      if (inputs.length > MAX_KNOWLEDGE_SOURCES) throw new DomainError({ code: 'INVALID_INPUT', message: '待核对的来源数量超过上限。' })
+      const first = inputs[0]
+      if (!first) return []
+      const bookId = requiredId(first.bookId).toLowerCase()
+      const states: KnowledgeSourceState[] = []
+      const groups = new Map<string, { source: Extract<KnowledgeSourceInput, { sourceType: 'chapter_text' }>; index: number }[]>()
+      inputs.forEach((input, index) => {
+        const source = parseKnowledgeSource(input, bookId)
+        states.push({ validity: source.sourceType === 'chapter_text' ? 'missing' : 'valid' })
+        if (source.sourceType !== 'chapter_text') return
+        const key = `${source.chapterId}/${source.revisionId}`
+        const entries = groups.get(key) ?? []
+        entries.push({ source, index })
+        groups.set(key, entries)
+      })
+      if (groups.size === 0) return states
+      const db = this.openBook(bookId)
+      // 同次详情读取按固定修订分组，每章只解析一次；不保留跨请求的正文缓存。
+      for (const entries of groups.values()) {
+        const firstEntry = entries[0]
+        if (!firstEntry) continue
+        const { chapterId, revisionId } = firstEntry.source
+        const chapter = db.prepare('SELECT current_revision_id FROM chapters WHERE id = ?').get(chapterId) as { current_revision_id: string } | undefined
+        const row = db.prepare(`SELECT document_json, plain_text, content_hash, character_count
+          FROM chapter_revisions WHERE chapter_id = ? AND id = ?`).get(chapterId, revisionId) as HistoryRow | undefined
+        if (!chapter || !row) continue
+        const document = verifyDocument(row)
+        const blocks = new Map(document.content.map((block) => [block.attrs.id, block]))
+        const texts = new Map<string, string>()
+        // 历史修订仍是有效证据；是否属于当前稿由章节指针实时判断。
+        const referenceState = chapter.current_revision_id === revisionId ? 'current' : 'historical'
+        for (const { source, index } of entries) {
+          const block = blocks.get(source.blockId)
+          if (!block) continue
+          let text = texts.get(source.blockId)
+          if (text === undefined) {
+            text = documentToText({ type: 'doc', content: [block] })
+            texts.set(source.blockId, text)
+          }
+          states[index] = { validity: text.includes(source.quote) ? 'valid' : 'partial', referenceState }
+        }
+      }
+      return states
+    })
+  }
+
+  refreshKnowledgeCatalog(bookId: string): void {
+    // 事实已提交到每书数据库，目录缓存失败不应将成功写入报告为失败。
+    try { this.updateCatalog(this.readBookMetadata(this.openBook(bookId), bookId)) }
+    catch { console.warn('storyweave.catalog_refresh_failed') }
+  }
+
+  getBookRecoveryWorkspace(bookId?: string): { rootPath: string; booksPath: string; generation: number; conflict: boolean } {
+    return perform(() => {
+      const rootPath = this.requireRoot()
+      const booksPath = join(rootPath, 'books')
+      assertLocalPath(rootPath, true)
+      assertLocalPath(booksPath, true)
+      const id = bookId === undefined ? undefined : requiredId(bookId).toLowerCase()
+      const conflict = id !== undefined && (Boolean(this.requireStudio().prepare('SELECT id FROM books WHERE id = ?').get(id)) ||
+        lstatSync(join(booksPath, id), { throwIfNoEntry: false }) !== undefined)
+      if (id !== undefined && !conflict) this.checkBookCapacity(this.requireStudio())
+      return { rootPath, booksPath, generation: this.recoveryGeneration, conflict }
+    })
+  }
+
+  getBookRecoverySource(bookId: string, expectedBookRevision: number): {
+    db: Database.Database; book: BookSummary; bookPath: string; rootPath: string; generation: number
+  } {
+    return perform(() => {
+      const id = requiredId(bookId).toLowerCase()
+      const expected = requiredInteger(expectedBookRevision, '作品版本')
+      const db = this.openBook(id)
+      const workspace = this.getBookRecoveryWorkspace()
+      return { db, book: this.requireBookRevision(db, id, expected), bookPath: join(workspace.booksPath, id),
+        rootPath: workspace.rootPath, generation: workspace.generation }
+    })
+  }
+
+  registerRecoveredBook(book: BookSummary, expectedRoot: string, generation: number): BookSummary {
+    return perform(() => {
+      const workspace = this.getBookRecoveryWorkspace()
+      if (!samePath(workspace.rootPath, expectedRoot) || workspace.generation !== generation) {
+        throw new DomainError({ code: 'REVISION_CONFLICT', message: '当前书库已经切换，请重新预览恢复包。' })
+      }
+      const bookId = requiredId(book.id).toLowerCase()
+      assertRecoveryComplete(join(workspace.booksPath, bookId), bookId, true)
+      const probe = this.openOrphanReadOnly(bookId)
+      let actual: BookSummary
+      try {
+        actual = this.readBookMetadata(probe, bookId)
+        if (JSON.stringify(actual) !== JSON.stringify(book)) throw storageFailure()
+      } finally { probe.close() }
+      const studio = this.requireStudio()
+      studio.transaction(() => {
+        if (studio.prepare('SELECT id FROM books WHERE id = ?').get(bookId)) {
+          throw new DomainError({ code: 'REVISION_CONFLICT', message: '当前书库已存在相同作品身份，未覆盖任何作品。' })
+        }
+        this.checkBookCapacity(studio)
+        this.insertCatalog(studio, actual)
+      }).immediate()
+      return actual
+    })
+  }
+
   close(): void {
+    this.recoveryGeneration += 1
     if (this.activeBook?.db.open) this.activeBook.db.close()
     this.activeBook = null
     if (this.studio?.open) this.studio.close()
@@ -704,6 +1087,7 @@ export class StudioRepository {
     const studio = this.requireStudio()
     const registered = studio.prepare('SELECT id FROM books WHERE id = ?').get(bookId)
     if (!registered) throw new DomainError({ code: 'NOT_FOUND', message: '当前书库中不存在这部作品。' })
+    assertRecoveryComplete(join(this.requireRoot(), 'books', bookId), bookId)
     if (this.activeBook?.id === bookId) {
       this.readBookMetadata(this.activeBook.db, bookId)
       return this.activeBook.db
@@ -829,6 +1213,7 @@ export class StudioRepository {
     const directory = join(this.requireRoot(), 'books', bookId)
     assertLocalPath(join(this.requireRoot(), 'books'), true)
     assertLocalPath(directory, true)
+    assertRecoveryComplete(directory, bookId)
     const path = join(directory, 'book.sqlite')
     assertLocalPath(path, false)
     assertDatabasePaths(path)

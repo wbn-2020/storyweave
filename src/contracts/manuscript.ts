@@ -88,6 +88,13 @@ export function parseManuscript(value: unknown): ManuscriptDocument {
       fields(node, ['type', 'text', 'marks'])
       textLength += node.text.length
       if (textLength > MAX_CHAPTER_LENGTH) return invalid('单章超过 100 万 UTF-16 字符，请拆分后再保存。')
+      // 孤立代理字符在 UTF-8 入库时会被替换，导致 JSON 原文与纯文本无法一致回读。
+      for (const character of node.text) {
+        const code = character.charCodeAt(0)
+        if (character.length === 1 && code >= 0xd800 && code <= 0xdfff) {
+          return invalid('正文含不完整的 Unicode 字符，未保存本次修改。请保留原稿并修正异常字符。')
+        }
+      }
       if (node.marks !== undefined && !Array.isArray(node.marks)) return invalid('文字格式标记无效。')
       const rawMarks: unknown[] = (node.marks as unknown[] | undefined) ?? []
       if (rawMarks.length > 2) return invalid('文字仅支持加粗与斜体。')

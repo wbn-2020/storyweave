@@ -1,4 +1,18 @@
 import type { ManuscriptDocument } from './manuscript'
+import type { CreateKnowledgeItemInput, KnowledgeItemDetail, KnowledgeItemInput, KnowledgeItemPage, KnowledgeStatus, ListKnowledgeItemsInput, UpdateKnowledgeItemInput, UpgradeKnowledgeInput } from './knowledge'
+import type { CreateStoryRecordInput, ListStoryRecordsInput, StoryRecordDetail, StoryRecordInput, StoryRecordPage, StoryRevision, StoryRevisionInput, UpdateStoryRecordInput } from './story'
+import type { StoryTimelineInput, StoryTimelinePage } from './story-timeline'
+import type { StoryGalaxyInput, StoryGalaxyPage } from './story-galaxy'
+import type { CreateNoteInput, ListNotesInput, NoteDetail, NoteInput, NotePage, PromoteNoteInput, UpdateNoteInput } from './notes'
+import type { MemoryBookInput, MemoryControlInput, MemoryEvidence, MemoryEvidenceInput, MemorySearchInput, MemorySearchPage, MemoryStartInput, MemoryStatus, MemoryTaskInput, MemoryTaskReceipt } from './memory'
+import type { AiAdoptInput, AiAdoptReceipt, AiBookInput, AiCheckpointInput, AiConfigureInput, AiConnection, AiConnectionPage, AiConnectionSaveInput, AiFinishInput, AiListInput, AiMemoryAdoptInput, AiMemoryAdoptReceipt, AiPrepareInput, AiPrepareServiceInput, AiRun, AiRunInput, AiRunPage, AiStartInput, AiVersionInput } from './ai'
+import type { AiMemoryTaskControlInput, AiMemoryTaskDetail, AiMemoryTaskInput, AiMemoryTaskReadInput, AiMemoryTaskReceipt, AiMemoryTaskStartInput, AiMemoryTaskStatus } from './ai-memory-task'
+import type { AiMemoryMaintenanceInput, AiMemoryMaintenancePage } from './ai-memory-maintenance'
+import type { AiSummaryAdoptInput, AiSummaryAdoptReceipt, AiSummaryControlInput, AiSummaryNodeDetail, AiSummaryNodeInput, AiSummaryReadInput, AiSummaryReceipt, AiSummaryStartInput, AiSummaryStatus, AiSummaryTaskDetail, AiSummaryTaskInput } from './ai-summary'
+import type { AiContextSummaryInput, AiContextSummaryPage } from './ai-context-summary'
+import type { AiContextRecommendationInput, AiContextRecommendationPage } from './ai-context-recommendation'
+import type { MemoryVectorFinishInput, MemoryVectorPrepareInput, MemoryVectorPrepareServiceInput, MemoryVectorProfileInput, MemoryVectorProfileServiceInput, MemoryVectorReadInput, MemoryVectorRun, MemoryVectorStartInput, MemoryVectorStatus, MemoryVectorVersionInput } from './memory-vector'
+import type { BookRecoveryExportInput, BookRecoveryExportServiceInput, BookRecoveryExportReceipt, BookRecoveryPrepareInput, BookRecoveryPreview, BookRecoveryRestoreInput, BookRecoveryRestoreReceipt } from './book-recovery'
 
 export const IPC_CHANNEL = 'storyweave:request'
 export const CLOSE_REQUEST_CHANNEL = 'storyweave:close-request'
@@ -39,6 +53,7 @@ export interface BookSummary {
 export interface WorkspaceSnapshot {
   rootPath: string | null
   books: BookSummary[]
+  recoveryScope?: string
 }
 
 export interface ChapterSummary {
@@ -145,6 +160,30 @@ export interface ExportBookInput extends BookMutationInput {
 export interface FileWriteReceipt { filePath: string; bytes: number }
 export interface ExportBookReceipt extends FileWriteReceipt { chapterCount: number; characterCount: number; bookRevision: number }
 export interface SaveDraftCopyInput extends ChapterInput { title: string; baseRevisionId: string; document: ManuscriptDocument }
+export interface DraftImportData extends BookMutationInput { title: string; sourceName: string; sourceBytes: Uint8Array }
+export interface DraftScopeInput { scope: string }
+export interface DraftCheckpointInput extends SaveDraftCopyInput, DraftScopeInput { editorSessionId: string; editSequence: number }
+export interface DraftCheckpointReceipt { checkpointId: string; createdAt: string }
+export interface RecoveryDraftSummary extends ChapterInput {
+  checkpointId: string
+  title: string
+  baseRevisionId: string
+  createdAt: string
+  characterCount: number
+}
+export interface RecoveryDraftList { items: RecoveryDraftSummary[]; skipped: number; warnings: string[] }
+export interface DraftPreviewInput extends BookMutationInput, DraftScopeInput {}
+export interface RecoveryDraftInput extends DraftPreviewInput { checkpointId: string }
+export interface DraftImportPreview extends SaveDraftCopyInput {
+  token: string
+  sourceName: string
+  createdAt: string
+  characterCount: number
+  plainText: string
+  targetBookId: string
+  expectedBookRevision: number
+}
+export interface CommitDraftImportInput extends DraftScopeInput { token: string; title: string }
 
 export interface CommandMap {
   'workspace.get': { input: undefined; output: WorkspaceSnapshot }
@@ -161,6 +200,7 @@ export interface CommandMap {
   'chapter.create': { input: CreateChapterInput; output: ChapterSnapshot }
   'chapter.read': { input: ChapterInput; output: ChapterSnapshot }
   'chapter.save': { input: SaveChapterInput; output: SaveChapterOutput }
+  'draft.import': { input: DraftImportData; output: ChapterSnapshot }
   'revision.list': { input: ListRevisionsInput; output: RevisionPage }
   'revision.read': { input: RevisionInput; output: RevisionSnapshot }
   'revision.restore': { input: RestoreRevisionInput; output: ChapterSnapshot }
@@ -171,6 +211,67 @@ export interface CommandMap {
   'import.chapter': { input: ImportChapterInput; output: ImportChapterPreview }
   'import.commit': { input: CommitImportInput; output: BookSnapshot }
   'book.export': { input: ExportBookInput & { filePath: string }; output: ExportBookReceipt }
+  'recovery.export': { input: BookRecoveryExportServiceInput; output: BookRecoveryExportReceipt }
+  'recovery.prepare': { input: BookRecoveryPrepareInput; output: BookRecoveryPreview }
+  'recovery.restore': { input: BookRecoveryRestoreInput; output: BookRecoveryRestoreReceipt }
+  'knowledge.status': { input: BookInput; output: KnowledgeStatus }
+  'knowledge.upgrade': { input: UpgradeKnowledgeInput; output: KnowledgeStatus }
+  'knowledge.list': { input: ListKnowledgeItemsInput; output: KnowledgeItemPage }
+  'knowledge.get': { input: KnowledgeItemInput; output: KnowledgeItemDetail }
+  'knowledge.create': { input: CreateKnowledgeItemInput; output: KnowledgeItemDetail }
+  'knowledge.update': { input: UpdateKnowledgeItemInput; output: KnowledgeItemDetail }
+  'notes.list': { input: ListNotesInput; output: NotePage }
+  'notes.get': { input: NoteInput; output: NoteDetail }
+  'notes.create': { input: CreateNoteInput; output: NoteDetail }
+  'notes.update': { input: UpdateNoteInput; output: NoteDetail }
+  'notes.promote': { input: PromoteNoteInput; output: NoteDetail }
+  'story.list': { input: ListStoryRecordsInput; output: StoryRecordPage }
+  'story.timeline': { input: StoryTimelineInput; output: StoryTimelinePage }
+  'story.galaxy': { input: StoryGalaxyInput; output: StoryGalaxyPage }
+  'story.get': { input: StoryRecordInput; output: StoryRecordDetail }
+  'story.revision': { input: StoryRevisionInput; output: StoryRevision }
+  'story.create': { input: CreateStoryRecordInput; output: StoryRecordDetail }
+  'story.update': { input: UpdateStoryRecordInput; output: StoryRecordDetail }
+  'memory.status': { input: MemoryBookInput; output: MemoryStatus }
+  'memory.start': { input: MemoryStartInput; output: MemoryTaskReceipt }
+  'memory.step': { input: MemoryTaskInput; output: MemoryTaskReceipt }
+  'memory.control': { input: MemoryControlInput; output: MemoryTaskReceipt }
+  'memory.search': { input: MemorySearchInput; output: MemorySearchPage }
+  'memory.evidence': { input: MemoryEvidenceInput; output: MemoryEvidence }
+  'memory.vector.status': { input: MemoryVectorProfileServiceInput; output: MemoryVectorStatus }
+  'memory.vector.get': { input: MemoryVectorReadInput; output: MemoryVectorRun }
+  'memory.vector.prepare': { input: MemoryVectorPrepareServiceInput; output: MemoryVectorRun }
+  'memory.vector.claim': { input: MemoryVectorStartInput; output: MemoryVectorRun }
+  'memory.vector.finish': { input: MemoryVectorFinishInput; output: MemoryVectorRun }
+  'memory.vector.cancel': { input: MemoryVectorVersionInput; output: MemoryVectorRun }
+  'memory.vector.interrupt': { input: MemoryVectorVersionInput; output: MemoryVectorRun }
+  'ai.connection.list': { input: AiBookInput; output: AiConnectionPage }
+  'ai.connection.save': { input: AiConnectionSaveInput; output: AiConnection }
+  'ai.list': { input: AiListInput; output: AiRunPage }
+  'ai.get': { input: AiRunInput; output: AiRun }
+  'ai.prepare': { input: AiPrepareServiceInput; output: AiRun }
+  'ai.context.summaries': { input: AiContextSummaryInput; output: AiContextSummaryPage }
+  'ai.context.recommend': { input: AiContextRecommendationInput; output: AiContextRecommendationPage }
+  'ai.claim': { input: AiStartInput; output: AiRun }
+  'ai.checkpoint': { input: AiCheckpointInput; output: AiRun }
+  'ai.finish': { input: AiFinishInput; output: AiRun }
+  'ai.reject': { input: AiVersionInput; output: AiRun }
+  'ai.interrupt': { input: AiVersionInput; output: AiRun }
+  'ai.adopt': { input: AiAdoptInput; output: AiAdoptReceipt }
+  'ai.memory.adopt': { input: AiMemoryAdoptInput; output: AiMemoryAdoptReceipt }
+  'ai.task.status': { input: AiBookInput; output: AiMemoryTaskStatus }
+  'ai.task.maintenance': { input: AiMemoryMaintenanceInput; output: AiMemoryMaintenancePage }
+  'ai.task.get': { input: AiMemoryTaskReadInput; output: AiMemoryTaskDetail }
+  'ai.task.start': { input: AiMemoryTaskStartInput; output: AiMemoryTaskReceipt }
+  'ai.task.step': { input: AiMemoryTaskInput; output: AiMemoryTaskReceipt }
+  'ai.task.control': { input: AiMemoryTaskControlInput; output: AiMemoryTaskReceipt }
+  'ai.summary.status': { input: AiBookInput; output: AiSummaryStatus }
+  'ai.summary.get': { input: AiSummaryReadInput; output: AiSummaryTaskDetail }
+  'ai.summary.node': { input: AiSummaryNodeInput; output: AiSummaryNodeDetail }
+  'ai.summary.start': { input: AiSummaryStartInput; output: AiSummaryReceipt }
+  'ai.summary.step': { input: AiSummaryTaskInput; output: AiSummaryReceipt }
+  'ai.summary.control': { input: AiSummaryControlInput; output: AiSummaryReceipt }
+  'ai.summary.adopt': { input: AiSummaryAdoptInput; output: AiSummaryAdoptReceipt }
   'service.close': { input: undefined; output: null }
 }
 
@@ -219,15 +320,83 @@ export interface StudioApi {
   readImportChapter(input: ImportChapterInput): Promise<Result<ImportChapterPreview>>
   commitTextImport(input: CommitImportInput): Promise<Result<BookSnapshot>>
   exportBook(input: ExportBookInput): Promise<Result<ExportBookReceipt | null>>
+  exportBookRecovery(input: BookRecoveryExportInput): Promise<Result<BookRecoveryExportReceipt | null>>
+  selectBookRecovery(): Promise<Result<BookRecoveryPreview | null>>
+  restoreBookRecovery(input: BookRecoveryRestoreInput): Promise<Result<BookRecoveryRestoreReceipt>>
   saveDraftCopy(input: SaveDraftCopyInput): Promise<Result<FileWriteReceipt | null>>
+  checkpointDraft(input: DraftCheckpointInput): Promise<Result<DraftCheckpointReceipt>>
+  listRecoveryDrafts(input: DraftScopeInput): Promise<Result<RecoveryDraftList>>
+  selectDraftImport(input: DraftPreviewInput): Promise<Result<DraftImportPreview | null>>
+  previewRecoveryDraft(input: RecoveryDraftInput): Promise<Result<DraftImportPreview>>
+  commitDraftImport(input: CommitDraftImportInput): Promise<Result<ChapterSnapshot>>
+  getKnowledgeStatus(input: BookInput): Promise<Result<KnowledgeStatus>>
+  upgradeKnowledge(input: UpgradeKnowledgeInput): Promise<Result<KnowledgeStatus>>
+  listKnowledgeItems(input: ListKnowledgeItemsInput): Promise<Result<KnowledgeItemPage>>
+  getKnowledgeItem(input: KnowledgeItemInput): Promise<Result<KnowledgeItemDetail>>
+  createKnowledgeItem(input: CreateKnowledgeItemInput): Promise<Result<KnowledgeItemDetail>>
+  updateKnowledgeItem(input: UpdateKnowledgeItemInput): Promise<Result<KnowledgeItemDetail>>
+  listNotes(input: ListNotesInput): Promise<Result<NotePage>>
+  getNote(input: NoteInput): Promise<Result<NoteDetail>>
+  createNote(input: CreateNoteInput): Promise<Result<NoteDetail>>
+  updateNote(input: UpdateNoteInput): Promise<Result<NoteDetail>>
+  promoteNote(input: PromoteNoteInput): Promise<Result<NoteDetail>>
+  listStoryRecords(input: ListStoryRecordsInput): Promise<Result<StoryRecordPage>>
+  listStoryTimeline(input: StoryTimelineInput): Promise<Result<StoryTimelinePage>>
+  listStoryGalaxy(input: StoryGalaxyInput): Promise<Result<StoryGalaxyPage>>
+  getStoryRecord(input: StoryRecordInput): Promise<Result<StoryRecordDetail>>
+  readStoryRevision(input: StoryRevisionInput): Promise<Result<StoryRevision>>
+  createStoryRecord(input: CreateStoryRecordInput): Promise<Result<StoryRecordDetail>>
+  updateStoryRecord(input: UpdateStoryRecordInput): Promise<Result<StoryRecordDetail>>
+  getMemoryStatus(input: MemoryBookInput): Promise<Result<MemoryStatus>>
+  startMemoryTask(input: MemoryStartInput): Promise<Result<MemoryTaskReceipt>>
+  stepMemoryTask(input: MemoryTaskInput): Promise<Result<MemoryTaskReceipt>>
+  controlMemoryTask(input: MemoryControlInput): Promise<Result<MemoryTaskReceipt>>
+  searchMemory(input: MemorySearchInput): Promise<Result<MemorySearchPage>>
+  readMemoryEvidence(input: MemoryEvidenceInput): Promise<Result<MemoryEvidence>>
+  getMemoryVectorStatus(input: MemoryVectorProfileInput): Promise<Result<MemoryVectorStatus>>
+  getMemoryVectorRun(input: MemoryVectorReadInput): Promise<Result<MemoryVectorRun>>
+  prepareMemoryVectorRun(input: MemoryVectorPrepareInput): Promise<Result<MemoryVectorRun>>
+  startMemoryVectorRun(input: MemoryVectorStartInput): Promise<Result<MemoryVectorRun>>
+  cancelMemoryVectorRun(input: MemoryVectorVersionInput): Promise<Result<MemoryVectorRun>>
+  interruptMemoryVectorRun(input: MemoryVectorVersionInput): Promise<Result<MemoryVectorRun>>
+  listAiConnections(input: AiBookInput): Promise<Result<AiConnectionPage>>
+  configureAiConnection(input: AiConfigureInput): Promise<Result<AiConnectionPage>>
+  listAiRuns(input: AiListInput): Promise<Result<AiRunPage>>
+  getAiRun(input: AiRunInput): Promise<Result<AiRun>>
+  prepareAiRun(input: AiPrepareInput): Promise<Result<AiRun>>
+  listAiContextSummaries(input: AiContextSummaryInput): Promise<Result<AiContextSummaryPage>>
+  recommendAiContext(input: AiContextRecommendationInput): Promise<Result<AiContextRecommendationPage>>
+  startAiRun(input: AiStartInput): Promise<Result<AiRun>>
+  cancelAiRun(input: AiRunInput): Promise<Result<AiRun>>
+  rejectAiRun(input: AiVersionInput): Promise<Result<AiRun>>
+  interruptAiRun(input: AiVersionInput): Promise<Result<AiRun>>
+  adoptAiRun(input: AiAdoptInput): Promise<Result<AiAdoptReceipt>>
+  adoptAiMemory(input: AiMemoryAdoptInput): Promise<Result<AiMemoryAdoptReceipt>>
+  getAiMemoryTaskStatus(input: AiBookInput): Promise<Result<AiMemoryTaskStatus>>
+  listAiMemoryMaintenance(input: AiMemoryMaintenanceInput): Promise<Result<AiMemoryMaintenancePage>>
+  getAiMemoryTask(input: AiMemoryTaskReadInput): Promise<Result<AiMemoryTaskDetail>>
+  startAiMemoryTask(input: AiMemoryTaskStartInput): Promise<Result<AiMemoryTaskReceipt>>
+  stepAiMemoryTask(input: AiMemoryTaskInput): Promise<Result<AiMemoryTaskReceipt>>
+  controlAiMemoryTask(input: AiMemoryTaskControlInput): Promise<Result<AiMemoryTaskReceipt>>
+  getAiSummaryStatus(input: AiBookInput): Promise<Result<AiSummaryStatus>>
+  getAiSummaryTask(input: AiSummaryReadInput): Promise<Result<AiSummaryTaskDetail>>
+  getAiSummaryNode(input: AiSummaryNodeInput): Promise<Result<AiSummaryNodeDetail>>
+  startAiSummaryTask(input: AiSummaryStartInput): Promise<Result<AiSummaryReceipt>>
+  stepAiSummaryTask(input: AiSummaryTaskInput): Promise<Result<AiSummaryReceipt>>
+  controlAiSummaryTask(input: AiSummaryControlInput): Promise<Result<AiSummaryReceipt>>
+  adoptAiSummary(input: AiSummaryAdoptInput): Promise<Result<AiSummaryAdoptReceipt>>
   restartService(): Promise<Result<WorkspaceSnapshot>>
   getRequestStatus(input: { requestId: string }): Promise<Result<RequestStatus>>
   onCloseRequested(handler: () => Promise<boolean>): () => void
   onCloseCancelled(handler: () => void): () => void
 }
 
-export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export'>
+export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare'>
   | 'workspace.select' | 'request.status' | 'import.select' | 'book.exportFile' | 'draft.copy' | 'service.restart'
+  | 'recovery.exportFile' | 'recovery.select'
+  | 'draft.checkpoint' | 'draft.list' | 'draft.select' | 'draft.preview' | 'draft.commit'
+  | 'ai.configure' | 'ai.start' | 'ai.cancel'
+  | 'memory.vector.start'
 
 export class DomainError extends Error {
   constructor(readonly detail: AppError) {

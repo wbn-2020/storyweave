@@ -1,0 +1,65 @@
+export const KNOWLEDGE_SCHEMA = `
+  CREATE TABLE knowledge_items (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES book_meta(id),
+    kind TEXT NOT NULL CHECK (kind IN ('person', 'place', 'organization', 'object', 'rule', 'theme', 'other')),
+    name TEXT NOT NULL,
+    aliases_json TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    nature TEXT NOT NULL CHECK (nature IN ('author_setting', 'future_plan', 'narrative_claim', 'character_belief', 'ai_derived', 'ai_inference', 'external_reference')),
+    author_decision TEXT NOT NULL CHECK (author_decision IN ('unreviewed', 'adopted', 'rejected', 'review_later')),
+    freshness TEXT NOT NULL CHECK (freshness IN ('current', 'affected', 'updating', 'failed')),
+    conflict_state TEXT NOT NULL CHECK (conflict_state IN ('unchecked', 'clear', 'candidate', 'explained')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (id, book_id)
+  ) STRICT;
+  CREATE INDEX knowledge_items_by_kind ON knowledge_items(kind, updated_at DESC, id);
+  CREATE INDEX knowledge_items_by_update ON knowledge_items(updated_at DESC, id);
+  CREATE TABLE knowledge_sources (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK (source_type IN ('author_input', 'chapter_text', 'external')),
+    book_id TEXT NOT NULL,
+    chapter_id TEXT,
+    revision_id TEXT,
+    block_id TEXT,
+    quote TEXT NOT NULL,
+    validity TEXT NOT NULL CHECK (validity IN ('valid', 'partial', 'missing')),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (item_id, book_id) REFERENCES knowledge_items(id, book_id),
+    FOREIGN KEY (chapter_id, revision_id) REFERENCES chapter_revisions(chapter_id, id),
+    CHECK ((source_type = 'chapter_text' AND chapter_id IS NOT NULL AND revision_id IS NOT NULL AND block_id IS NOT NULL)
+      OR (source_type != 'chapter_text' AND chapter_id IS NULL AND revision_id IS NULL AND block_id IS NULL))
+  ) STRICT;
+  CREATE INDEX knowledge_sources_by_item ON knowledge_sources(item_id, created_at, id);
+  CREATE TRIGGER immutable_knowledge_source_update BEFORE UPDATE ON knowledge_sources
+  BEGIN SELECT RAISE(ABORT, 'Knowledge sources are immutable'); END;
+  CREATE TRIGGER immutable_knowledge_source_delete BEFORE DELETE ON knowledge_sources
+  BEGIN SELECT RAISE(ABORT, 'Knowledge sources are immutable'); END;
+  CREATE TABLE knowledge_item_revisions (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id),
+    knowledge_revision INTEGER NOT NULL UNIQUE CHECK (knowledge_revision > 0),
+    fields_json TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK (reason IN ('created', 'updated')),
+    created_at TEXT NOT NULL,
+    UNIQUE (item_id, id)
+  ) STRICT;
+  CREATE INDEX knowledge_revisions_by_item ON knowledge_item_revisions(item_id, knowledge_revision DESC);
+  CREATE TRIGGER immutable_knowledge_revision_update BEFORE UPDATE ON knowledge_item_revisions
+  BEGIN SELECT RAISE(ABORT, 'Knowledge revisions are immutable'); END;
+  CREATE TRIGGER immutable_knowledge_revision_delete BEFORE DELETE ON knowledge_item_revisions
+  BEGIN SELECT RAISE(ABORT, 'Knowledge revisions are immutable'); END;
+  CREATE TABLE knowledge_outbox (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id),
+    knowledge_revision_id TEXT NOT NULL UNIQUE,
+    book_revision INTEGER NOT NULL CHECK (book_revision > 0),
+    knowledge_revision INTEGER NOT NULL CHECK (knowledge_revision > 0),
+    created_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'processed')),
+    FOREIGN KEY (item_id, knowledge_revision_id) REFERENCES knowledge_item_revisions(item_id, id)
+  ) STRICT;
+  CREATE INDEX knowledge_outbox_pending ON knowledge_outbox(state, created_at, id);
+`

@@ -9,7 +9,7 @@ function localPath(value: string): string {
   return resolve(value)
 }
 
-function directory(value: string): string {
+export function checkedLocalDirectory(value: string): string {
   const requested = localPath(value)
   const canonical = realpathSync.native(requested)
   localPath(canonical)
@@ -20,11 +20,15 @@ function directory(value: string): string {
 }
 
 export function readSelectedText(filePath: string, maxBytes: number): Uint8Array {
+  return readSelectedFile(filePath, maxBytes, ['.txt', '.md', '.markdown'])
+}
+
+export function readSelectedFile(filePath: string, maxBytes: number, extensions: readonly string[]): Uint8Array {
   const requested = localPath(filePath)
-  const parent = directory(dirname(requested))
+  const parent = checkedLocalDirectory(dirname(requested))
   const canonical = realpathSync.native(requested)
   if (resolve(canonical).toLowerCase() !== requested.toLowerCase()) throw new DomainError({ code: 'INVALID_INPUT', message: '不支持链接文件。' })
-  if (!['.txt', '.md', '.markdown'].includes(extname(requested).toLowerCase())) throw new DomainError({ code: 'INVALID_INPUT', message: '当前只支持 TXT 与 Markdown 文本文件。' })
+  if (!extensions.includes(extname(requested).toLowerCase())) throw new DomainError({ code: 'INVALID_INPUT', message: '所选文件的扩展名不受支持。' })
   const info = lstatSync(join(parent, basename(requested)))
   if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new DomainError({ code: 'INVALID_INPUT', message: `导入文件必须是普通文本，且不能超过 ${Math.floor(maxBytes / 1024 / 1024)} MiB。` })
   const fd = openSync(requested, 'r')
@@ -50,7 +54,7 @@ export function writeNewText<T>(filePath: string, producer: (write: (chunk: stri
   if (!name || /[<>:"|?*]/.test(name) || /[ .]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) {
     throw new DomainError({ code: 'INVALID_INPUT', message: '文件名无效，请使用普通文件名。' })
   }
-  const parent = directory(dirname(requested))
+  const parent = checkedLocalDirectory(dirname(requested))
   const target = join(parent, name)
   let fd: number | undefined
   let created = false

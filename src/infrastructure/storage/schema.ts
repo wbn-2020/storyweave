@@ -1,4 +1,14 @@
-export const SCHEMA_VERSION = 2
+import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
+import { STORY_SCHEMA } from '../story/schema'
+import { MEMORY_SCHEMA } from '../memory/schema'
+import { AI_SCHEMA } from '../ai/schema'
+import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
+import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
+import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
+import { NOTES_SCHEMA } from '../notes/schema'
+
+export const STUDIO_SCHEMA_VERSION = 2
+export const BOOK_SCHEMA_VERSION = 12
 export const STUDIO_APPLICATION_ID = 0x53545753
 export const BOOK_APPLICATION_ID = 0x53545742
 
@@ -104,4 +114,13 @@ export const BOOK_SCHEMA = `
     byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
     created_at TEXT NOT NULL
   ) STRICT;
+  ${KNOWLEDGE_SCHEMA}
+  ${STORY_SCHEMA}
+  ${MEMORY_SCHEMA}
+  ${AI_SCHEMA}
+  ${AI_MEMORY_TASK_SCHEMA}
+  ${AI_SUMMARY_SCHEMA}
+  ${MEMORY_VECTOR_SCHEMA}
+  ${AI_MEMORY_MAINTENANCE_SCHEMA}
+  ${NOTES_SCHEMA}
 `

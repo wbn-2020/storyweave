@@ -12,11 +12,12 @@ interface Session {
   characterCount: number
   error: AppError | null
   loadEpoch: number
+  editorSessionId: string | null
 }
 
 const initialSession: Session = {
   chapter: null, draft: null, editSequence: 0, dirty: false, saving: false,
-  composing: false, characterCount: 0, error: null, loadEpoch: 0,
+  composing: false, characterCount: 0, error: null, loadEpoch: 0, editorSessionId: null,
 }
 
 export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter: ChapterSnapshot) => void) {
@@ -155,7 +156,7 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
     stopTimer()
     const loadEpoch = current.current.loadEpoch + 1
     publish(chapter ? {
-      ...initialSession, chapter, draft: chapter.document, characterCount: chapter.characterCount, loadEpoch,
+      ...initialSession, chapter, draft: chapter.document, characterCount: chapter.characterCount, loadEpoch, editorSessionId: crypto.randomUUID(),
     } : { ...initialSession, loadEpoch })
   }, [publish, stopTimer])
 
@@ -170,7 +171,7 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
     uncertainSave.current = null
     const loadEpoch = current.current.loadEpoch + 1
     publish(chapter ? {
-      ...initialSession, chapter, draft: chapter.document, characterCount: chapter.characterCount, loadEpoch,
+      ...initialSession, chapter, draft: chapter.document, characterCount: chapter.characterCount, loadEpoch, editorSessionId: crypto.randomUUID(),
     } : { ...initialSession, loadEpoch })
   }, [publish, stopTimer])
 

@@ -1,0 +1,51 @@
+.surface {
+  --color-paper: #f4f0e7;
+  --color-paper-ink: #363832;
+  --color-paper-muted: #68695f;
+  --paper-line: #d7d3c9;
+  --paper-control-line: #a7aa9b;
+  --paper-control-ink: #575c52;
+  --paper-control-hover: #dfdfd3;
+  --paper-control-active-ink: #263e36;
+  --paper-search-panel: #eeebe0;
+  --paper-input: #faf8f1;
+  --paper-focus: #6c573c;
+  --paper-warning: #795524;
+  --paper-match: #e6d69b;
+  --paper-match-ink: #363832;
+  --paper-match-line: #af9850;
+  --paper-current-match: #b9d6bb;
+  --paper-current-ink: #1d3827;
+  --paper-current-line: #608369;
+  color-scheme: light;
+}
+
+.surface[data-paper-tone='light'] {
+  --color-paper: #ffffff;
+  --color-paper-ink: #30343a;
+  --color-paper-muted: #606670;
+  --paper-line: #dce0e5;
+  --paper-control-line: #a4abb4;
+  --paper-control-ink: #515b66;
+  --paper-control-hover: #e7edf2;
+  --paper-control-active-ink: #263f52;
+  --paper-search-panel: #f0f3f5;
+  --paper-input: #ffffff;
+  --paper-focus: #405a76;
+}
+
+.surface[data-paper-tone='dark'] {
+  --color-paper: #1b242d;
+  --color-paper-ink: #e1e6e9;
+  --color-paper-muted: #b2bdc6;
+  --paper-line: #455463;
+  --paper-control-line: #7d8e9c;
+  --paper-control-ink: #c2cbd3;
+  --paper-control-hover: #34424f;
+  --paper-control-active-ink: #edf1f3;
+  --paper-search-panel: #222f3a;
+  --paper-input: #16212a;
+  --paper-focus: #d8bd91;
+  --paper-warning: #e4c18c;
+  color-scheme: dark;
+}

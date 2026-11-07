@@ -1,26 +1,37 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, DomainError, IPC_CHANNEL, failure, isRecord, requiredId, type CompletedRequest, type RendererCommand } from '../../contracts/api'
+import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, DomainError, IPC_CHANNEL, failure, isRecord, requiredId, type CompletedRequest, type RendererCommand, type Result, type SaveChapterOutput, type WorkspaceSnapshot } from '../../contracts/api'
 import { parseServiceRequest } from '../request-validation'
+import { checkedLocalDirectory } from '../file-access'
 import { ServiceClient } from './service-client'
 import { parseDraftCopy, saveDraftCopy } from './draft-copy'
+import { DraftRecovery } from './draft-recovery'
+import { DraftImports, parseDraftTarget } from './draft-imports'
+import { AiSessions } from './ai-sessions'
+import { parseBookRecoveryExportInput, parseBookRecoveryRestoreInput } from '../../contracts/book-recovery'
 
 let mainWindow: BrowserWindow | null = null
 let service: ServiceClient | null = null
 let expectedRendererUrl = ''
+let initialRendererLoadFailed = false
+let rendererSessionStarted = false
 let closing = false
 let draining = false
 let shutdownAuthorized = false
 let choosingFile = false
 let restarting = false
+let pendingAiCommands = 0
 let rememberedWorkspaceRoot: string | null = null
 let recoveryService: ServiceClient | null = null
 let recoveredInstance: ServiceClient | null = null
 let recoveryRequestId: string | null = null
 const previousReceipts = new Map<string, CompletedRequest>()
 let closeResponse: { id: string; resolve: (value: boolean) => void } | null = null
+const draftRecovery = new DraftRecovery()
+const draftImports = new DraftImports()
+const aiSessions = new AiSessions()
 
 const rendererCommands = new Set<RendererCommand>([
   'workspace.get', 'workspace.select', 'book.create', 'book.get',
@@ -28,7 +39,38 @@ const rendererCommands = new Set<RendererCommand>([
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
   'import.select', 'import.reparse', 'import.chapter', 'import.commit', 'book.exportFile', 'draft.copy', 'service.restart',
+  'recovery.exportFile', 'recovery.select', 'recovery.restore',
+  'draft.checkpoint', 'draft.list', 'draft.select', 'draft.preview', 'draft.commit',
+  'knowledge.status', 'knowledge.upgrade', 'knowledge.list', 'knowledge.get', 'knowledge.create', 'knowledge.update',
+  'notes.list', 'notes.get', 'notes.create', 'notes.update', 'notes.promote',
+  'story.list', 'story.timeline', 'story.galaxy', 'story.get', 'story.revision', 'story.create', 'story.update',
+  'memory.status', 'memory.start', 'memory.step', 'memory.control', 'memory.search', 'memory.evidence',
+  'memory.vector.status', 'memory.vector.get', 'memory.vector.prepare', 'memory.vector.start', 'memory.vector.cancel', 'memory.vector.interrupt',
+  'ai.connection.list', 'ai.configure', 'ai.list', 'ai.get', 'ai.prepare', 'ai.start', 'ai.cancel', 'ai.interrupt', 'ai.reject', 'ai.adopt',
+  'ai.context.summaries', 'ai.context.recommend',
+  'ai.memory.adopt',
+  'ai.task.status', 'ai.task.maintenance', 'ai.task.get', 'ai.task.start', 'ai.task.step', 'ai.task.control',
+  'ai.summary.status', 'ai.summary.get', 'ai.summary.node', 'ai.summary.start', 'ai.summary.step', 'ai.summary.control', 'ai.summary.adopt',
 ])
+
+function createService(): ServiceClient {
+  return new ServiceClient(join(__dirname, 'service.js'), (command, output, root) => {
+    if (command === 'workspace.open' || command === 'workspace.get') {
+      const snapshot = output as WorkspaceSnapshot
+      rememberedWorkspaceRoot = snapshot.rootPath
+      if (draftRecovery.bind(snapshot.rootPath)) draftImports.clear()
+    } else if (command === 'chapter.save') draftRecovery.saved(root, output as SaveChapterOutput)
+  })
+}
+
+function workspaceResult<T extends WorkspaceSnapshot | null>(result: Result<T>): Result<T> {
+  return result.ok && result.data !== null ? { ok: true, data: draftRecovery.attach(result.data) as T } : result
+}
+
+function decorateReceipt(response: CompletedRequest): CompletedRequest {
+  if (response.command === 'workspace.open' || response.command === 'workspace.get') return { ...response, result: workspaceResult(response.result) }
+  return response
+}
 
 function withoutHash(value: string): string {
   const url = new URL(value)
@@ -52,9 +94,32 @@ function rendererUrl(): string {
   return withoutHash(url.href)
 }
 
+function checkedWorkspaceDirectory(path: string): string {
+  if (!app.isPackaged || process.platform !== 'win32') return path
+  try {
+    const canonical = checkedLocalDirectory(path)
+    const protectedDirectories = [
+      checkedLocalDirectory(dirname(app.getPath('exe'))),
+      checkedLocalDirectory(process.resourcesPath),
+    ]
+    // 安装目录与作品分离；按真实路径的目录段比较，避免误拦同名前缀的相邻目录。
+    for (const directory of protectedDirectories) {
+      const child = relative(directory.toLowerCase(), canonical.toLowerCase())
+      if (child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith('..' + sep))) {
+        throw new DomainError({ code: 'INVALID_INPUT', message: '应用安装目录、资源目录及其子目录不能用作书库，请选择这些目录之外的本地文件夹。' })
+      }
+    }
+    return canonical
+  } catch (error) {
+    if (error instanceof DomainError) throw error
+    throw new DomainError({ code: 'INVALID_INPUT', message: '无法核验书库或应用目录的本地真实路径，请确认目录存在、可访问且不是链接或网络位置。' })
+  }
+}
+
 function setupIpc(): void {
   ipcMain.handle(IPC_CHANNEL, async (event, command: unknown, payload: unknown) => {
     if (!trustedSender(event)) return failure('FORBIDDEN', '不允许来自此页面的请求。')
+    rendererSessionStarted = true
     if (typeof command !== 'string' || !rendererCommands.has(command as RendererCommand)) {
       return failure('INVALID_INPUT', '不支持此操作。')
     }
@@ -68,11 +133,19 @@ function setupIpc(): void {
           recoveryService = null
           recoveryRequestId = null
         }
-        return { ok: true, data: current && current.state !== 'unknown' ? current : previous ? { state: 'completed', response: previous } : { state: 'unknown' } }
+        const status = current && current.state !== 'unknown' ? current : previous ? { state: 'completed' as const, response: previous } : { state: 'unknown' as const }
+        return { ok: true, data: status.state === 'completed' ? { ...status, response: decorateReceipt(status.response) } : status }
       }
       if (command === 'draft.copy') return await chooseDraftCopy(payload)
+      // 检查点独立于业务进程；只有切库、关闭排空或恢复中才暂缓，防止保存到错误书库。
+      if (command === 'draft.checkpoint' || command === 'draft.list') {
+        if (choosingFile || restarting || draining) return failure('WORKSPACE_BUSY', '桌面正在切换或关闭，请稍后再处理草稿副本。')
+        return { ok: true, data: command === 'draft.checkpoint' ? draftRecovery.checkpoint(payload) : draftRecovery.list(payload) }
+      }
       if (command === 'service.restart') {
         if (payload !== undefined) return failure('INVALID_INPUT', '恢复服务不接受路径或重放请求。')
+        // 已接收的模型结果保留在主进程，允许恢复已退出的服务后核对并补存。
+        if (pendingAiCommands > 0 || aiSessions.hasActive(false)) return failure('WORKSPACE_BUSY', '请先处理 AI 请求并核对结束状态，再恢复本地服务。')
         if (closing || draining || choosingFile || restarting) return failure('WORKSPACE_BUSY', '请先完成当前操作，再恢复本地服务。')
         if (!service?.hasExited() && service !== recoveryService && service !== recoveredInstance) return failure('WORKSPACE_BUSY', '原服务尚未确认退出。不能重启或向活动服务重放未知操作。')
         restarting = true
@@ -86,7 +159,7 @@ function setupIpc(): void {
               if (oldest === undefined) break
               previousReceipts.delete(oldest)
             }
-            service = new ServiceClient(join(__dirname, 'service.js'))
+            service = createService()
             recoveryService = service
             recoveredInstance = service
             recoveryRequestId = null
@@ -101,14 +174,14 @@ function setupIpc(): void {
             if (response.result.ok) {
               recoveryService = null
               recoveryRequestId = null
-              return response.result
+              return workspaceResult(response.result)
             }
             if (response.result.error.code === 'REQUEST_TIMEOUT' || response.result.error.code === 'SERVICE_UNAVAILABLE') return response.result
             recoveryRequestId = null
           }
           // 已恢复的实例只续读当前书库，允许界面在后续章节读取失败时重试，不再次重开或重放旧操作。
           if (service === recoveredInstance && recoveryService !== service) {
-            return await service.request('workspace.get', undefined)
+            return workspaceResult(await service.request('workspace.get', undefined))
           }
           // 只有本次恢复创建的新进程可重试确定失败的重开，不重新启动仍活动的旧进程。
           const result = rememberedWorkspaceRoot
@@ -120,7 +193,7 @@ function setupIpc(): void {
           } else {
             recoveryRequestId = result.error.requestId ?? null
           }
-          return result
+          return workspaceResult(result)
         } finally { restarting = false }
       }
       if (!service || draining) return failure('SERVICE_UNAVAILABLE', '本地作品服务正在关闭，请保留当前稿件。')
@@ -130,7 +203,14 @@ function setupIpc(): void {
       if (closing && !['chapter.save', 'chapter.read', 'workspace.get'].includes(command)) {
         return failure('SERVICE_UNAVAILABLE', '正在保存并关闭，请等待当前操作完成。')
       }
+      if (command.startsWith('ai.') || command.startsWith('memory.vector.')) {
+        // 多次 await 的上下文预览也固定书库，不能在读取配置后被切到另一作品库。
+        pendingAiCommands += 1
+        try { return await aiSessions.handle(command, payload, service) }
+        finally { pendingAiCommands -= 1 }
+      }
       if (command === 'workspace.select') {
+        if (pendingAiCommands > 0 || aiSessions.hasActive()) return failure('WORKSPACE_BUSY', 'AI 请求仍在进行，请先处理并核对结束状态，再切换作品库。')
         if (payload !== undefined) return failure('INVALID_INPUT', '请选择本地书库目录。')
         if (choosingFile) return failure('WORKSPACE_BUSY', '已有一个文件选择窗口，请先完成该操作。')
         const target = mainWindow
@@ -144,10 +224,62 @@ function setupIpc(): void {
           })
           if (selection.canceled || selection.filePaths.length !== 1) return { ok: true, data: null }
           if (closing || draining) return failure('SERVICE_UNAVAILABLE', '正在关闭，未切换书库。')
-          const result = await service.request('workspace.open', { rootPath: selection.filePaths[0]! })
+          const rootPath = checkedWorkspaceDirectory(selection.filePaths[0]!)
+          const result = await service.request('workspace.open', { rootPath })
           if (result.ok) rememberedWorkspaceRoot = result.data.rootPath
-          return result
+          return workspaceResult(result)
         } finally { choosingFile = false }
+      }
+      if (command === 'recovery.exportFile' || command === 'recovery.select' || command === 'recovery.restore') {
+        if (pendingAiCommands > 0 || aiSessions.hasActive()) return failure('WORKSPACE_BUSY', '请先处理并核对正在进行的模型请求，再备份或恢复作品。')
+        if (!service.getWorkspaceRoot()) return failure('WORKSPACE_REQUIRED', '请先选择用于保存作品的本地书库。')
+        const exporting = command === 'recovery.exportFile' ? parseBookRecoveryExportInput(payload) : null
+        const restoring = command === 'recovery.restore' ? parseBookRecoveryRestoreInput(payload) : null
+        if (command === 'recovery.select' && payload !== undefined) return failure('INVALID_INPUT', '请从原生窗口选择恢复包目录。')
+        const window = mainWindow
+        if (!window) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
+        // 从原生选择直到请求返回，固定书库并阻止关闭；超时后的原请求由服务回执继续追踪。
+        choosingFile = true
+        try {
+          if (restoring) return await service.request('recovery.restore', restoring)
+          const selection = await dialog.showOpenDialog(window, {
+            title: exporting ? '选择作品恢复包的保存位置' : '选择作品恢复包目录（包含 manifest.json）',
+            buttonLabel: exporting ? '在此创建恢复包' : '校验并预览恢复包',
+            properties: ['openDirectory'],
+          })
+          if (selection.canceled || selection.filePaths.length !== 1) return { ok: true, data: null }
+          if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未提交备份或恢复预览。')
+          return exporting
+            ? await service.request('recovery.export', { ...exporting, directoryPath: selection.filePaths[0]! })
+            : await service.request('recovery.prepare', { packagePath: selection.filePaths[0]! })
+        } finally { choosingFile = false }
+      }
+      if (command === 'draft.select') {
+        const target = parseDraftTarget(payload)
+        draftRecovery.requireScope(target.scope)
+        const window = mainWindow
+        if (!window) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
+        choosingFile = true
+        try {
+          const selected = await dialog.showOpenDialog(window, { title: '选择织章单章草稿副本', buttonLabel: '预览草稿', properties: ['openFile'], filters: [{ name: '织章单章草稿', extensions: ['json'] }] })
+          if (selected.canceled || selected.filePaths.length !== 1) return { ok: true, data: null }
+          if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未读取草稿。')
+          draftRecovery.requireScope(target.scope)
+          return { ok: true, data: draftImports.select(selected.filePaths[0]!, target) }
+        } finally { choosingFile = false }
+      }
+      if (command === 'draft.preview') {
+        const target = parseDraftTarget(payload)
+        if (!isRecord(payload)) return failure('INVALID_INPUT', '草稿预览参数无效。')
+        const id = requiredId(payload.checkpointId)
+        const bytes = draftRecovery.read(target.scope, id)
+        return { ok: true, data: draftImports.prepare(bytes, `${id}.json`, target) }
+      }
+      if (command === 'draft.commit') {
+        if (!isRecord(payload)) return failure('INVALID_INPUT', '草稿确认参数无效。')
+        const scope = draftRecovery.requireScope(payload.scope)
+        const input = draftImports.consume(payload, scope)
+        return await service.request('draft.import', input)
       }
       if (command === 'import.select') {
         if (!isRecord(payload)) return failure('INVALID_INPUT', '导入选项无效。')
@@ -188,6 +320,7 @@ function setupIpc(): void {
         } finally { choosingFile = false }
       }
       const request = parseServiceRequest({ id: randomUUID(), command, payload })
+      if (request.command === 'workspace.get') return workspaceResult(await service.request('workspace.get', undefined))
       return await service.request(request.command, request.payload)
     } catch (error) {
       return error instanceof DomainError
@@ -236,16 +369,51 @@ function askRendererToSave(window: BrowserWindow): Promise<boolean> {
   })
 }
 
+async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> {
+  if (!aiSessions.hasActive()) return true
+  choosingFile = true
+  try {
+    const decision = await dialog.showMessageBox(window, {
+      type: 'warning', title: '模型结果尚未保存', message: '已收到的模型结果还没有确认写入作品。',
+      detail: '可返回原候选重新读取以补存，也可另存完整结果后返回工作室。副本需手工核对处理；之后请刷新原请求、处理未保存内容，再关闭窗口。',
+      buttons: ['返回继续处理', '另存结果并返回'], defaultId: 0, cancelId: 0,
+    })
+    if (decision.response !== 1) return false
+    const selection = await dialog.showSaveDialog(window, {
+      title: '另存待存模型结果（仅新建文件）', buttonLabel: '保存结果副本',
+      defaultPath: `模型结果留存-${Date.now()}.json`, filters: [{ name: '模型结果 JSON', extensions: ['json'] }],
+    })
+    if (selection.canceled || !selection.filePath) return false
+    const copied = aiSessions.savePendingResult(selection.filePath)
+    await dialog.showMessageBox(window, {
+      type: 'info', title: copied ? '模型结果已留存' : '原保存请求已确认',
+      message: copied ? '已保存结果副本，请返回工作室核对原请求。' : '模型结果的原保存回执已确认，无需另存副本。请返回工作室读取原记录。',
+      detail: '请在原面板重新读取；仍显示生成中且没有本机活动时，可明确中断该记录。处理未保存内容后可再次关闭窗口。', buttons: ['返回工作室'],
+    })
+    return false
+  } catch (error) {
+    await dialog.showMessageBox(window, {
+      type: 'warning', title: '结果仍在本次会话保留', message: '模型结果副本未能确认保存，窗口将保留。',
+      detail: error instanceof DomainError ? error.detail.message : '请检查保存位置后重新选择一个新文件名。', buttons: ['返回继续处理'],
+    })
+    return false
+  } finally { choosingFile = false }
+}
+
 async function requestClose(): Promise<void> {
   const window = mainWindow
   if (!window || window.isDestroyed() || closing) return
-  if (choosingFile || restarting) {
+  if (choosingFile || restarting || pendingAiCommands > 0 || aiSessions.hasActive(false)) {
     try { window.webContents.send(CLOSE_CANCELLED_CHANNEL) } catch { /* 保留当前窗口和未完成操作。 */ }
     return
   }
   closing = true
   try {
-    const ready = await askRendererToSave(window)
+    if (!await preservePendingAiResult(window)) return
+    // 仅首次加载失败且从未建立界面／书库会话时，才没有 renderer 草稿需要确认。
+    const failedBeforeSession = initialRendererLoadFailed && !rendererSessionStarted &&
+      rememberedWorkspaceRoot === null && (service === null || service.getWorkspaceRoot() === null)
+    const ready = failedBeforeSession || await askRendererToSave(window)
     if (!ready) {
       await dialog.showMessageBox(window, {
         type: 'warning', title: '窗口已保留', message: '尚未确认稿件已经保存。',
@@ -254,7 +422,9 @@ async function requestClose(): Promise<void> {
       return
     }
     draining = true
-    const result = service ? await service.close() : failure('SERVICE_UNAVAILABLE', '本地作品服务不可用。')
+    const result = failedBeforeSession && (service === null || service.hasExited())
+      ? { ok: true as const, data: null }
+      : service ? await service.close() : failure('SERVICE_UNAVAILABLE', '本地作品服务不可用。')
     if (!result.ok) {
       draining = false
       await dialog.showMessageBox(window, {
@@ -309,11 +479,13 @@ function createWindow(): void {
     event.preventDefault()
     void requestClose()
   })
-  window.on('closed', () => { mainWindow = null })
+  window.on('closed', () => { aiSessions.abortAll(); mainWindow = null })
   window.once('ready-to-show', () => window.show())
-  void window.loadURL(expectedRendererUrl).catch(() => {
+  void window.loadURL(expectedRendererUrl).then(() => { rendererSessionStarted = true }).catch(() => {
+    initialRendererLoadFailed = true
+    if (window.isDestroyed()) return
     window.show()
-    void dialog.showMessageBox(window, { type: 'error', message: '工作室界面加载失败。', detail: '请检查应用文件和构建配置。', buttons: ['保留窗口'] })
+    void dialog.showMessageBox(window, { type: 'error', message: '工作室界面加载失败。', detail: '请检查应用文件和构建配置；可以关闭窗口退出。', buttons: ['知道了'] })
   })
 }
 
@@ -331,7 +503,7 @@ if (!app.requestSingleInstanceLock()) {
     void requestClose()
   })
   app.whenReady().then(() => {
-    service = new ServiceClient(join(__dirname, 'service.js'))
+    service = createService()
     setupIpc()
     createWindow()
   }).catch(() => {

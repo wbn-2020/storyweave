@@ -5,6 +5,7 @@ import { failure, isRecord, type CommandMap, type CompletedRequest, type Request
 type ServiceOutput = CommandMap[ServiceCommand]['output']
 interface PendingRequest {
   command: ServiceCommand
+  workspaceRoot: string | null
   resolve: (result: Result<ServiceOutput>) => void
   timer: ReturnType<typeof setTimeout>
   timedOut: boolean
@@ -23,7 +24,7 @@ export class ServiceClient {
   private logEvents = 0
   private unclassifiedLogged = false
 
-  constructor(entryPath: string) {
+  constructor(entryPath: string, private readonly onSuccess?: (command: ServiceCommand, output: ServiceOutput, root: string | null) => void) {
     this.child = utilityProcess.fork(entryPath, [], { serviceName: 'StoryWeave 本地作品服务', stdio: 'pipe' })
     // 仅记录白名单事件码；原生异常只留下固定类别，避免路径或正文进入日志。
     this.child.stdout?.resume()
@@ -67,6 +68,7 @@ export class ServiceClient {
       }, 30_000)
       this.pending.set(id, {
         command,
+        workspaceRoot: this.workspaceRoot,
         resolve: resolve as (result: Result<ServiceOutput>) => void,
         timer,
         timedOut: false,
@@ -119,9 +121,18 @@ export class ServiceClient {
       this.closedSuccessfully = response.result.ok
       this.closeRequested = response.result.ok
     }
+    if (response.result.ok) {
+      try { this.onSuccess?.(pending.command, response.result.data, pending.workspaceRoot) }
+      catch { /* 辅助恢复记录失败不能改变已经确认的领域写入结果。 */ }
+    }
     // 只保留需要补领的迟到回执，正常读写返回后不在主进程长期缓存整章正文。
     if (pending.timedOut) this.remember(message.id, pending.command, response.result)
     else pending.resolve(response.result)
+    if (pending.command === 'service.close' && pending.timedOut && response.result.ok) {
+      // 窗口已因超时保留；此时数据库才确认关闭，结束旧进程后才能恢复服务并保留界面中的新编辑。
+      this.unavailable = true
+      this.child.kill()
+    }
   }
 
   private remember(id: string, command: ServiceCommand, result: Result<ServiceOutput>): void {

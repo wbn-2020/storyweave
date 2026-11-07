@@ -96,24 +96,59 @@ function markdownWhitespace(value: string): string {
   return value.replace(/ /g, '&#32;').replace(/\t/g, '&#9;')
 }
 
-function inlineMarkdown(node: InlineNode): string {
-  if (node.type === 'hardBreak') return '  \n'
-  return node.text.split('\n').map((line) => {
+interface MarkdownRun { text: string; marker: string }
+
+function markedInlineHtml(text: string, marker: string): string {
+  // 内联标签之间仍会解析 Markdown，用字符引用同时保护原文中的标签、实体与定界符。
+  let value = text.replace(/[\\`*_{}\[\]()#+.!<>|~&"'\-]/g, (character) => `&#${character.charCodeAt(0)};`)
+  if (marker.length === 1 || marker.length === 3) value = `<em>${value}</em>`
+  if (marker.length >= 2) value = `<strong>${value}</strong>`
+  return value
+}
+
+function markdownRun(run: MarkdownRun, previous?: MarkdownRun, next?: MarkdownRun): string {
+  return run.text.split('\n').map((line, index, lines) => {
     const leading = /^\s*/u.exec(line)![0]
     const trailing = /\s*$/u.exec(line)![0]
     if (leading.length === line.length) return markdownWhitespace(line)
-    let value = escapeMarkdown(line.slice(leading.length, line.length - trailing.length))
-    if (node.marks?.some((mark) => mark.type === 'italic')) value = `*${value}*`
-    if (node.marks?.some((mark) => mark.type === 'bold')) value = `**${value}**`
+    const body = line.slice(leading.length, line.length - trailing.length)
+    let value = escapeMarkdown(body)
+    if (run.marker) {
+      const before = leading || (index === 0 ? previous?.text ?? '' : '\n')
+      const after = trailing || (index === lines.length - 1 ? next?.text ?? '' : '\n')
+      // CommonMark 按 Unicode 标点（含符号）与两侧字符判断强调，不能仅按单个节点包裹星号。
+      const canOpen = !/^[\p{P}\p{S}]/u.test(value) || !before || /[\t\n\f\r\p{Zs}\p{P}\p{S}]$/u.test(before)
+      const canClose = !/[\p{P}\p{S}]$/u.test(value) || !after || /^[\t\n\f\r\p{Zs}\p{P}\p{S}]/u.test(after)
+      const joinsMarker = (!leading && index === 0 && previous?.marker && !/\s$/u.test(previous.text))
+        || (!trailing && index === lines.length - 1 && next?.marker && !/^\s/u.test(next.text))
+      value = canOpen && canClose && !joinsMarker
+        ? `${run.marker}${value}${run.marker}`
+        : markedInlineHtml(body, run.marker)
+    }
     return markdownWhitespace(leading) + value + markdownWhitespace(trailing)
   }).join('  \n')
+}
+
+function inlineMarkdown(nodes: InlineNode[]): string {
+  const runs: MarkdownRun[] = []
+  for (const node of nodes) {
+    const text = node.type === 'hardBreak' ? '\n' : node.text
+    const marker = node.type === 'hardBreak' ? ''
+      : (node.marks?.some((mark) => mark.type === 'bold') ? '**' : '')
+        + (node.marks?.some((mark) => mark.type === 'italic') ? '*' : '')
+    const previous = runs.at(-1)
+    // 合并相同样式，避免相邻节点的结束与开始星号连成新的定界符；硬换行单独保留。
+    if (marker && previous?.marker === marker) previous.text += text
+    else runs.push({ text, marker })
+  }
+  return runs.map((run, index) => markdownRun(run, runs[index - 1], runs[index + 1])).join('')
 }
 
 export function documentToMarkdown(document: ManuscriptDocument): string {
   const normalized = parseManuscript(document)
   return normalized.content.map((block) => {
     if (block.type === 'horizontalRule') return '---'
-    const text = (block.content ?? []).map(inlineMarkdown).join('')
+    const text = inlineMarkdown(block.content ?? [])
     return block.type === 'heading' ? `${'#'.repeat(block.attrs.level)} ${text}` : text
   }).join('\n\n')
 }

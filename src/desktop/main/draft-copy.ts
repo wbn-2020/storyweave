@@ -1,11 +1,12 @@
 import { DomainError, isRecord, requiredId, requiredText, type FileWriteReceipt, type SaveDraftCopyInput } from '../../contracts/api'
 import { documentToText, parseManuscript } from '../../contracts/manuscript'
+import { MAX_DRAFT_FILE_BYTES } from '../../contracts/draft'
 import { writeNewText } from '../file-access'
 
 export function parseDraftCopy(value: unknown): SaveDraftCopyInput {
   if (!isRecord(value)) throw new DomainError({ code: 'INVALID_INPUT', message: '草稿副本内容无效。' })
   return {
-    bookId: requiredId(value.bookId), chapterId: requiredId(value.chapterId), baseRevisionId: requiredId(value.baseRevisionId),
+    bookId: requiredId(value.bookId).toLowerCase(), chapterId: requiredId(value.chapterId).toLowerCase(), baseRevisionId: requiredId(value.baseRevisionId).toLowerCase(),
     title: requiredText(value.title, '章节名称', 120), document: parseManuscript(value.document),
   }
 }
@@ -17,5 +18,9 @@ export function saveDraftCopy(filePath: string, input: SaveDraftCopyInput): File
     description: '单章草稿副本，不是完整作品备份。', createdAt: new Date().toISOString(),
     ...input, plainText: documentToText(input.document),
   }
-  return writeNewText(filePath, (write) => write(JSON.stringify(copy, null, 2) + '\n')).receipt
+  const serialized = JSON.stringify(copy) + '\n'
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_DRAFT_FILE_BYTES) {
+    throw new DomainError({ code: 'INVALID_INPUT', message: '草稿副本超过 16 MiB，请保留当前正文并拆分章节后再另存。' })
+  }
+  return writeNewText(filePath, (write) => write(serialized)).receipt
 }
