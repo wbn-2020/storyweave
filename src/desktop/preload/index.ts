@@ -12,6 +12,20 @@ async function invoke<T>(command: RendererCommand, payload?: unknown): Promise<R
 let closeListener: ((_event: IpcRendererEvent, requestId: unknown) => void) | null = null
 let cancelListener: (() => void) | null = null
 const api: StudioApi = {
+  mergeRevision: (input) => invoke('revision.merge', input),
+  prepareBookExport: (input) => invoke('book.export.prepare', input),
+  readBookExportChapter: (input) => invoke('book.export.chapter', input),
+  commitBookExport: (input) => invoke('book.export.commitFile', input),
+  getWorkbench: (input) => invoke('workbench.get', input),
+  saveWritingBrief: (input) => invoke('workbench.brief', input),
+  saveScene: (input) => invoke('workbench.scene', input),
+  saveReviewIssue: (input) => invoke('workbench.issue', input),
+  applyReviewIssue: (input) => invoke('workbench.applyIssue', input),
+  saveWritingGoal: (input) => invoke('workbench.goal', input),
+  logWritingSession: (input) => invoke('workbench.session', input),
+  listInspirations: (input) => invoke('inspiration.list', input),
+  saveInspiration: (input) => invoke('inspiration.save', input),
+  copyInspirationToNote: (input) => invoke('inspiration.copy', input),
   getWorkspace: () => invoke('workspace.get'),
   selectWorkspace: () => invoke('workspace.select'),
   createBook: (input) => invoke('book.create', input),
@@ -42,6 +56,7 @@ const api: StudioApi = {
   saveDraftCopy: (input) => invoke('draft.copy', input),
   checkpointDraft: (input) => invoke('draft.checkpoint', input),
   listRecoveryDrafts: (input) => invoke('draft.list', input),
+  rotateRecoveryDrafts: (input) => invoke('draft.rotate', input),
   selectDraftImport: (input) => invoke('draft.select', input),
   previewRecoveryDraft: (input) => invoke('draft.preview', input),
   commitDraftImport: (input) => invoke('draft.commit', input),

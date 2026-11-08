@@ -8,6 +8,7 @@ import {
 } from '../../contracts/ai'
 import type { ServiceClient } from './service-client'
 import { writeNewText } from '../file-access'
+import { PendingAiResults, type PendingAiFile, type PendingAiPreflight } from './pending-ai-results'
 import { parseAiMemoryTaskControlInput, parseAiMemoryTaskInput, parseAiMemoryTaskReadInput, parseAiMemoryTaskStartInput } from '../../contracts/ai-memory-task'
 import { parseAiMemoryMaintenanceInput } from '../../contracts/ai-memory-maintenance'
 import { parseAiSummaryAdoptInput, parseAiSummaryControlInput, parseAiSummaryNodeInput, parseAiSummaryReadInput, parseAiSummaryStartInput, parseAiSummaryTaskInput } from '../../contracts/ai-summary'
@@ -62,6 +63,7 @@ interface ActiveRequest {
   root: string; bookId: string; runId: string; service: ServiceClient
   controller: AbortController; stop: 'cancelled' | 'timeout' | null
   done: Promise<void>; complete: () => void
+  resultPreflight?: PendingAiPreflight
 }
 interface UncertainRequest { service: ServiceClient; requestId?: string }
 interface ActiveVectorRequest extends ActiveRequest { version: number }
@@ -70,6 +72,8 @@ type PendingFinish = {
   root: string; service: ServiceClient; contextHash: string
   submission: { state: 'unsubmitted' } | { state: 'uncertain'; requestId?: string }
   settling?: Promise<Result<null>>
+  journal?: PendingAiFile
+  resultPreflight?: PendingAiPreflight
 } & ({ command: 'ai.finish'; input: AiFinishInput } | { command: 'memory.vector.finish'; input: MemoryVectorFinishInput })
 
 function runScope(root: string, input: AiRunInput): string { return JSON.stringify(['run', root, input.bookId, input.runId]) }
@@ -118,6 +122,60 @@ export class AiSessions {
   private vectorActive: ActiveVectorRequest | null = null
   private configuring = false
   private pendingFinish: PendingFinish | null = null
+  private readonly pendingResults = new PendingAiResults()
+  private restoringResults: Promise<Result<null>> | null = null
+  private restoredRoot: string | null = null
+  private recoveryWarning: Result<null> | null = null
+
+  restorePending(service: ServiceClient): Promise<Result<null>> {
+    if (this.restoringResults) return this.restoringResults
+    const restore = async (): Promise<Result<null>> => {
+      const root = service.getWorkspaceRoot()
+      if (!root || this.active || this.vectorActive || this.configuring) return { ok: true, data: null }
+      try {
+        let unresolved: PendingFinish | null = null
+        let firstError: Result<null> | null = null
+        let warnings = 0
+        if (this.pendingFinish) {
+          const result = await this.settleFinish(this.pendingFinish, service)
+          if (!result.ok) {
+            if (!this.pendingFinish?.journal) return result
+            unresolved = this.pendingFinish
+            firstError = result
+          }
+        }
+        if (!firstError && this.restoredRoot === root) return this.recoveryWarning ?? { ok: true, data: null }
+        // 重开后先读取原运行身份和固定上下文，只有仍为 running 的同一记录才补交本地终态。
+        for (const entry of this.pendingResults.load(root)) {
+          if ('warning' in entry) { warnings += 1; firstError ??= failure('STORAGE_ERROR', entry.warning); continue }
+          const file = entry.file
+          const unresolvedFile = unresolved?.journal
+          if (unresolvedFile && file.root === unresolvedFile.root && file.id === unresolvedFile.id &&
+            file.hash === unresolvedFile.hash && file.volume.id === unresolvedFile.volume.id && file.volume.hash === unresolvedFile.volume.hash) continue
+          const pending: PendingFinish = { ...file.payload, root, service, journal: file, submission: { state: 'uncertain' } }
+          this.pendingFinish ??= pending
+          const result = await this.settleFinish(pending, service)
+          if (!result.ok) { unresolved ??= pending; firstError ??= result }
+        }
+        this.pendingFinish = unresolved
+        if (firstError && !firstError.ok) {
+          const result: Result<null> = { ok: false, error: { ...firstError.error,
+            message: `${firstError.error.message}${warnings ? ` 共 ${warnings} 项残件需人工核对；其他有效文件已继续核对。` : ''}` } }
+          // 残件保留并持续提示；已经逐项扫描且没有待提交结果时，不永久封住后续模型工作。
+          if (!unresolved) { this.restoredRoot = root; this.recoveryWarning = result }
+          return result
+        }
+        this.restoredRoot = root
+        this.recoveryWarning = null
+        return { ok: true, data: null }
+      } catch (error) {
+        return error instanceof DomainError ? { ok: false, error: error.detail }
+          : failure('STORAGE_ERROR', '待存模型结果尚未完成核对，请保留书库中的 pending-model-results 目录。')
+      }
+    }
+    this.restoringResults = restore().finally(() => { this.restoringResults = null })
+    return this.restoringResults
+  }
 
   savePendingResult(filePath: string): boolean {
     if (this.hasActive(false)) throw new DomainError({ code: 'WORKSPACE_BUSY', message: '模型操作或原保存请求仍在处理，请等待结束后再另存。' })
@@ -129,7 +187,8 @@ export class AiSessions {
       workspaceRoot: pending.root, command: pending.command, contextHash: pending.contextHash,
       submission: pending.submission, input: pending.input }
     writeNewText(filePath, (write) => write(JSON.stringify(copy) + '\n'))
-    this.confirmFinish(pending)
+    const confirmed = this.confirmFinish(pending, 'exported')
+    if (!confirmed.ok) throw new DomainError(confirmed.error)
     return true
   }
 
@@ -140,7 +199,7 @@ export class AiSessions {
     const submission = pending?.submission
     const awaitingFinishReceipt = pending !== null && submission?.state === 'uncertain' && submission.requestId !== undefined &&
       pending.service.getRequestStatus(submission.requestId).state === 'pending'
-    return this.active !== null || this.vectorActive !== null || this.configuring ||
+    return this.active !== null || this.vectorActive !== null || this.configuring || this.restoringResults !== null ||
       (includePendingFinish && this.pendingFinish !== null) || this.pendingFinish?.settling !== undefined || awaitingFinishReceipt || [...this.uncertainWrites.values()]
       .some((request) => request.requestId !== undefined && request.service.getRequestStatus(request.requestId).state === 'pending') ||
       [...this.pendingConfigurations.values()].some((request) => request.service.getRequestStatus(request.requestId).state === 'pending')
@@ -160,6 +219,12 @@ export class AiSessions {
       this.discardUnavailableConfigurations(service)
       const root = service.getWorkspaceRoot()
       if (!root) return failure('WORKSPACE_REQUIRED', '请先打开本地书库，再使用 AI 协作。')
+      const restored = await this.restorePending(service)
+      // 个别恢复残件不能封住其他候选的读取入口；生成和采用仍须等待留存结果核对。
+      const reading = ['ai.connection.list', 'ai.list', 'ai.get', 'ai.context.summaries', 'ai.context.recommend',
+        'ai.task.status', 'ai.task.maintenance', 'ai.task.get', 'ai.summary.status', 'ai.summary.get', 'ai.summary.node',
+        'memory.vector.status', 'memory.vector.get'].includes(command)
+      if (!restored.ok && !reading && (this.pendingFinish || this.restoredRoot !== root)) return restored
       switch (command) {
         case 'ai.connection.list': {
           const input = parseAiBookInput(payload)
@@ -318,7 +383,9 @@ export class AiSessions {
       (run.state === pending.input.state || pending.input.state === 'succeeded' && run.state === 'failed')
   }
 
-  private confirmFinish(pending: PendingFinish): Result<null> {
+  private confirmFinish(pending: PendingFinish, disposition: 'committed' | 'exported' = 'committed'): Result<null> {
+    try { if (pending.journal) this.pendingResults.settle(pending.journal, disposition) }
+    catch (error) { return failure('STORAGE_ERROR', `模型结果已确认，但留存完成记录尚未写入；原结果仍保留，请重新读取核对。${error instanceof DomainError ? ` ${error.detail.message}` : ''}`) }
     if (this.pendingFinish === pending) this.pendingFinish = null
     const scope = pending.command === 'ai.finish' ? runScope(pending.root, pending.input) : vectorScope(pending.root, pending.input)
     this.uncertainWrites.delete(scope)
@@ -354,12 +421,25 @@ export class AiSessions {
   }
 
   private async finishAttempt(pending: PendingFinish, service: ServiceClient, readBeforeSubmit: boolean): Promise<Result<null>> {
+    try {
+      pending.journal ??= this.pendingResults.save(pending.root,
+        pending.command === 'ai.finish' ? { command: pending.command, input: pending.input, contextHash: pending.contextHash }
+          : { command: pending.command, input: pending.input, contextHash: pending.contextHash }, pending.resultPreflight)
+    } catch (error) {
+      return failure('STORAGE_ERROR', `模型终态尚未写入本地待存文件，未提交数据库。请保留窗口、检查磁盘或另存模型结果。${error instanceof DomainError ? ` ${error.detail.message}` : ''}`)
+    }
     if (service.getWorkspaceRoot() !== pending.root) return failure('REVISION_CONFLICT', '书库已变化，模型结果仍保留在本次会话中，请先恢复原书库。')
     if (pending.service !== service && !pending.service.hasExited()) {
       return failure('WORKSPACE_BUSY', '原作品服务尚未退出，模型结果仍保留；不能跨服务重放未确认写入。')
     }
     const receipt = this.checkFinishReceipt(pending)
     if (receipt) return receipt
+    const scope = pending.command === 'ai.finish' ? runScope(pending.root, pending.input) : vectorScope(pending.root, pending.input)
+    const previous = this.uncertainWrites.get(scope)
+    if (previous?.requestId && previous.service.getRequestStatus(previous.requestId).state === 'pending') {
+      return { ok: false, error: { code: 'REQUEST_TIMEOUT', requestId: previous.requestId,
+        message: '模型进度的原写入仍在处理，终态已落盘保留；待原回执结束后再核对补存。' } }
+    }
     if (readBeforeSubmit || pending.submission.state === 'uncertain') {
       const current = pending.command === 'ai.finish'
         ? await service.request('ai.get', { bookId: pending.input.bookId, runId: pending.input.runId })
@@ -457,6 +537,8 @@ export class AiSessions {
       const apiKey = key?.baseUrl === connection.baseUrl ? key.value : ''
       if (!localEndpoint(connection.baseUrl) && !apiKey) return failure('FORBIDDEN', '这个远端连接尚无本次应用会话的密钥，请在连接设置中输入后再开始。')
       if (active.controller.signal.aborted) return failure('FORBIDDEN', '向量开始操作已取消，尚未向模型发送请求。')
+      // 在 claim 前确认日志可写与磁盘余量；预检失败时仍保持 prepared，不消耗模型请求。
+      active.resultPreflight = this.pendingResults.preflight(root)
       const claimed = await service.request('memory.vector.claim', input)
       if (!claimed.ok) {
         if (uncertain(claimed)) this.rememberVectorUncertain(active, claimed.error.requestId)
@@ -525,9 +607,8 @@ export class AiSessions {
         finish = { ...target, state: 'succeeded', response: parseMemoryEmbeddingResponse(JSON.parse(body), run.context.input.length) }
       } catch { throw new VectorError('protocol') }
     } catch (error) {
-      if (error instanceof UncertainWrite) return
       finish = active.stop === 'cancelled' ? { ...target, state: 'cancelled' } : { ...target, state: 'failed',
-        error: VECTOR_ERRORS[active.stop === 'timeout' ? 'timeout' : error instanceof VectorError ? error.kind : 'network'] }
+        error: VECTOR_ERRORS[active.stop === 'timeout' ? 'timeout' : error instanceof UncertainWrite ? 'connection' : error instanceof VectorError ? error.kind : 'network'] }
     } finally {
       clearTimeout(timer)
       active.controller.abort()
@@ -535,9 +616,9 @@ export class AiSessions {
     }
     if (active.stop === 'cancelled') finish = { ...target, state: 'cancelled' }
     const pending: PendingFinish = { command: 'memory.vector.finish', input: finish, root: active.root,
-      service: active.service, contextHash: run.context.contextHash, submission: { state: 'unsubmitted' } }
+      service: active.service, contextHash: run.context.contextHash, submission: { state: 'unsubmitted' }, resultPreflight: active.resultPreflight }
     this.pendingFinish = pending
-    await this.settleFinish(pending, active.service, false)
+    await this.settleFinish(pending, active.service)
   }
 
   private discardUnavailableConfigurations(service?: ServiceClient): void {
@@ -670,6 +751,8 @@ export class AiSessions {
       const apiKey = key?.baseUrl === connection.baseUrl ? key.value : ''
       if (!localEndpoint(connection.baseUrl) && !apiKey) return failure('FORBIDDEN', '这个远端连接尚无本次应用会话的密钥，请在连接设置中输入后再开始。')
       if (active.controller.signal.aborted) return failure('FORBIDDEN', '开始操作已取消，尚未向模型发送请求。')
+      // 先确认终态留存能力，再将候选置为 running；不把日志容量问题留到模型返回后。
+      active.resultPreflight = this.pendingResults.preflight(root)
       const claimed = await service.request('ai.claim', input)
       if (!claimed.ok) {
         if (uncertain(claimed)) this.rememberUncertain(active, claimed.error.requestId)
@@ -882,8 +965,9 @@ export class AiSessions {
       }
       terminalState = 'succeeded'
     } catch (failure) {
-      if (failure instanceof UncertainWrite) return
-      if (active.stop === 'cancelled') { terminalState = 'cancelled'; error = null }
+      // 检查点回执未知也必须留存已经收到的尾部；补存时先核对原请求与数据库，不重发模型。
+      if (failure instanceof UncertainWrite) error = CONSUMER_ERRORS.checkpoint
+      else if (active.stop === 'cancelled') { terminalState = 'cancelled'; error = null }
       else error = CONSUMER_ERRORS[active.stop === 'timeout' ? 'timeout' : failure instanceof StreamError ? failure.kind : 'network']
     } finally {
       clearTimeout(timer)
@@ -892,11 +976,11 @@ export class AiSessions {
       if (reader) void reader.cancel().catch(() => {})
     }
     if (active.stop === 'cancelled') { terminalState = 'cancelled'; error = null }
-    // 活动名额在确认补存前保持占用；文本与向量各有既有响应上限，最多保留一个最终 payload。
+    // 最终 payload 先写入书库留存文件，再提交业务进程；失败时继续保留内存和落盘原件。
     const pending: PendingFinish = { command: 'ai.finish', root: active.root, service: active.service,
-      contextHash: run.context.contextHash, submission: { state: 'unsubmitted' },
+      contextHash: run.context.contextHash, submission: { state: 'unsubmitted' }, resultPreflight: active.resultPreflight,
       input: { bookId: active.bookId, runId: active.runId, state: terminalState, outputText, usage, finishReason: streamState.finishReason, error } }
     this.pendingFinish = pending
-    await this.settleFinish(pending, active.service, false)
+    await this.settleFinish(pending, active.service)
   }
 }

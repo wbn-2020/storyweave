@@ -1,0 +1,258 @@
+{
+  "date": "2026-11-08",
+  "scope": "Standalone offline UI prototype, Chrome headless, no backend or model claims",
+  "checks": [
+    {
+      "name": "desktop initial view",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "rail navigation count",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "desk chapter rows",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "desk notes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "continue progress exists",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "quick note adds",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance modal opens",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "appearance modal closes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "palette opens",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "palette navigates to galaxy",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "galaxy nodes rendered",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "galaxy detail visible",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "galaxy related node selects",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "galaxy filter toggles",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "galaxy zoom control",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dark theme applies",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "writing page active",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "editor status visible",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "chapter switch",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "margin beats stacked",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "inline suggestion accepted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "focus mode enters",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "focus mode exits",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "review accept reduces count",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "review edit reaches manuscript",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "volume board cards",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "outline drawer opens",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "threads view",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "thread drawer opens",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "beats view",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "tension chart points",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "archive people selected",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "archive world tab",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "archive clue tab",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "archive candidate confirms",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "archive pending card visible",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "no horizontal overflow",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "name": "mobile chapter drawer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile chapter drawer closes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile margin drawer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile margin drawer closes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile galaxy list",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile galaxy opens detail",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "mobile galaxy detail closes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "new chapter joins outline",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "summary",
+      "ok": true,
+      "detail": "45 checks before summary"
+    }
+  ],
+  "errors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "overflow": [],
+  "screenshots": [
+    "checks/verify-desk.png",
+    "checks/verify-galaxy.png",
+    "checks/verify-desk-dark.png",
+    "checks/verify-write-dark.png",
+    "checks/verify-focus.png",
+    "checks/verify-write-edited.png",
+    "checks/verify-outline-beats.png",
+    "checks/verify-archive.png",
+    "checks/mobile-desk.png",
+    "checks/mobile-chapters.png",
+    "checks/mobile-margin.png",
+    "checks/mobile-outline.png",
+    "checks/mobile-galaxy.png",
+    "checks/mobile-archive.png",
+    "checks/mobile-review.png",
+    "checks/verify-new-chapter.png"
+  ]
+}

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { DomainError, type BookSnapshot, type RevisionSnapshot, type StudioApi } from '../../contracts/api'
 import { parseKnowledgeSource, type KnowledgeSourceInput, type KnowledgeStatus } from '../../contracts/knowledge'
-import { STORY_KINDS, parseStoryFields, type CreateStoryRecordInput, type StoryKind, type StoryRecordDetail, type StoryRecordFields, type StoryRecordPage, type StoryRevision, type UpdateStoryRecordInput } from '../../contracts/story'
+import { MAX_COGNITION_STATES, STORY_EVOLUTION_SCHEMA_VERSION, STORY_KINDS, cognitionStateAt, parseStoryFields, type CognitionState, type CreateStoryRecordInput, type StoryKind, type StoryRecordDetail, type StoryRecordFields, type StoryRecordPage, type StoryRevision, type UpdateStoryRecordInput } from '../../contracts/story'
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
-import { blockText, initialStoryFields, SourceEditor, stageLabels, StoryFieldsEditor, StoryFieldsView, storyKindLabels, timeLabel } from './StoryFieldsEditor'
+import { blockText, cognitionChangeLabels, initialStoryFields, SourceEditor, stageLabels, StoryFieldsEditor, StoryFieldsView, storyKindLabels, timeLabel } from './StoryFieldsEditor'
 import shared from '../App.module.css'
 import layout from './KnowledgePanel.module.css'
 import styles from './StoryPanel.module.css'
@@ -24,13 +24,32 @@ interface Props {
   onUpgrade: (accept: (status: KnowledgeStatus) => void) => Promise<void>
   onCreate: (input: CreateStoryRecordInput, accept: (saved: StoryRecordDetail) => void) => Promise<void>
   onUpdate: (input: UpdateStoryRecordInput, accept: (saved: StoryRecordDetail) => void) => Promise<void>
+  scenes?: { id: string; title: string; chapterId: string | null }[]
 }
 
 const PAGE_SIZE = 50
 const sourceLabels = { author_input: '作者输入', external: '外部资料说明', chapter_text: '固定正文引文' }
 const validityLabels = { valid: '出处可查', partial: '出处部分缺失', missing: '出处缺失' }
 
-export function StoryPanel({ api, book, initialKind = 'relation', busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate }: Props) {
+function CognitionHistoryView({ states, currentId, disabled, onSelect }: {
+  states: CognitionState[]; currentId: string; disabled: boolean; onSelect: (id: string) => void
+}) {
+  const [order, setOrder] = useState('')
+  const number = order === '' ? null : Number(order)
+  const valid = number !== null && Number.isSafeInteger(number) && Math.abs(number) <= 1_000_000_000
+  const selected = valid && number !== null ? cognitionStateAt(states, number) : null
+  const ended = selected?.fields.evolution?.kind === 'forgotten' || selected?.fields.evolution?.kind === 'refuted'
+  return <section className={styles.history} aria-label="人物认知历程">
+    <h4>按故事时间查看认知</h4>
+    <p className={styles.help}>此处是作者视图。每个状态的内容固定，有效期从形成时点开始，到设定截止或下一变化前结束；日期文字、章序和编辑时间不用于推断先后。</p>
+    <label>故事排序值<input type="number" min="-1000000000" max="1000000000" step="1" value={order} disabled={disabled} onChange={(event) => setOrder(event.target.value)} placeholder="输入与认知记录相同尺度的排序值" /></label>
+    {order !== '' && <div role="status">{!valid ? <p className={styles.help}>请输入绝对值不超过 10 亿的整数。</p> : selected ? <><p><strong>{selected.fields.title}</strong> · {ended ? '该时点已推翻或遗忘，不能作为仍持有的认知' : selected.fields.concealed ? '该时点持有认知并隐瞒' : '该时点持有的认知'}</p><blockquote className={styles.blockPreview}>{selected.fields.description}</blockquote><button type="button" className={shared.button} disabled={disabled || selected.id === currentId} onClick={() => onSelect(selected.id)}>查看此状态及来源</button></> : <p className={styles.help}>此时点没有有效且排序明确的已记录状态；不能据此推断人物知道或不知道。</p>}</div>}
+    <ol className={styles.historyList}>{states.map((state) => <li key={state.id}><button type="button" className={styles.historyButton} disabled={disabled || state.id === currentId} onClick={() => onSelect(state.id)}><strong>{state.fields.title} · {cognitionChangeLabels[state.fields.evolution?.kind ?? 'formed']}</strong><span>{timeLabel(state.fields.storyTime)} → {state.effectiveUntil.kind === 'unknown' ? '截止未定' : `${timeLabel(state.effectiveUntil)}（不含）`}</span></button></li>)}</ol>
+    {states.some((state) => !state.fields.evolution) && <p className={styles.help}>旧记录未单独记录故事变迁。此前编辑历史不自动推断为故事时间；请核对原内容，再追加明确时点的变化。</p>}
+  </section>
+}
+
+export function StoryPanel({ api, book, initialKind = 'relation', busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, scenes }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusRefresh, setStatusRefresh] = useState(0)
@@ -65,6 +84,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
   const childReads = useRef(new Set<string>())
   const archived = Boolean(book.book.archivedAt)
   const ready = status !== null && status.schemaVersion >= 4
+  const evolutionReady = status !== null && status.schemaVersion >= STORY_EVOLUTION_SCHEMA_VERSION
   const unavailable = busy || reading || writing || childReading || Boolean(pendingMessage)
   const names = detail?.labels ?? {}
 
@@ -110,12 +130,12 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
     return true
   }
   async function upgrade() {
-    if (!upgradeConfirmed || !status || ready || archived || unavailable || writeLock.current) return
+    if (!upgradeConfirmed || !status || evolutionReady || archived || unavailable || writeLock.current) return
     writeLock.current = true; setWriting(true); setMessage(null)
     try {
       await onUpgrade((saved) => {
         if (!mounted.current) return
-        if (saved.bookId !== book.book.id || saved.schemaVersion < 11) { setMessage('升级回执尚未确认 v11 可用，请保留窗口并核对。'); return }
+        if (saved.bookId !== book.book.id || saved.schemaVersion < STORY_EVOLUTION_SCHEMA_VERSION) { setMessage('升级回执尚未确认计划范围与认知变迁可用，请保留窗口并核对。'); return }
         setStatus(saved); setUpgradeConfirmed(false)
       })
     } catch { if (mounted.current) setMessage('升级结果尚未确认，请保留窗口并核对回执。') }
@@ -137,10 +157,25 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
   }
   function beginEdit(create: boolean) {
     if (!mayLeave() || archived || !ready || (create ? !page : !detail)) return
+    if (!evolutionReady && (kind === 'cognition' || kind === 'foreshadow')) { setMessage('编辑伏笔计划与认知变迁前，请先在本面板备份升级作品。原记录仍可查阅。'); return }
     setMode(create ? 'create' : 'edit'); setFields(create ? initialStoryFields(kind) : detail!.fields)
     // 编辑期间固定知识修订号；冲突后不从列表刷新中偷偷取得覆盖新资料的基线。
     setExpectedRevision(create ? page!.knowledgeRevision : detail!.knowledgeRevision)
     if (create) setDetail(null)
+    setSource(undefined); setHistoryDetail(null); setEvidence(null); setMessage(null); setDirtyState(true)
+  }
+  function beginCognitionChange() {
+    if (!mayLeave() || archived || !ready || !detail || detail.fields.kind !== 'cognition') return
+    if (!evolutionReady) { setMessage('追加认知变化前，请先在本面板备份升级作品。'); return }
+    const last = detail.cognitionHistory?.at(-1)
+    if (!last || last.id !== detail.id) { setMessage('请先在认知历程中打开最后一个状态，再追加下一次变化。'); return }
+    if ((detail.cognitionHistory?.length ?? 0) >= MAX_COGNITION_STATES) { setMessage(`一条认知历程最多 ${MAX_COGNITION_STATES} 个状态。`); return }
+    if (detail.fields.storyTime.kind === 'unknown' || detail.fields.storyTime.order === null) { setMessage('请先编辑本状态，补全明确的故事排序值，再追加变化。'); return }
+    setMode('create')
+    setFields({ ...detail.fields, storyTime: { kind: 'unknown' }, acquisitionEventId: null, disclosure: { state: 'unknown' },
+      nature: 'character_belief', authorDecision: 'unreviewed', freshness: 'current', conflictState: 'unchecked',
+      evolution: { kind: 'revised', previousId: detail.id, validUntil: { kind: 'unknown' } } })
+    setExpectedRevision(detail.knowledgeRevision)
     setSource(undefined); setHistoryDetail(null); setEvidence(null); setMessage(null); setDirtyState(true)
   }
   function discard() {
@@ -209,7 +244,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
     {archived && <p className={shared.helpText}>作品已归档，可查阅记录；解除归档后才能编辑。</p>}
     {statusLoading && <p className={layout.status} role="status">正在读取作品结构…</p>}
     {!statusLoading && !status && <button type="button" className={shared.button} disabled={unavailable} onClick={() => setStatusRefresh((value) => value + 1)}>重试读取状态</button>}
-    {status && !ready && <section className={layout.upgrade}><h3>为本书启用故事记录</h3><p>当前作品使用结构版本 {status.schemaVersion}。启用关系、事件、伏笔和认知前，将先保存独立数据库备份并核对，再升级到当前作品格式。原稿与知识历史保留。</p><label className={`${shared.checkLabel} ${layout.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份，再升级本书结构。</label><button type="button" className={shared.primaryButton} disabled={unavailable || archived || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用故事记录</button></section>}
+    {status && !evolutionReady && <section className={layout.upgrade}><h3>为本书启用计划范围与认知变迁</h3><p>当前作品使用结构版本 {status.schemaVersion}。先保存独立数据库备份并核对，再升级到当前作品格式。已有故事记录仍可查阅；原稿与历史快照保留。</p><label className={`${shared.checkLabel} ${layout.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份，再升级本书结构。</label><button type="button" className={shared.primaryButton} disabled={unavailable || archived || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用新故事记录</button></section>}
     {status?.backupPath && <p className={layout.backupPath}>本次升级前备份：{status.backupPath}</p>}
     {ready && <><nav className={styles.tabs} aria-label="故事记录类型">{STORY_KINDS.map((value) => <button key={value} type="button" aria-pressed={kind === value} disabled={unavailable} onClick={() => switchKind(value)}>{storyKindLabels[value]}</button>)}</nav>
       <div className={layout.layout}><aside className={layout.listPane} aria-label={`${storyKindLabels[kind]}列表`}>
@@ -220,7 +255,8 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
       </aside><section className={layout.detailPane} aria-label="故事记录详情">
         {reading && <p className={layout.status} role="status">正在读取固定记录…</p>}
         {mode === 'view' && !detail && !reading && <div className={layout.empty}><h3>把故事的变化留下来</h3><p>先选择记录，或新建关系、事件、伏笔与人物认知。实体来自本书知识库；所有引用按同一作品核对。</p></div>}
-        {mode === 'view' && detail && <><div className={layout.detailHeading}><div><span>{storyKindLabels[detail.fields.kind]}</span><h3>{detail.fields.title}</h3></div><button type="button" className={shared.button} disabled={unavailable || archived} onClick={() => beginEdit(false)}>编辑记录</button></div><StoryFieldsView fields={detail.fields} book={book} names={names} />
+        {mode === 'view' && detail && <><div className={layout.detailHeading}><div><span>{storyKindLabels[detail.fields.kind]}</span><h3>{detail.fields.title}</h3></div><button type="button" className={shared.button} disabled={unavailable || archived} onClick={() => beginEdit(false)}>{detail.fields.kind === 'cognition' ? '复核状态 / 补充来源' : '编辑记录'}</button></div><StoryFieldsView fields={detail.fields} book={book} names={names} />
+          {detail.fields.kind === 'cognition' && <><button type="button" className={shared.primaryButton} disabled={unavailable || archived} onClick={beginCognitionChange}>记录认知变化</button><CognitionHistoryView key={detail.id} states={detail.cognitionHistory ?? []} currentId={detail.id} disabled={unavailable} onSelect={(id) => void selectRecord(id)} /></>}
           <div className={layout.sectionHeading}><h4>记录来源</h4><span>出处可查不代表陈述已被证实</span></div><ul className={layout.sources}>{detail.sources.map((item) => <li key={item.id}><div><strong>{sourceLabels[item.sourceType]}</strong><span>{validityLabels[item.validity]}{item.referenceState && ` · ${item.referenceState === 'historical' ? '历史稿引用' : '当前稿引用'}`}</span></div><blockquote>{item.quote}</blockquote>{item.sourceType === 'chapter_text' && <><p className={layout.sourceIds}>章节 {item.chapterId} · 版本 {item.revisionId} · 段落 {item.blockId}</p><button type="button" className={shared.button} disabled={unavailable} onClick={() => void showSource(item)}>查看来源原稿</button></>}</li>)}</ul>{detail.sources.length === 0 && <p className={styles.help}>尚未追加记录来源。</p>}
           {milestoneSources.length > 0 && <><div className={layout.sectionHeading}><h4>伏笔里程碑原稿</h4></div>{milestoneSources.map((milestone) => <p key={milestone.id} className={layout.sourceIds}>{stageLabels[milestone.stage]} · {milestone.note}<button type="button" className={shared.button} disabled={unavailable} onClick={() => { if (milestone.source) void showSource(milestone.source) }}>查看里程碑来源</button></p>)}</>}
           {evidence && <section aria-label="来源版本上下文"><div className={layout.sectionHeading}><h4>来源原稿 · {displayTime(evidence.revision.createdAt)}</h4><button type="button" className={shared.button} disabled={unavailable} onClick={() => setEvidence(null)}>收起原稿</button></div><p className={layout.sourceIds}>固定版本 {evidence.revision.id} · 引用段落 {evidence.source.blockId}</p>{evidenceIndex < 0 ? <p className={styles.help}>此版本中未找到指定段落，未展示其他正文。</p> : evidence.revision.document.content.slice(Math.max(0, evidenceIndex - 1), evidenceIndex + 2).map((block) => <p key={block.attrs.id} className={block.attrs.id === evidence.source.blockId ? layout.evidenceQuote : layout.evidenceContext}>{blockText(block) || '分场线 / 空段落'}</p>)}</section>}
@@ -228,7 +264,10 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
           <ul className={styles.historyList}>{detail.revisions.map((revision) => <li key={revision.id}><button type="button" className={styles.historyButton} disabled={unavailable} aria-expanded={historyDetail?.id === revision.id} aria-controls="story-history-detail" onClick={() => void showHistory(revision.id)}><strong>{revision.title}</strong><span>知识版本 {revision.knowledgeRevision} · {revision.reason === 'created' ? '创建' : '更新'} · {displayTime(revision.createdAt)}</span></button></li>)}</ul>
           {historyDetail && <section id="story-history-detail" className={styles.history} aria-label="故事记录历史快照"><div className={layout.sectionHeading}><h4>{historyDetail.fields.title} · 知识版本 {historyDetail.knowledgeRevision}</h4><button type="button" className={shared.button} disabled={unavailable} onClick={() => setHistoryDetail(null)}>收起历史</button></div><p className={styles.help}>关联名称显示当前名称，历史关联身份与内容保持原快照。</p><StoryFieldsView fields={historyDetail.fields} book={book} names={historyDetail.labels} /></section>}
         </>}
-        {mode !== 'view' && <form className={styles.form} onSubmit={(event) => void save(event)}><div className={layout.detailHeading}><h3>{mode === 'create' ? '新建' : '编辑'}{storyKindLabels[fields.kind]}</h3><span>固定知识版本 {expectedRevision}</span></div><StoryFieldsEditor fields={fields} onChange={changeFields} api={api} book={book} disabled={unavailable || archived} names={names} savedMilestones={mode === 'edit' && detail?.fields.kind === 'foreshadow' ? detail.fields.milestones.length : 0} onReadingChange={onReadingChange} /><SourceEditor api={api} book={book} disabled={unavailable || archived} value={source} onReadingChange={onReadingChange} onChange={(value) => { setSource(value); setDirtyState(true); setMessage(null) }} /><div className={shared.formActions}><button type="button" className={shared.button} disabled={unavailable} onClick={discard}>{dirty ? '放弃本次修改' : '返回详情'}</button><button type="submit" className={shared.primaryButton} disabled={unavailable || archived || !fields.title.trim()}>{writing || busy ? '正在保存…' : '保存记录'}</button></div></form>}
+        {mode !== 'view' && <form className={styles.form} onSubmit={(event) => void save(event)}><div className={layout.detailHeading}><h3>{mode === 'create' ? '新建' : '编辑'}{storyKindLabels[fields.kind]}</h3><span>固定知识版本 {expectedRevision}</span></div><StoryFieldsEditor fields={fields} onChange={changeFields} api={api} book={book} disabled={unavailable || archived} names={names} savedMilestones={mode === 'edit' && detail?.fields.kind === 'foreshadow' ? detail.fields.milestones.length : 0}
+          savedCognition={mode === 'edit' && detail?.fields.kind === 'cognition' ? detail.fields : undefined}
+          previousCognition={mode === 'create' && detail?.fields.kind === 'cognition' ? detail.fields : undefined}
+          scenes={scenes} onReadingChange={onReadingChange} /><SourceEditor api={api} book={book} disabled={unavailable || archived} value={source} onReadingChange={onReadingChange} onChange={(value) => { setSource(value); setDirtyState(true); setMessage(null) }} /><div className={shared.formActions}><button type="button" className={shared.button} disabled={unavailable} onClick={discard}>{dirty ? '放弃本次修改' : '返回详情'}</button><button type="submit" className={shared.primaryButton} disabled={unavailable || archived || !fields.title.trim()}>{writing || busy ? '正在保存…' : '保存记录'}</button></div></form>}
       </section></div>
     </>}
   </Dialog>

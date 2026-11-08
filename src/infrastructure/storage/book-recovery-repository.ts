@@ -10,6 +10,18 @@ import {
   type BookRecoveryPrepareInput, type BookRecoveryPreview, type BookRecoveryRestoreInput, type BookRecoveryRestoreReceipt,
 } from '../../contracts/book-recovery'
 import { countCharacters, documentToText, MAX_CHAPTER_LENGTH, parseManuscript } from '../../contracts/manuscript'
+import { parseKnowledgeFields, parseKnowledgeSource } from '../../contracts/knowledge'
+import { parseStoryFields } from '../../contracts/story'
+import { parseNoteFields } from '../../contracts/notes'
+import { parseMemoryVectorValues } from '../../contracts/memory-vector'
+import { NotesRepository } from '../notes/notes-repository'
+import { AiRepository } from '../ai/ai-repository'
+import { AiMemoryTaskRepository } from '../ai/memory-task-repository'
+import { AiSummaryRepository } from '../ai/summary-repository'
+import { MemoryRepository } from '../memory/task-repository'
+import { MemorySearchRepository } from '../memory/search-repository'
+import { MemoryVectorRepository } from '../memory/vector-repository'
+import { validateWorkbenchDatabase } from '../workbench/workbench-repository'
 import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
 import { STORY_SCHEMA } from '../story/schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
@@ -19,7 +31,7 @@ import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
 import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
-import { BOOK_RECOVERY_COMPLETE, BOOK_RECOVERY_PENDING, type StudioRepository } from './studio-repository'
+import { BOOK_RECOVERY_COMPLETE, BOOK_RECOVERY_PENDING, StudioRepository } from './studio-repository'
 
 const MANIFEST_NAME = 'manifest.json'
 const MAX_SOURCE_BYTES = 32 * 1024 * 1024
@@ -244,6 +256,8 @@ function expectedSchema(version: number): Map<string, SchemaObject> {
   if (version >= 10) ddl += MEMORY_VECTOR_SCHEMA
   if (version >= 11) ddl += AI_MEMORY_MAINTENANCE_SCHEMA
   if (version >= 12) ddl += NOTES_SCHEMA
+  // 当前格式直接使用完整内置结构；新增工作台表随 BOOK_SCHEMA 一起进入恢复白名单。
+  if (version === BOOK_SCHEMA_VERSION) ddl = BOOK_SCHEMA
   // 只执行程序自带 DDL 构造私有参照库，FTS5 影子表与隐式索引由同一 SQLite 版本生成。
   // 恢复包中的 SQL 只作为待比较的文本，绝不交给 exec 或用于创建数据库对象。
   const reference = new Database(':memory:')
@@ -348,6 +362,140 @@ function verifyChapterMetadata(db: Database.Database): void {
   }
 }
 
+class RecoveryReadStudio extends StudioRepository {
+  constructor(private readonly probe: Database.Database, private readonly snapshotBook: BookSummary) { super() }
+  override getMemoryDatabase(bookId: string): Database.Database {
+    if (bookId !== this.snapshotBook.id) invalid('恢复资料引用了其他作品。')
+    return this.probe
+  }
+  override getNotesDatabase(bookId: string): { db: Database.Database; book: BookSummary } {
+    return { db: this.getMemoryDatabase(bookId), book: this.snapshotBook }
+  }
+}
+
+function verifyNonManuscriptData(db: Database.Database, version: number, book: BookSummary): void {
+  const identifier = (name: string) => {
+    if (!/^[a-z_][a-z_0-9]*$/.test(name)) invalid('程序内置恢复校验字段无效。')
+    return `"${name}"`
+  }
+  const knowledgeRevision = (db.prepare('SELECT knowledge_revision FROM book_meta WHERE singleton = 1').get() as { knowledge_revision: unknown }).knowledge_revision
+  requiredInteger(knowledgeRevision, '知识版本')
+  const parsed = (value: unknown): unknown => {
+    if (typeof value !== 'string') invalid('恢复资料缺少 JSON 内容。')
+    return JSON.parse(value)
+  }
+  const fixedBlock = (chapterId: unknown, revisionId: unknown, blockId: unknown, quote?: unknown) => {
+    requireCanonicalId(chapterId); requireCanonicalId(revisionId); requireCanonicalId(blockId)
+    const source = db.prepare('SELECT document_json FROM chapter_revisions WHERE chapter_id = ? AND id = ?').get(chapterId, revisionId) as { document_json: string } | undefined
+    if (!source) invalid('恢复资料的固定正文来源不存在。')
+    const document = parseManuscript(JSON.parse(source.document_json))
+    const block = document.content.find((item) => item.attrs.id === blockId)
+    if (!block || (typeof quote === 'string' && !documentToText({ type: 'doc', content: [block] }).includes(quote))) invalid('恢复资料的段落或逐字引文无法核对。')
+  }
+  const disclosure = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) { value.forEach(disclosure); return }
+    const object = value as Record<string, unknown>
+    if (object.state === 'located') fixedBlock(object.chapterId, object.revisionId, object.blockId)
+    Object.values(object).forEach(disclosure)
+  }
+  // 结构和外键不能证明 TEXT 身份、历史 JSON 或业务字段可读；逐行校验，不一次载入全书。
+  for (const table of expectedSchema(version).values()) {
+    if (table.type !== 'table' || !table.sql || !table.sql.startsWith('create\u001ftable') || table.name.startsWith('sqlite_') ||
+        table.name.startsWith('memory_chunks_fts') || ['book_meta', 'chapters', 'chapter_revisions', 'volumes'].includes(table.name)) continue
+    const name = identifier(table.name)
+    const columns = db.prepare(`PRAGMA table_info(${name})`).all() as { name: string; type: string }[]
+    for (const column of columns.filter((item) => item.type.toUpperCase() === 'TEXT')) {
+      if (db.prepare(`SELECT 1 FROM ${name} WHERE length(CAST(${identifier(column.name)} AS BLOB)) > 67108864 LIMIT 1`).get()) invalid(`恢复资料字段超限：${table.name}.${column.name}`)
+    }
+    const rows = db.prepare(`SELECT * FROM ${name}`).iterate() as Iterable<Record<string, unknown>>
+    for (const row of rows) {
+      for (const [key, value] of Object.entries(row)) {
+        if (value === null) continue
+        if (key === 'id' || key.endsWith('_id')) {
+          if (key === 'planning_after_id' && value === '') continue
+          if (typeof value === 'string') requireCanonicalId(value)
+          else requiredInteger(value, '资料标识')
+        }
+        if (key === 'book_id' && value !== book.id) invalid('恢复资料的作品身份不一致。')
+        if (key.endsWith('_at') && !isoTime(value)) invalid(`恢复资料时间无效：${table.name}.${key}`)
+        if (typeof value === 'number' && !Number.isSafeInteger(value)) invalid(`恢复资料整数越界：${table.name}.${key}`)
+        if ((key.endsWith('_hash') || key === 'sha256') && (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))) invalid(`恢复资料摘要无效：${table.name}.${key}`)
+        if (key.endsWith('_json')) parsed(value)
+      }
+      if (table.name === 'knowledge_items') {
+        parseKnowledgeFields({ kind: row.kind, name: row.name, aliases: parsed(row.aliases_json), summary: row.summary,
+          nature: row.nature, authorDecision: row.author_decision, freshness: row.freshness, conflictState: row.conflict_state })
+      } else if (table.name === 'knowledge_item_revisions') {
+        parseKnowledgeFields(parsed(row.fields_json))
+        requiredInteger(row.knowledge_revision, '知识历史版本', knowledgeRevision as number)
+      } else if (table.name === 'story_records' || table.name === 'story_record_revisions') {
+        const fields = parseStoryFields(parsed(row.fields_json), book.id)
+        disclosure(fields)
+        if (table.name === 'story_records') {
+          const time = fields.kind === 'relation' ? fields.validFrom : fields.storyTime
+          if (fields.kind !== row.kind || fields.title !== row.title || fields.description !== row.description ||
+              (time.kind === 'unknown' ? null : time.order) !== row.story_order) invalid('恢复包故事字段与列表资料不一致。')
+        } else requiredInteger(row.knowledge_revision, '故事历史版本', knowledgeRevision as number)
+      } else if (table.name === 'knowledge_sources' || table.name === 'story_sources') {
+        const source = parseKnowledgeSource({ sourceType: row.source_type, bookId: row.book_id, quote: row.quote,
+          ...(row.source_type === 'chapter_text' ? { chapterId: row.chapter_id, revisionId: row.revision_id, blockId: row.block_id } : {}) }, book.id)
+        if (source.sourceType === 'chapter_text') fixedBlock(source.chapterId, source.revisionId, source.blockId, source.quote)
+      } else if (table.name === 'notes') {
+        const fields = parseNoteFields({ category: row.category, title: row.title, body: row.body })
+        if (fields.title !== row.title) invalid('恢复包笔记标题不符合存储格式。')
+        requiredInteger(row.revision, '笔记版本', book.revision)
+      } else if (table.name === 'note_promotions') parseNoteFields(parsed(row.fields_json))
+      else if (table.name === 'memory_vectors') {
+        const vector = parseMemoryVectorValues(parsed(row.vector_json))
+        const profile = db.prepare('SELECT dimensions FROM memory_vector_profiles WHERE profile_hash = ?').get(row.profile_hash) as { dimensions: number } | undefined
+        const chunk = db.prepare('SELECT text FROM memory_chunks WHERE id = ?').get(row.chunk_id) as { text: string } | undefined
+        const run = db.prepare('SELECT kind, state, profile_hash FROM memory_vector_runs WHERE id = ?').get(row.run_id) as { kind: string; state: string; profile_hash: string } | undefined
+        const norm = vector.reduce((sum, value) => sum + value * value, 0)
+        if (!profile || vector.length !== profile.dimensions || !Number.isFinite(norm) || Math.abs(norm - 1) > 0.0001 ||
+            !chunk || createHash('sha256').update(chunk.text, 'utf8').digest('hex') !== row.text_hash ||
+            !run || run.kind !== 'index' || run.state !== 'succeeded' || run.profile_hash !== row.profile_hash) invalid('恢复包向量缓存的来源、维度或归一化数值不一致。')
+      }
+    }
+  }
+  const studio = new RecoveryReadStudio(db, book)
+  const memory = new MemoryRepository((id) => studio.getMemoryDatabase(id))
+  const search = new MemorySearchRepository((id) => studio.getMemoryDatabase(id), (input) => memory.status(input))
+  const ai = new AiRepository(studio, search)
+  const vectors = new MemoryVectorRepository((id) => studio.getMemoryDatabase(id), search)
+  const notes = new NotesRepository(studio)
+  const tasks = new AiMemoryTaskRepository(studio, ai)
+  const summaries = new AiSummaryRepository(studio, ai)
+  const eachId = (table: string, visit: (id: string) => void) => {
+    let after = ''
+    while (true) {
+      const rows = db.prepare(`SELECT id FROM ${identifier(table)} WHERE id > ? ORDER BY id LIMIT 128`).all(after) as { id: string }[]
+      for (const row of rows) visit(row.id)
+      if (rows.length < 128) return
+      after = rows.at(-1)!.id
+    }
+  }
+  const pages = (read: (afterOrdinal: number) => { nextAfterOrdinal: number | null }) => {
+    let after = 0
+    while (true) {
+      const page = read(after)
+      if (page.nextAfterOrdinal === null) return
+      if (!Number.isSafeInteger(page.nextAfterOrdinal) || page.nextAfterOrdinal <= after) invalid('恢复资料分页序号无效。')
+      after = page.nextAfterOrdinal
+    }
+  }
+  // 复用正常只读入口的上下文、采用审计和笔记转换校验；query_only 始终开启。
+  if (version >= 6) {
+    ai.listConnections({ bookId: book.id })
+    eachId('ai_runs', (runId) => { ai.get({ bookId: book.id, runId }) })
+  }
+  if (version >= 8) eachId('ai_memory_tasks', (taskId) => pages((afterOrdinal) => tasks.get({ bookId: book.id, taskId, afterOrdinal })))
+  if (version >= 9) eachId('ai_summary_tasks', (taskId) => pages((afterOrdinal) => summaries.get({ bookId: book.id, taskId, afterOrdinal })))
+  if (version >= 10) eachId('memory_vector_runs', (runId) => { vectors.get({ bookId: book.id, runId }) })
+  if (version >= 13) validateWorkbenchDatabase(db, book.id)
+  if (version >= 12) eachId('notes', (id) => { notes.get({ bookId: book.id, id }) })
+}
+
 function readSnapshot(db: Database.Database): Snapshot {
   const version = schemaVersion(db)
   if (db.pragma('quick_check(1)', { simple: true }) !== 'ok') invalid('作品数据库快速完整性检查未通过。')
@@ -412,6 +560,7 @@ function readSnapshot(db: Database.Database): Snapshot {
     const document = parseManuscript(JSON.parse(revision.document_json))
     if (documentToText(document) !== revision.plain_text || countCharacters(revision.plain_text) !== revision.character_count) invalid('恢复包正文历史与纯文本不一致。')
   }
+  verifyNonManuscriptData(db, version, book)
   return { book, schemaVersion: version, chapterCount, revisionCount, sources }
 }
 
@@ -488,6 +637,60 @@ function inspectPackage(packagePath: string, expectedHash?: string, markers: rea
 }
 
 function totalBytes(manifest: BookRecoveryManifest): number { return manifest.files.reduce((sum, file) => sum + file.bytes, 0) }
+
+function recoveryMarker(manifest: BookRecoveryManifest, manifestHash: string): Buffer {
+  return Buffer.from(JSON.stringify({ format: 'storyweave-recovery-commit', bookId: manifest.book.id,
+    packageId: manifest.packageId, manifestHash }) + '\n', 'utf8')
+}
+
+function verifyOrWrite(path: string, bytes: Buffer, guards: readonly PathIdentity[]): PathIdentity {
+  if (!lstatSync(path, { throwIfNoEntry: false })) return writeNew(path, bytes, guards)
+  checkGuards(guards)
+  const identity = checkedPath(path, false)
+  if (!readBounded(identity, Math.max(bytes.length, 1024)).equals(bytes)) invalid(`已有恢复记录与本次来源不符，未覆盖：${path}`)
+  return identity
+}
+
+function inspectRestoreTarget(booksPath: string, checked: CheckedPackage, registered: boolean): Pick<BookRecoveryPreview, 'targetState' | 'targetMessage' | 'conflict'> {
+  const target = join(booksPath, checked.manifest.book.id)
+  if (registered) return { targetState: 'conflict', conflict: true, targetMessage: '同一作品已经登记，请打开现有作品，或选择其他作品库恢复。' }
+  if (!lstatSync(target, { throwIfNoEntry: false })) return { targetState: 'new', conflict: false, targetMessage: '将在目标书库建立新作品目录。' }
+  try {
+    const directory = checkedPath(target, true)
+    const pendingPath = join(target, BOOK_RECOVERY_PENDING)
+    if (!lstatSync(pendingPath, { throwIfNoEntry: false })) return { targetState: 'conflict', conflict: true, targetMessage: '同名目录没有可核对的恢复来源记录，请保留目录并选择其他作品库。' }
+    const marker = recoveryMarker(checked.manifest, checked.manifestHash)
+    if (!readBounded(checkedPath(pendingPath, false), 1024).equals(marker)) invalid('目标目录属于其他恢复来源。')
+    const allowed = new Set([BOOK_RECOVERY_PENDING, BOOK_RECOVERY_COMPLETE, MANIFEST_NAME, 'book.sqlite', ...(checked.manifest.files.length > 1 ? ['sources'] : [])])
+    const checkEntries = (path: string, names: ReadonlySet<string>) => {
+      const entries = opendirSync(path)
+      try {
+        for (let entry = entries.readSync(); entry; entry = entries.readSync()) {
+          if (!names.has(entry.name) || entry.isSymbolicLink()) invalid('恢复目录中存在来源不明的项目。')
+        }
+      } finally { entries.closeSync() }
+    }
+    checkEntries(target, allowed)
+    const sources = join(target, 'sources')
+    if (lstatSync(sources, { throwIfNoEntry: false })) {
+      checkedPath(sources, true)
+      checkEntries(sources, new Set(checked.manifest.files.slice(1).map((file) => file.path.slice('sources/'.length))))
+    }
+    // 续办只接受原清单的完整文件；部分写入无法在不覆盖的前提下修复，应改用新目标。
+    for (const file of checked.manifest.files) {
+      const path = join(target, file.path)
+      if (lstatSync(path, { throwIfNoEntry: false })) matchFile(streamFile(checkedPath(path, false), file.path, file.bytes, [directory]), file)
+    }
+    for (const [name, bytes] of [[MANIFEST_NAME, checked.manifestBytes], [BOOK_RECOVERY_COMPLETE, marker]] as const) {
+      const path = join(target, name)
+      if (lstatSync(path, { throwIfNoEntry: false }) && !readBounded(checkedPath(path, false), Math.max(bytes.length, 1024)).equals(bytes)) invalid('恢复目录中的清单或完成记录不符。')
+    }
+    recheck(directory)
+    return { targetState: 'resumable', conflict: false, targetMessage: '发现同一恢复包的未登记目录。已有文件摘要一致，可确认续办；仅补齐缺失文件并完成登记。' }
+  } catch {
+    return { targetState: 'incomplete', conflict: true, targetMessage: '发现未完成或不一致的恢复目录，已有内容将保留。为避免覆盖部分文件，请选择其他作品库重新恢复。' }
+  }
+}
 
 export class BookRecoveryRepository {
   private prepared: PreparedPackage | null = null
@@ -614,10 +817,11 @@ export class BookRecoveryRepository {
       const current = this.studio.getBookRecoveryWorkspace(manifest.book.id)
       checkGuards([root, books])
       if (workspace.generation !== current.generation || !samePath(workspace.rootPath, current.rootPath)) invalid('预览期间书库发生变化，请重新预览。')
+      const target = inspectRestoreTarget(workspace.booksPath, checked, this.studio.getWorkspace().books.some((book) => book.id === manifest.book.id))
       const preview: BookRecoveryPreview = { token: randomUUID(), packageId: manifest.packageId, manifestHash: checked.manifestHash,
         createdAt: manifest.createdAt, book: manifest.book, schemaVersion: manifest.schemaVersion,
         chapterCount: manifest.chapterCount, revisionCount: manifest.revisionCount, sourceCount: manifest.files.length - 1,
-        totalBytes: totalBytes(manifest), packagePath: checked.directory.path, targetRoot: workspace.rootPath, conflict: current.conflict }
+        totalBytes: totalBytes(manifest), packagePath: checked.directory.path, targetRoot: workspace.rootPath, ...target }
       this.prepared = { preview, expiresAt: Date.now() + PREVIEW_TTL, generation: workspace.generation, root, books, checked }
       return { ...preview, book: { ...preview.book } }
     } catch (error) { throw failure(error, '预览恢复包') }
@@ -635,40 +839,47 @@ export class BookRecoveryRepository {
       }
       const workspace = this.studio.getBookRecoveryWorkspace(prepared.preview.book.id)
       if (workspace.generation !== prepared.generation || !samePath(workspace.rootPath, prepared.preview.targetRoot)) invalid('当前书库与预览时不同，请重新预览恢复包。')
-      if (prepared.preview.conflict || workspace.conflict) throw new DomainError({ code: 'REVISION_CONFLICT', message: '目标书库或目录中已存在相同作品身份，请选择不含该作品的书库。' })
+      if (prepared.preview.conflict || Boolean(data.resume) !== (prepared.preview.targetState === 'resumable')) throw new DomainError({ code: 'REVISION_CONFLICT', message: '请重新核对恢复目标，并明确确认新建或续办恢复。' })
       checkGuards([prepared.root, prepared.books, ...prepared.checked.guards])
       for (const file of prepared.checked.files) recheck(file, true)
       // 预览令牌只证明作者的选择；实际复制前重新读取全部字节，不信任旧校验结果。
       const checked = inspectPackage(prepared.preview.packagePath, prepared.preview.manifestHash)
       const manifest = checked.manifest
       if (manifest.packageId !== data.packageId || JSON.stringify(manifest) !== JSON.stringify(prepared.checked.manifest)) invalid('恢复包在预览后发生变化。')
-      if (this.studio.getBookRecoveryWorkspace(manifest.book.id).conflict) invalid('目标作品目录已存在，未覆盖任何文件。')
+      const targetState = inspectRestoreTarget(workspace.booksPath, checked, this.studio.getWorkspace().books.some((book) => book.id === manifest.book.id))
+      if (targetState.conflict || targetState.targetState !== prepared.preview.targetState) invalid('恢复目标在预览后发生变化，请重新预览；已有文件均保留。')
       const target = join(workspace.booksPath, manifest.book.id)
       checkGuards([prepared.root, prepared.books])
-      mkdirSync(target)
+      if (targetState.targetState === 'new') mkdirSync(target)
       retained = target
       const directory = checkedPath(target, true)
       const guards = [prepared.root, prepared.books, directory]
-      const marker = Buffer.from(JSON.stringify({ format: 'storyweave-recovery-commit', bookId: manifest.book.id,
-        packageId: manifest.packageId, manifestHash: checked.manifestHash }) + '\n', 'utf8')
-      const pending = writeNew(join(target, BOOK_RECOVERY_PENDING), marker, guards)
+      const marker = recoveryMarker(manifest, checked.manifestHash)
+      const pending = verifyOrWrite(join(target, BOOK_RECOVERY_PENDING), marker, guards)
       if (manifest.files.length > 1) {
-        mkdirSync(join(target, 'sources'))
+        if (!lstatSync(join(target, 'sources'), { throwIfNoEntry: false })) mkdirSync(join(target, 'sources'))
         guards.push(checkedPath(join(target, 'sources'), true))
       }
       for (let index = 0; index < manifest.files.length; index += 1) {
         const file = manifest.files[index]!
+        const destination = join(target, file.path)
+        if (lstatSync(destination, { throwIfNoEntry: false })) {
+          matchFile(streamFile(checkedPath(destination, false), file.path, file.bytes, guards), file)
+          continue
+        }
         const copied = streamFile(checked.files[index]!, file.path, file.path === 'book.sqlite' ? MAX_RECOVERY_BYTES : MAX_SOURCE_BYTES,
-          [...checked.guards, ...guards], join(target, file.path))
+          [...checked.guards, ...guards], destination)
         matchFile(copied, file)
       }
-      writeNew(join(target, MANIFEST_NAME), checked.manifestBytes, guards)
-      const verified = inspectPackage(target, checked.manifestHash, [BOOK_RECOVERY_PENDING])
+      verifyOrWrite(join(target, MANIFEST_NAME), checked.manifestBytes, guards)
+      const markers = lstatSync(join(target, BOOK_RECOVERY_COMPLETE), { throwIfNoEntry: false })
+        ? [BOOK_RECOVERY_PENDING, BOOK_RECOVERY_COMPLETE] : [BOOK_RECOVERY_PENDING]
+      const verified = inspectPackage(target, checked.manifestHash, markers)
       if (JSON.stringify(verified.manifest) !== JSON.stringify(manifest)) invalid('恢复目标与已确认的恢复包不一致。')
       recheck(pending, true)
       checkGuards(guards)
       // 完成标记只追加一次；任何更早的失败都由打开和孤立作品登记入口拒绝接管。
-      writeNew(join(target, BOOK_RECOVERY_COMPLETE), marker, guards)
+      verifyOrWrite(join(target, BOOK_RECOVERY_COMPLETE), marker, guards)
       const book = this.studio.registerRecoveredBook(manifest.book, workspace.rootPath, workspace.generation)
       return { packageId: manifest.packageId, manifestHash: checked.manifestHash, targetRoot: workspace.rootPath, book,
         chapterCount: manifest.chapterCount, revisionCount: manifest.revisionCount, sourceCount: manifest.files.length - 1 }

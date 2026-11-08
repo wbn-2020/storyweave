@@ -12,12 +12,15 @@ interface Props {
   error?: string | null
   onClose: () => void
   onCommit: (token: string, title: string) => void
+  onRotated?: () => void
 }
 
-type Reading = 'list' | 'file' | 'preview' | null
+type Reading = 'list' | 'file' | 'preview' | 'rotate' | null
 
-export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCommit }: Props) {
+export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCommit, onRotated }: Props) {
   const [drafts, setDrafts] = useState<RecoveryDraftList | null>(null)
+  const [generationId, setGenerationId] = useState<string | undefined>()
+  const [confirmRotation, setConfirmRotation] = useState(false)
   const [preview, setPreview] = useState<DraftImportPreview | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
@@ -42,12 +45,14 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
     return () => { mounted.current = false; requestSequence.current += 1; operation.current = null }
   }, [])
 
+  useEffect(() => { setGenerationId(undefined); setConfirmRotation(false) }, [scope])
+
   useEffect(() => {
     const ticket = ++requestSequence.current
     operation.current = ticket
     setReading('list'); setReadError(null); setDrafts(null); setPreview(null)
     setSelectedId(null); setAcknowledged(false); setSubmittedToken(null); submitted.current = null
-    void request(() => api.listRecoveryDrafts({ scope })).then((result) => {
+    void request(() => api.listRecoveryDrafts({ scope, generationId })).then((result) => {
       if (!mounted.current || ticket !== requestSequence.current || current.current.context !== context) return
       operation.current = null
       setReading(null)
@@ -55,7 +60,21 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
       setDrafts(result.data)
     })
     return () => { requestSequence.current += 1 }
-  }, [api, scope, context, attempt])
+  }, [api, scope, context, attempt, generationId])
+
+  async function rotate() {
+    if (!drafts || !confirmRotation || current.current.busy || operation.current !== null) return
+    const ticket = ++requestSequence.current
+    operation.current = ticket; setReading('rotate'); setReadError(null)
+    const result = await request(() => api.rotateRecoveryDrafts({ scope, expectedGenerationId: drafts.capacity.generationId }))
+    if (!mounted.current || ticket !== requestSequence.current || current.current.context !== context) return
+    operation.current = null; setReading(null)
+    if (!result.ok) { setReadError(result.error.message); return }
+    setConfirmRotation(false); setDrafts(result.data); setGenerationId(result.data.selectedGenerationId)
+    setAttempt((value) => value + 1)
+    // 新代发布后重试当前未保存稿件，避免容量失败的同一编辑序号一直等待下一次输入。
+    onRotated?.()
+  }
 
   async function prepare(checkpointId?: string) {
     if (current.current.busy || operation.current !== null) return
@@ -66,7 +85,7 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
     setSelectedId(checkpointId ?? null); setReading(checkpointId ? 'preview' : 'file')
     const target = { scope, bookId: book.id, expectedBookRevision: book.revision }
     const result = checkpointId
-      ? await request(() => api.previewRecoveryDraft({ ...target, checkpointId }))
+      ? await request(() => api.previewRecoveryDraft({ ...target, checkpointId, generationId: drafts?.selectedGenerationId }))
       : await request(() => api.selectDraftImport(target))
     if (!mounted.current || ticket !== requestSequence.current || current.current.context !== context) return
     operation.current = null
@@ -101,6 +120,17 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
       <button type="button" className={styles.button} disabled={locked} onClick={() => void prepare()}>{reading === 'file' ? '正在选择与读取…' : '选择 JSON 草稿副本'}</button>
       <button type="button" className={styles.button} disabled={locked} onClick={() => setAttempt((value) => value + 1)}>重新检查恢复草稿</button>
     </div>
+    {drafts && <section className={styles.fieldStack} aria-label="检查点容量与分代">
+      <p className={styles.helpText}>当前写入代：{drafts.capacity.generationId === 'legacy' ? '初始代' : drafts.capacity.generationId} ·
+        {drafts.capacity.files.toLocaleString()} / {drafts.capacity.maxFiles.toLocaleString()} 项 ·
+        {(drafts.capacity.bytes / 1024 / 1024).toFixed(1)} / {(drafts.capacity.maxBytes / 1024 / 1024).toFixed(0)} MiB。
+        检查点按代独立限额；旧代和已保存副本全部保留。</p>
+      <label>查看检查点代<select value={drafts.selectedGenerationId} disabled={locked} onChange={(event) => setGenerationId(event.target.value)}>
+        {drafts.generations.map((item) => <option key={item.id} value={item.id}>{item.createdAt ? formatTime(item.createdAt) : '初始代'}{item.active ? '（当前写入）' : '（保留）'}</option>)}
+      </select></label>
+      <label className={styles.checkLabel}><input type="checkbox" checked={confirmRotation} disabled={locked} onChange={(event) => setConfirmRotation(event.target.checked)} />保留全部旧检查点，新建一代承接后续自动保护</label>
+      <button type="button" className={styles.button} disabled={locked || !confirmRotation} onClick={() => void rotate()}>{reading === 'rotate' ? '正在建立新代…' : '建立检查点新代'}</button>
+    </section>}
     {drafts && drafts.warnings.length > 0 && <ul className={styles.warningList}>{drafts.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
     {drafts && drafts.skipped > 0 && <p className={styles.helpText}>{drafts.skipped} 项无法读取或不符合草稿格式，未作修改。</p>}
     <div className={styles.previewLayout}>

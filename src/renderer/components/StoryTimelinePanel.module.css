@@ -6,7 +6,9 @@
 .intro p { font-size: 14px; }
 .intro span { display: block; margin-top: 3px; color: var(--color-muted); font-size: 11px; }
 .toolbar { margin-top: 18px; }
-.orders { flex-wrap: wrap; }
+.orders { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-raised); }
+.orders button { padding: 7px 12px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--color-muted); }
+.orders button[aria-pressed='true'] { border-color: var(--color-line); color: var(--color-accent); background: var(--color-paper, var(--color-raised)); }
 .orders button:hover:not(:disabled) { background: var(--color-raised); }
 .panel button:active:not(:disabled) { background: var(--color-raised); }
 .sortNote { margin-top: 12px; color: var(--color-ink); line-height: 1.9; }

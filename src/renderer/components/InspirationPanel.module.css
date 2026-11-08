@@ -1,0 +1,31 @@
+.panel { min-width: 0; }
+.layout { display: grid; grid-template-columns: minmax(240px, .85fr) minmax(0, 1.15fr); align-items: start; gap: 28px; }
+.listPane, .detailPane { min-width: 0; }
+.items { list-style: none; padding: 0; margin: 0; }
+.items > li { padding: 16px 10px; border-bottom: 1px solid var(--home-line, #e0e2e6); }
+.items > .selected { background: #f0f5fc; border-radius: 8px; }
+.itemTitle { display: flex; flex-direction: column; align-items: start; gap: 5px; width: 100%; padding: 0 0 8px; border: 0; background: transparent; color: var(--home-ink, #1d1d1f); text-align: left; }
+.itemTitle > span { color: #636366; font-size: 12px; }
+.itemTitle > strong { font-size: 15px; font-weight: 600; }
+.itemTitle:hover:not(:disabled) > strong { color: var(--home-accent, #0865d1); }
+.preview { margin-bottom: 8px; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 8px; }
+.tags > span { padding: 2px 8px; border-radius: 999px; background: #eef0f3; color: #545a63; font-size: 12px; }
+.paging { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding-block: 18px; }
+.paging > span { flex: 1; text-align: center; }
+.editor { min-width: 0; padding-block: 16px; }
+.copy { display: grid; gap: 14px; min-width: 0; margin-top: 20px; padding-top: 20px; border-top: 1px solid #cbd1da; }
+.copy > button { justify-self: start; }
+.guide { padding-top: 16px; color: #636366; font-size: 13px; }
+.guide h4 { margin-bottom: 12px; color: var(--home-ink, #1d1d1f); }
+.guide p + p { margin-top: 14px; }
+
+@media (max-width: 1000px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .detailPane:has(form, section) { grid-row: 1; border-bottom: 1px solid var(--home-line, #e0e2e6); padding-bottom: 20px; }
+}
+@media (max-width: 420px) {
+  .items > li { padding-inline: 0; }
+  .items > .selected { padding-inline: 8px; }
+  .paging > span { order: 3; flex-basis: 100%; }
+}

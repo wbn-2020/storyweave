@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f1ebe1">
+  <meta name="description" content="织章 StoryWeave 小说工作台 UI 概念：书桌、写作、大纲、星图、档案与审阅。">
+  <title>织章 · StoryWeave — 书桌</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-desk" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1Z"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="m4 20 4.2-.9L19 8.3a2.12 2.12 0 0 0-3-3L5.2 16.1 4 20Z"/><path d="m13.8 6.5 3.7 3.7"/><path d="M4 20h4"/></symbol>
+      <symbol id="i-outline" viewBox="0 0 24 24"><path d="M5 5h14M5 12h9M5 19h12"/><path d="M19 10.5v3M17 12h4"/></symbol>
+      <symbol id="i-galaxy" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="6" r="1.3"/><circle cx="19" cy="7" r="1.3"/><circle cx="18" cy="18" r="1.3"/><circle cx="6" cy="18" r="1.3"/><path d="m6.1 6.8 4.1 3.6M17.8 7.8l-4 2.8M17.2 17.1l-3.5-3.6M7 17.3l3.4-3.5"/></symbol>
+      <symbol id="i-archive" viewBox="0 0 24 24"><path d="M5 4h10.5A3.5 3.5 0 0 1 19 7.5V20H8a3 3 0 0 1-3-3V4Z"/><path d="M8 4v16M11 8h4"/><circle cx="13" cy="13" r="2"/></symbol>
+      <symbol id="i-review" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.3 12.2 2.4 2.4 5-5.2"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.7" cy="10.7" r="6.7"/><path d="m16 16 4 4"/></symbol>
+      <symbol id="i-focus" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.3A8.2 8.2 0 0 1 9.7 4 8.5 8.5 0 1 0 20 14.3Z"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></symbol>
+      <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M7 17 17 7M8 7h9v9"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5V4Z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.6 4.7 3.3 7.4 8 8-4.7.6-7.4 3.3-8 8-.6-4.7-3.3-7.4-8-8 4.7-.6 7.4-3.3 8-8Z"/><path d="M19 17.5c.2 1.5 1 2.3 2.5 2.5-1.5.2-2.3 1-2.5 2.5-.2-1.5-1-2.3-2.5-2.5 1.5-.2 2.3-1 2.5-2.5Z"/></symbol>
+      <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4h14v11l-4 5H5V4Z"/><path d="M15 20v-5h4M8 9h8M8 13h5"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h7M15 7h5M4 17h3M11 17h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v16H7.5A2.5 2.5 0 0 0 5 21.5v-16Z"/><path d="M5 19a2 2 0 0 1 2-2h12M9 7h6"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="m9 4 6 6-2 2 3 4-5 4-1-6-3-3 2-2-1-3Z"/><path d="m10 16-4 4"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+      <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 4 3.5 19h17L12 4Z"/><path d="M12 9v4.5M12 16.5v.2"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V8M12 14v2"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></symbol>
+      <symbol id="i-drag" viewBox="0 0 24 24"><circle cx="9" cy="7" r="1"/><circle cx="15" cy="7" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="17" r="1"/><circle cx="15" cy="17" r="1"/></symbol>
+      <symbol id="i-quote" viewBox="0 0 24 24"><path d="M9.5 6C6.5 7.3 5 9.7 5 13v5h5v-5H7c0-2.2.8-3.7 2.5-4.6V6Zm9 0C15.5 7.3 14 9.7 14 13v5h5v-5h-3c0-2.2.8-3.7 2.5-4.6V6Z"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="grain" aria-hidden="true"></div>
+
+  <div class="app" id="app">
+    <aside class="rail" aria-label="主导航">
+      <button class="brand" data-nav="desk" aria-label="回到书桌">
+        <span class="brand-seal">织</span>
+        <span class="brand-word">织章</span>
+        <span class="brand-en">STORYWEAVE</span>
+      </button>
+
+      <nav class="rail-nav">
+        <button class="rail-item is-active" data-nav="desk" aria-current="page">
+          <svg class="icon"><use href="#i-desk"/></svg><span>书桌</span>
+        </button>
+        <button class="rail-item" data-nav="write">
+          <svg class="icon"><use href="#i-pen"/></svg><span>写作</span>
+        </button>
+        <button class="rail-item" data-nav="outline">
+          <svg class="icon"><use href="#i-outline"/></svg><span>大纲</span>
+        </button>
+        <button class="rail-item" data-nav="galaxy">
+          <svg class="icon"><use href="#i-galaxy"/></svg><span>星图</span>
+        </button>
+        <button class="rail-item" data-nav="archive">
+          <svg class="icon"><use href="#i-archive"/></svg><span>档案</span>
+        </button>
+        <button class="rail-item" data-nav="review">
+          <svg class="icon"><use href="#i-review"/></svg><span>审阅</span><i class="rail-badge" id="railReviewBadge">4</i>
+        </button>
+      </nav>
+
+      <div class="rail-foot">
+        <button class="rail-tool" id="quickNoteBtn" title="灵感便笺">
+          <svg class="icon"><use href="#i-note"/></svg><span>灵感</span>
+        </button>
+        <button class="rail-tool" id="settingsBtn" title="外观与设置">
+          <svg class="icon"><use href="#i-settings"/></svg><span>外观</span>
+        </button>
+        <button class="avatar" title="林深 · 本地创作者">深<i></i></button>
+      </div>
+    </aside>
+
+    <div class="shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="book-switch" id="bookSwitch" aria-haspopup="dialog" aria-expanded="false">
+            <span class="mini-cover"><span>雾</span></span>
+            <span class="book-switch-meta">
+              <strong>雾港来信</strong>
+              <small>林深 · 长篇悬疑</small>
+            </span>
+            <svg class="icon chev"><use href="#i-chevron"/></svg>
+          </button>
+          <span class="crumb-slash">/</span>
+          <span class="topbar-page" id="topbarPage">书桌</span>
+
+          <div class="book-pop" id="bookPop" hidden>
+            <p class="pop-label">当前作品</p>
+            <button class="book-pop-row is-current">
+              <span class="mini-cover"><span>雾</span></span>
+              <span><b>雾港来信</b><small>4 章 · 5,916 字 · 正在写作</small></span>
+              <svg class="icon"><use href="#i-check"/></svg>
+            </button>
+            <p class="pop-label">其他作品</p>
+            <button class="book-pop-row" data-other-book="山海之间">
+              <span class="mini-cover mini-cover--mountain"><span>山</span></span>
+              <span><b>山海之间</b><small>12 章 · 8.4 万字 · 暂停</small></span>
+            </button>
+            <button class="book-pop-row" data-other-book="写给很久以后">
+              <span class="mini-cover mini-cover--letter"><span>信</span></span>
+              <span><b>写给很久以后</b><small>3 章 · 1.2 万字 · 草稿</small></span>
+            </button>
+            <button class="book-pop-foot" data-shelf-jump>打开作品书架 <svg class="icon"><use href="#i-arrow"/></svg></button>
+          </div>
+        </div>
+
+        <button class="omni" id="omniBtn" aria-label="打开命令面板">
+          <svg class="icon"><use href="#i-search"/></svg>
+          <span>搜索章节、人物、线索</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+
+        <div class="topbar-actions">
+          <span class="local-chip"><svg class="icon"><use href="#i-lock"/></svg>仅本机</span>
+          <span class="save-state" id="saveState"><i></i><span id="saveText">已保存</span><time id="saveTime">02:14</time></span>
+          <button class="icon-btn mobile-only" id="mobileSearchBtn" title="搜索" aria-label="打开命令面板">
+            <svg class="icon"><use href="#i-search"/></svg>
+          </button>
+          <button class="icon-btn" id="focusTop" title="专注模式" aria-label="专注模式">
+            <svg class="icon"><use href="#i-focus"/></svg>
+          </button>
+          <button class="icon-btn" id="themeBtn" title="切换纸色" aria-label="切换纸色">
+            <svg class="icon icon-moon"><use href="#i-moon"/></svg>
+            <svg class="icon icon-sun"><use href="#i-sun"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="main" id="main">
+        <!-- ============================== 书桌 ============================== -->
+        <section class="view view-desk is-active" data-view="desk" aria-labelledby="deskHeading">
+          <div class="desk-head">
+            <div class="desk-head-copy">
+              <p class="eyebrow"><span class="eyebrow-line"></span><span id="deskDate">FRIDAY, 08 NOVEMBER</span><span class="eyebrow-dot"></span><span id="deskClock">02:14</span></p>
+              <h1 class="display" id="deskHeading">夜里好，<br><em>故事还在等你。</em></h1>
+              <p class="lede">《雾港来信》停在第 2 章。上次落笔是六个小时前，窗外也起雾了。</p>
+            </div>
+            <div class="streak" aria-label="连续写作 14 天">
+              <div class="streak-copy"><strong id="streakNum">14</strong><span>天<br>连续写作</span></div>
+              <svg class="streak-line" viewBox="0 0 112 44" aria-hidden="true">
+                <path d="M2 34c10-1 12-9 21-8s10 8 19 6 12-17 21-16 10 9 18 7 12-13 20-14 9 4 9 4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                <circle cx="100" cy="7" r="2.2" fill="currentColor"/>
+              </svg>
+            </div>
+          </div>
+
+          <div class="desk-grid">
+            <article class="continue-card">
+              <div class="continue-cover">
+                <div class="book-cover book-cover--fog book-cover--hero" aria-label="《雾港来信》封面">
+                  <svg class="cover-scene" viewBox="0 0 240 336" aria-hidden="true">
+                    <defs>
+                      <linearGradient id="fogSky" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#263837"/><stop offset=".52" stop-color="#162424"/><stop offset="1" stop-color="#0b1313"/>
+                      </linearGradient>
+                      <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0" stop-color="#e6d7b3" stop-opacity=".34"/><stop offset="1" stop-color="#e6d7b3" stop-opacity="0"/>
+                      </radialGradient>
+                      <linearGradient id="beamFade" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0" stop-color="#d8c79e" stop-opacity=".22"/><stop offset="1" stop-color="#d8c79e" stop-opacity="0"/>
+                      </linearGradient>
+                      <linearGradient id="seaFade" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#243634"/><stop offset="1" stop-color="#080f0f"/>
+                      </linearGradient>
+                    </defs>
+                    <rect width="240" height="336" fill="url(#fogSky)"/>
+                    <circle cx="176" cy="78" r="64" fill="url(#moonGlow)"/>
+                    <circle cx="176" cy="78" r="25" fill="#ded0ae" opacity=".16"/>
+                    <path d="M70 92 8 54v70l62-18Z" fill="url(#beamFade)"/>
+                    <path d="M70 92 8 108v28l62-30Z" fill="url(#beamFade)" opacity=".7"/>
+                    <path d="M58 92h24l-4-14H62Z" fill="#080e0e"/>
+                    <path d="M62 92h16l6 126H56Z" fill="#091010"/>
+                    <path d="M60 92h20M58 108h24M57 128h26" stroke="#b7a379" stroke-opacity=".25" stroke-width="1"/>
+                    <rect x="64" y="74" width="12" height="7" fill="#c9b27f" opacity=".65"/>
+                    <path d="M0 218c42-5 72 4 112 0s78 5 128-2v120H0Z" fill="url(#seaFade)"/>
+                    <path d="M0 238c34-4 58 3 92 0s54 3 90 0 40 2 58 0M0 258c48-3 66 3 104 0s66 4 94 1 32 1 42 0M0 283c40 2 68-4 104-1s52 4 80 1 42 2 56 1" fill="none" stroke="#8ea19a" stroke-opacity=".14" stroke-width="1"/>
+                    <path d="M0 302h18l7-18 9 11 8-23 12 30h29l10-14 11 14h126v34H0Z" fill="#070d0d"/>
+                    <g stroke="#c4b692" stroke-opacity=".08" stroke-width="1">
+                      <path d="M0 156h240M0 174h240M0 192h240M0 206h240"/>
+                    </g>
+                  </svg>
+                  <span class="cover-frame"></span>
+                  <span class="cover-title">雾港来信</span>
+                  <span class="cover-author">林深 / 著</span>
+                  <span class="cover-imprint">STORYWEAVE · 01</span>
+                </div>
+                <span class="cover-ribbon">长篇 · 悬疑</span>
+              </div>
+
+              <div class="continue-body">
+                <p class="eyebrow"><span class="eyebrow-line"></span>CONTINUE · 继续写作</p>
+                <div class="continue-title-row">
+                  <div>
+                    <p class="continue-kicker">第 2 章</p>
+                    <h2 id="continueChapter">没有署名的信</h2>
+                  </div>
+                  <span class="status-pill draft" id="continueStatus">草稿</span>
+                </div>
+                <p class="continue-meta" id="continueMeta">506 / 2,500 字 <span>·</span> 最后保存 02:14 <span>·</span> 第 2 稿</p>
+                <blockquote class="excerpt" id="continueExcerpt">“林遥回到雾港那天，雨已经下了整整一夜。车站外的梧桐叶落了一地，旧报亭的灯还亮着，玻璃上凝着一层薄雾。”</blockquote>
+                <div class="continue-actions">
+                  <button class="btn btn-primary" data-nav="write">继续写作 <svg class="icon"><use href="#i-arrow"/></svg></button>
+                  <button class="btn btn-ghost" data-nav="outline">查看大纲</button>
+                </div>
+                <div class="continue-progress" id="continueProgress">
+                  <div class="progress-label"><span>本章进度</span><strong>20%</strong></div>
+                  <div class="progress-track"><i style="width:20%"></i><b style="left:20%"></b></div>
+                  <p>还差 1,994 字到本章目标。慢慢来。</p>
+                </div>
+              </div>
+              <span class="chapter-ghost" aria-hidden="true">02</span>
+            </article>
+
+            <aside class="desk-rail">
+              <section class="today-panel">
+                <header><span class="eyebrow">TODAY</span><span class="today-date">11.08</span></header>
+                <div class="today-main">
+                  <div class="today-number"><strong id="todayWords">506</strong><span>字</span></div>
+                  <div class="goal-ring" style="--p:34" aria-label="今日目标完成 34%">
+                    <span>34<small>%</small></span>
+                  </div>
+                </div>
+                <p class="today-caption">42 分钟 · 2 次停笔 · 目标 1,500 字</p>
+                <div class="today-ticks" aria-hidden="true">
+                  <i class="done"></i><i class="done"></i><i class="done"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                </div>
+              </section>
+
+              <section class="next-panel">
+                <header><span class="eyebrow">NEXT</span><button class="link-btn" data-nav="review">全部</button></header>
+                <ul class="next-list">
+                  <li><button data-nav="review"><span class="next-icon warn"><svg class="icon"><use href="#i-warning"/></svg></span><span><b id="deskReviewCount">4 处待审阅</b><small id="deskConflictNote">其中 2 处规则冲突</small></span><svg class="icon arrow"><use href="#i-arrow"/></svg></button></li>
+                  <li><button data-nav="outline"><span class="next-icon sage"><svg class="icon"><use href="#i-branch"/></svg></span><span><b>2 条线索待回收</b><small>“不要回头” 还剩 4 章</small></span><svg class="icon arrow"><use href="#i-arrow"/></svg></button></li>
+                  <li><button data-nav="archive"><span class="next-icon gold"><svg class="icon"><use href="#i-spark"/></svg></span><span><b id="deskPendingCount">2 条 AI 提取待确认</b><small>来自第 2 章的新事实</small></span><svg class="icon arrow"><use href="#i-arrow"/></svg></button></li>
+                </ul>
+              </section>
+
+              <section class="quote-panel">
+                <svg class="icon quote-icon"><use href="#i-quote"/></svg>
+                <p>“雾不是天气，是有人不想让你看清。”</p>
+                <footer><span>第 3 章 · 待用对白</span><button class="icon-btn tiny" title="转到笔记"><svg class="icon"><use href="#i-arrow-up"/></svg></button></footer>
+              </section>
+            </aside>
+          </div>
+
+          <div class="desk-lower">
+            <section class="desk-section chapters-section">
+              <header class="section-head">
+                <div><span class="eyebrow">MANUSCRIPT</span><h2>故事脉络</h2></div>
+                <button class="link-btn" data-nav="outline">打开大纲 <svg class="icon"><use href="#i-arrow"/></svg></button>
+              </header>
+              <div class="chapter-list" id="deskChapters"></div>
+            </section>
+
+            <section class="desk-section notes-section" id="notesSection">
+              <header class="section-head">
+                <div><span class="eyebrow">MARGIN</span><h2>余白</h2></div>
+                <span class="count-badge" id="noteCount">4</span>
+              </header>
+              <form class="quick-note" id="noteForm">
+                <input id="noteInput" type="text" maxlength="120" placeholder="记下一句、一个念头…" autocomplete="off">
+                <button class="icon-btn" type="submit" aria-label="收进笔记"><svg class="icon"><use href="#i-plus"/></svg></button>
+              </form>
+              <ul class="note-list" id="deskNotes"></ul>
+              <p class="notes-hint">笔记不会自动进入正文。它们只是留在桌边的纸片。</p>
+            </section>
+          </div>
+
+          <section class="shelf-section" id="shelfSection">
+            <header class="section-head">
+              <div><span class="eyebrow">SHELF</span><h2>书架</h2></div>
+              <button class="link-btn" data-shelf-info>全部作品 <svg class="icon"><use href="#i-arrow"/></svg></button>
+            </header>
+            <div class="shelf-row">
+              <button class="shelf-book is-current" data-nav="write">
+                <span class="book-cover book-cover--fog book-cover--mini"><span class="cover-title">雾港来信</span><span class="cover-imprint">01</span></span>
+                <span class="shelf-meta"><b>雾港来信</b><small>正在写作 · 第 2 章</small></span>
+              </button>
+              <button class="shelf-book" data-other-book="山海之间">
+                <span class="book-cover book-cover--mountain book-cover--mini"><span class="cover-title">山海之间</span><span class="cover-imprint">02</span></span>
+                <span class="shelf-meta"><b>山海之间</b><small>12 章 · 暂停</small></span>
+              </button>
+              <button class="shelf-book" data-other-book="写给很久以后">
+                <span class="book-cover book-cover--letter book-cover--mini"><span class="cover-title">写给很久以后</span><span class="cover-imprint">03</span></span>
+                <span class="shelf-meta"><b>写给很久以后</b><small>3 章 · 草稿</small></span>
+              </button>
+              <button class="shelf-book shelf-new" id="newBookBtn">
+                <span class="new-cover"><svg class="icon"><use href="#i-plus"/></svg><span>新作品</span></span>
+                <span class="shelf-meta"><b>从一句话开始</b><small>新建作品</small></span>
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <!-- ============================== 写作 ============================== -->
+        <section class="view view-write" data-view="write" aria-label="正文写作">
+          <div class="write-layout">
+            <aside class="chapter-pane" id="chapterPane" aria-label="章节目录">
+              <div class="pane-head">
+                <div><span class="eyebrow">MANUSCRIPT</span><h2>章节目录</h2></div>
+                <div class="pane-head-actions">
+                  <button class="icon-btn" id="addChapterBtn" title="新建章节" aria-label="新建章节"><svg class="icon"><use href="#i-plus"/></svg></button>
+                  <button class="icon-btn mobile-only" id="closeChapters" title="关闭目录" aria-label="关闭目录"><svg class="icon"><use href="#i-close"/></svg></button>
+                </div>
+              </div>
+              <label class="search-inline">
+                <svg class="icon"><use href="#i-search"/></svg>
+                <input id="chapterSearch" type="search" placeholder="搜索章节" autocomplete="off">
+              </label>
+              <div class="chapter-scroll" id="chapterList"></div>
+              <div class="pane-foot">
+                <button class="text-btn" id="newVolumeBtn"><svg class="icon"><use href="#i-plus"/></svg>新建一卷</button>
+                <button class="text-btn" id="historyBtn"><svg class="icon"><use href="#i-clock"/></svg>版本历史</button>
+              </div>
+            </aside>
+
+            <div class="editor-pane">
+              <div class="editor-top">
+                <button class="icon-btn mobile-only" id="openChapters" aria-label="打开章节目录"><svg class="icon"><use href="#i-menu"/></svg></button>
+                <div class="editor-meta" id="editorMeta"><span>第 2 章</span><i></i><span>草稿</span><i></i><span>506 / 2,500 字</span></div>
+                <div class="editor-actions">
+                  <button class="text-btn" id="snapshotBtn"><svg class="icon"><use href="#i-save"/></svg>保存快照</button>
+                  <button class="text-btn" id="focusBtn"><svg class="icon"><use href="#i-focus"/></svg>专注</button>
+                  <button class="icon-btn pane-toggle" id="marginToggle" title="本章与建议" aria-label="打开本章与建议"><svg class="icon"><use href="#i-layers"/></svg></button>
+                </div>
+              </div>
+
+              <div class="paper-scroll" id="paperScroll">
+                <article class="paper" aria-label="章节正文">
+                  <header class="paper-head">
+                    <p class="folio">雾港来信 <span>/</span> 第一卷 · 雾中来信</p>
+                    <h1 class="paper-title" id="paperTitle" contenteditable="true" spellcheck="false">没有署名的信</h1>
+                    <div class="paper-byline"><span>林深</span><span id="paperChapterNo">第 2 章</span><span id="paperWords">506 字</span></div>
+                  </header>
+                  <div class="prose" id="prose" contenteditable="true" spellcheck="false">
+                    <p>林遥回到雾港那天，雨已经下了整整一夜。车站外的梧桐叶落了一地，旧报亭的灯还亮着，玻璃上凝着一层薄雾。</p>
+                    <p>她从口袋里摸出那封信。信封边缘被反复摩挲，已经起了毛边。没有寄件人，没有落款，只有一个她七年没有再听过的名字。</p>
+                    <p>码头的方向传来一声汽笛。她抬头，看见远处灰白色的天际线正在缓缓变亮。记忆里的灯塔本该在更左边一些，但此刻那里只有一片空白。</p>
+                  </div>
+                  <footer class="paper-foot"><span id="paperFolioNo">02</span><span>雾港来信 · 林深</span></footer>
+                </article>
+              </div>
+
+              <div class="editor-status">
+                <span class="status-save"><i class="status-dot"></i><span id="statusSaveText">已保存</span><time id="statusSaveTime">02:14</time></span>
+                <span class="status-sep"></span>
+                <span>今日 <b id="statusToday">506</b> 字</span>
+                <span class="status-spacer"></span>
+                <button class="status-btn" id="typewriterBtn">打字机</button>
+                <button class="status-btn" id="focusBtn2">专注模式</button>
+              </div>
+            </div>
+
+            <aside class="margin-pane" id="marginPane" aria-label="本章与建议">
+              <div class="margin-head">
+                <div class="segmented" role="tablist" aria-label="边栏内容">
+                  <button class="is-active" data-margin="chapter" role="tab" aria-selected="true">本章</button>
+                  <button data-margin="memory" role="tab" aria-selected="false">记忆</button>
+                  <button data-margin="suggest" role="tab" aria-selected="false">建议 <span class="badge" id="suggestBadge">2</span></button>
+                </div>
+                <button class="icon-btn" id="closeMargin" aria-label="关闭边栏"><svg class="icon"><use href="#i-close"/></svg></button>
+              </div>
+              <div class="margin-scroll">
+                <section class="margin-panel is-active" data-margin-panel="chapter">
+                  <div class="margin-block">
+                    <p class="margin-label">本章目标</p>
+                    <p class="goal-quote" id="marginGoal">让林遥发现灯塔消失，并留下信来源的疑问。</p>
+                  </div>
+                  <div class="margin-block">
+                    <p class="margin-label">场景节拍 <span id="beatProgress">1 / 3</span></p>
+                    <ol class="margin-beats" id="marginBeats"></ol>
+                  </div>
+                  <div class="margin-block">
+                    <p class="margin-label">在场人物</p>
+                    <div class="chip-row" id="marginPeople"></div>
+                  </div>
+                  <div class="margin-block margin-grid">
+                    <div><p class="margin-label">视角</p><p class="margin-value" id="marginPov">第三人称 · 林遥</p></div>
+                    <div><p class="margin-label">时间</p><p class="margin-value">11 月 3 日 · 清晨</p></div>
+                  </div>
+                  <div class="margin-alert">
+                    <svg class="icon"><use href="#i-warning"/></svg>
+                    <div><b>2 条连续性提醒</b><p>沈砚的左手伤势、许青禾的电话记录。</p><button class="link-btn" data-nav="review">去审阅</button></div>
+                  </div>
+                </section>
+
+                <section class="margin-panel" data-margin-panel="memory">
+                  <div class="margin-intro"><span class="eyebrow">MEMORY</span><p>写作时只显示与本章相关的已确认事实。每条都能回到出处。</p></div>
+                  <article class="memory-card">
+                    <span class="memory-type">世界规则</span>
+                    <p>雾季从 11 月 3 日开始，持续四十天。雾起时，镇上不点路灯。</p>
+                    <footer><button type="button" data-locate-chapter="1">第 1 章 · 回到雾港</button><span class="confirmed"><svg class="icon"><use href="#i-check"/></svg>已确认</span></footer>
+                  </article>
+                  <article class="memory-card">
+                    <span class="memory-type">人物状态</span>
+                    <p>沈砚左手在船难中受伤，阴雨天会发抖。第 1 章仍用左手点烟。</p>
+                    <footer><button type="button" data-locate-chapter="1">第 1 章 · 回到雾港</button><span class="confirmed"><svg class="icon"><use href="#i-check"/></svg>已确认</span></footer>
+                  </article>
+                  <article class="memory-card">
+                    <span class="memory-type">伏笔</span>
+                    <p>“不要回头看。”第 2 章埋下，计划在第 6 章回收。</p>
+                    <footer><button type="button" data-locate-chapter="2">第 2 章 · 没有署名的信</button><span class="planned">计划中</span></footer>
+                  </article>
+                  <article class="memory-card memory-card--muted">
+                    <span class="memory-type">未确认候选</span>
+                    <p>许青禾在船难前寄出过一封信。</p>
+                    <footer><button type="button" data-locate-chapter="2">来自第 2 章</button><span>待作者确认</span></footer>
+                  </article>
+                  <button class="btn btn-ghost full" data-nav="archive">打开完整故事档案 <svg class="icon"><use href="#i-arrow"/></svg></button>
+                </section>
+
+                <section class="margin-panel" data-margin-panel="suggest">
+                  <div class="margin-intro"><span class="eyebrow">SUGGESTIONS</span><p>建议只是建议。接受、改写或忽略，正文都由你决定。</p></div>
+                  <article class="suggestion-card" id="suggestionCard">
+                    <header><span class="suggestion-kind">语气 · 第 9 段</span><span class="suggestion-source">演示建议</span></header>
+                    <p class="suggestion-original">她第一次意识到，那句话也许不是用来吓小孩的。</p>
+                    <div class="suggestion-alt"><span>更克制</span><p>那句话，也许不是说给小孩听的。</p></div>
+                    <footer><button class="btn btn-primary small" data-accept-suggestion>替换</button><button class="btn btn-ghost small" data-ignore-suggestion>忽略</button></footer>
+                  </article>
+                  <article class="suggestion-card suggestion-card--warn">
+                    <header><span class="suggestion-kind">连续性 · 第 1 段</span><span class="suggestion-source">规则检出</span></header>
+                    <p>第 1 章沈砚左手受伤，本章他仍用左手点烟。</p>
+                    <button class="link-btn" data-nav="review">查看出处与影响 <svg class="icon"><use href="#i-arrow"/></svg></button>
+                  </article>
+                  <div class="generate-block">
+                    <div class="generate-head"><span class="eyebrow">CONTINUE WITH MEMORY</span><span class="demo-tag">演示 · 未连接模型</span></div>
+                    <p>基于本章目标、4 条已确认记忆和最近 800 字，生成一个可编辑的下一段。</p>
+                    <button class="btn btn-primary full" id="generateBtn"><svg class="icon"><use href="#i-spark"/></svg><span>续写下一段</span></button>
+                    <div class="generated-draft" id="generatedDraft" hidden>
+                      <p class="generated-text">她把信翻到背面。那里有一道很浅的折痕，像是曾经夹过什么。林遥想起母亲整理旧信时，总习惯把日期朝里折。</p>
+                      <div class="generated-actions"><button class="btn btn-primary small" data-adopt-draft>采用到正文</button><button class="btn btn-ghost small" data-discard-draft>丢弃</button></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </aside>
+          </div>
+          <div class="pane-backdrop" id="paneBackdrop" hidden></div>
+        </section>
+
+        <!-- ============================== 大纲 ============================== -->
+        <section class="view view-outline" data-view="outline" aria-labelledby="outlineHeading">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow"><span class="eyebrow-line"></span>STRUCTURE · <span id="outlineCount">2 卷 7 章</span></p>
+              <h1 class="display" id="outlineHeading">故事不是一条线，<br><em>而是一张网。</em></h1>
+              <p class="lede">在章节之间看见因果，在线索之间看见回声。先搭骨架，再让文字长出血肉。</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-ghost" id="pacingBtn"><svg class="icon"><use href="#i-spark"/></svg>节奏检查</button>
+              <button class="btn btn-primary" data-new-chapter><svg class="icon"><use href="#i-plus"/></svg>新增章节</button>
+            </div>
+          </div>
+
+          <div class="outline-toolbar">
+            <div class="tabs" role="tablist" aria-label="大纲视图" data-tabs="outline">
+              <button class="is-active" data-tab="volumes" role="tab" aria-selected="true">卷章</button>
+              <button data-tab="threads" role="tab" aria-selected="false">线索</button>
+              <button data-tab="beats" role="tab" aria-selected="false">节拍</button>
+            </div>
+            <div class="outline-meta"><span>17,900 字已成稿</span><span class="meta-dot"></span><span>预计 12.6 万字</span><span class="meta-dot"></span><span>更新于 02:14</span></div>
+          </div>
+
+          <div class="tab-panel is-active" data-tab-panel="volumes">
+            <div class="volume-board" id="volumeBoard"></div>
+            <div class="board-note"><svg class="icon"><use href="#i-drag"/></svg>拖动章节卡片可以调整顺序。原型中的改动只保留在当前页面。</div>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="threads">
+            <div class="thread-header">
+              <div><span class="eyebrow">THREADS</span><h2>五条线，穿过七章</h2></div>
+              <div class="thread-legend"><span><i class="thread-dot main"></i>主线</span><span><i class="thread-dot heart"></i>情感</span><span><i class="thread-dot clue"></i>悬疑</span><span><i class="thread-dot seed"></i>伏笔</span></div>
+            </div>
+            <div class="thread-board" id="threadBoard"></div>
+            <p class="board-note"><svg class="icon"><use href="#i-warning"/></svg>“不要回头”从第 2 章埋下，到第 6 章才计划回收，间隔 4 章。点击节点查看窗口。</p>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="beats">
+            <div class="beat-hero">
+              <div class="beat-hero-copy"><span class="eyebrow">TENSION CURVE</span><h2>这一卷的呼吸</h2><p>情绪不是一路向上。好的结构知道什么时候收紧，什么时候让读者喘口气。</p></div>
+              <div class="act-legend"><span><b>起</b> 01–02</span><span><b>承</b> 03–04</span><span><b>转</b> 05–06</span><span><b>合</b> 07</span></div>
+            </div>
+            <div class="tension-chart" id="tensionChart"></div>
+            <div class="beat-list" id="beatList"></div>
+          </div>
+        </section>
+
+        <!-- ============================== 星图 ============================== -->
+        <section class="view view-galaxy" data-view="galaxy" aria-labelledby="galaxyHeading">
+          <div class="page-head galaxy-head">
+            <div>
+              <p class="eyebrow"><span class="eyebrow-line"></span>STORY GALAXY · 12 个故事对象</p>
+              <h1 class="display" id="galaxyHeading">每个名字，<br><em>都有自己的引力。</em></h1>
+              <p class="lede">人物、地点、线索和事件不是孤岛。拖动节点，看看谁被谁牵动。</p>
+            </div>
+            <div class="galaxy-controls">
+              <label class="search-inline light-on-dark">
+                <svg class="icon"><use href="#i-search"/></svg>
+                <input id="galaxySearch" type="search" placeholder="在星图中寻找…" autocomplete="off">
+              </label>
+              <div class="chip-filters" id="galaxyFilters" role="group" aria-label="按类型筛选"></div>
+            </div>
+          </div>
+
+          <div class="galaxy-stage" id="galaxyStage">
+            <div class="galaxy-canvas" id="galaxyCanvas">
+              <svg id="galaxySvg" viewBox="0 0 1200 720" role="img" aria-label="故事关系星图">
+                <g id="galaxyViewport">
+                  <g id="galaxyStars"></g>
+                  <g id="galaxyEdges"></g>
+                  <g id="galaxyNodes"></g>
+                </g>
+              </svg>
+              <div class="galaxy-legend">
+                <span><i class="legend-node character"></i>人物</span>
+                <span><i class="legend-node place"></i>地点</span>
+                <span><i class="legend-node clue"></i>线索</span>
+                <span><i class="legend-node event"></i>事件</span>
+                <span><i class="legend-node object"></i>物品</span>
+              </div>
+              <div class="galaxy-zoom">
+                <button id="zoomOut" aria-label="缩小">−</button>
+                <span id="galaxyZoomLabel">100%</span>
+                <button id="zoomIn" aria-label="放大">+</button>
+                <button id="zoomReset" class="zoom-reset" aria-label="重置视图"><svg class="icon"><use href="#i-focus"/></svg></button>
+              </div>
+              <p class="galaxy-hint" id="galaxyHint">拖动节点 · 滚轮缩放 · 点击查看</p>
+            </div>
+            <aside class="galaxy-detail" id="galaxyDetail" aria-live="polite"></aside>
+          </div>
+          <div class="galaxy-mobile-list" id="galaxyMobileList" aria-label="故事对象列表"></div>
+        </section>
+
+        <!-- ============================== 档案 ============================== -->
+        <section class="view view-archive" data-view="archive" aria-labelledby="archiveHeading">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow"><span class="eyebrow-line"></span>STORY BIBLE · 已确认 <span id="archiveTotal">15</span> 条设定</p>
+              <h1 class="display" id="archiveHeading">先有可信的人，<br><em>才有可信的故事。</em></h1>
+              <p class="lede">人物、地点、规则与伏笔。每条设定都有出处，也能看见它影响哪些章节。</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-ghost" id="extractBtn"><svg class="icon"><use href="#i-spark"/></svg>AI 提取设定</button>
+              <button class="btn btn-primary" id="newArchiveBtn"><svg class="icon"><use href="#i-plus"/></svg>新建档案</button>
+            </div>
+          </div>
+
+          <div class="archive-layout">
+            <aside class="archive-index">
+              <div class="tabs" data-tabs="archive" id="archiveTabs" role="tablist" aria-label="档案分类">
+                <button class="is-active" data-tab="people" role="tab" aria-selected="true">人物 <span>4</span></button>
+                <button data-tab="world" role="tab" aria-selected="false">世界 <span>5</span></button>
+                <button data-tab="clues" role="tab" aria-selected="false">线索 <span>6</span></button>
+              </div>
+              <label class="search-inline">
+                <svg class="icon"><use href="#i-search"/></svg>
+                <input id="archiveSearch" type="search" placeholder="搜索档案" autocomplete="off">
+              </label>
+              <div class="archive-list" id="archiveList"></div>
+              <div class="pending-card" id="pendingCard">
+                <div class="pending-head"><span class="eyebrow">AI 提取 · 待确认</span><span class="pending-count" id="pendingCount">2</span></div>
+                <p class="pending-quote">“许青禾在船难前寄出过一封信。”</p>
+                <p class="pending-source">来自第 2 章 · 没有署名的信</p>
+                <div class="pending-actions"><button class="btn btn-primary small" id="confirmCandidate">确认设定</button><button class="btn btn-ghost small" id="ignoreCandidate">忽略</button></div>
+              </div>
+            </aside>
+            <article class="archive-detail" id="archiveDetail" aria-live="polite"></article>
+          </div>
+        </section>
+
+        <!-- ============================== 审阅 ============================== -->
+        <section class="view view-review" data-view="review" aria-labelledby="reviewHeading">
+          <div class="page-head review-head">
+            <div>
+              <p class="eyebrow"><span class="eyebrow-line"></span>REVIEW · 基于 v13 草稿</p>
+              <h1 class="display" id="reviewHeading">把决定权，<br><em>留给作者。</em></h1>
+              <p class="lede">规则负责找出确定的问题，模型只提出建议。每一条都带着出处，等你判断。</p>
+            </div>
+            <div class="review-stats">
+              <div><strong id="openIssueCount">4</strong><span>待处理</span></div>
+              <div><strong id="ruleConflictCount">1</strong><span>规则冲突</span></div>
+              <div><strong id="memoryCount">2</strong><span>记忆候选</span></div>
+            </div>
+          </div>
+
+          <div class="review-toolbar">
+            <div class="tabs" role="tablist" aria-label="审阅筛选" data-tabs="review" id="reviewTabs">
+              <button class="is-active" data-tab="all" role="tab" aria-selected="true">全部 <span id="tabAllCount">4</span></button>
+              <button data-tab="consistency" role="tab" aria-selected="false">一致性 <span id="tabConsistencyCount">2</span></button>
+              <button data-tab="suggestion" role="tab" aria-selected="false">修改建议 <span id="tabSuggestionCount">1</span></button>
+              <button data-tab="memory" role="tab" aria-selected="false">记忆候选 <span id="tabMemoryCount">1</span></button>
+            </div>
+            <span class="review-sync"><i></i>正文 v13 · 02:14 已同步</span>
+          </div>
+
+          <div class="review-layout">
+            <aside class="issue-list" id="issueList" aria-label="待审阅问题"></aside>
+            <article class="issue-detail" id="issueDetail" aria-live="polite"></article>
+            <aside class="evidence-pane" id="evidencePane" aria-label="出处与影响"></aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <nav class="mobile-nav" aria-label="移动端主导航">
+    <button class="is-active" data-nav="desk"><svg class="icon"><use href="#i-desk"/></svg><span>书桌</span></button>
+    <button data-nav="write"><svg class="icon"><use href="#i-pen"/></svg><span>写作</span></button>
+    <button data-nav="outline"><svg class="icon"><use href="#i-outline"/></svg><span>大纲</span></button>
+    <button data-nav="galaxy"><svg class="icon"><use href="#i-galaxy"/></svg><span>星图</span></button>
+    <button data-nav="archive"><svg class="icon"><use href="#i-archive"/></svg><span>档案</span></button>
+    <button data-nav="review"><svg class="icon"><use href="#i-review"/></svg><span>审阅</span><i class="mobile-badge" id="mobileReviewBadge">4</i></button>
+  </nav>
+
+  <div class="focus-hud" id="focusHud" aria-live="polite">
+    <div class="focus-hud-left"><span class="focus-dot"></span><span id="focusChapter">第 2 章 · 没有署名的信</span></div>
+    <div class="focus-hud-center"><time id="focusTimer">00:00</time><span>本次专注</span></div>
+    <div class="focus-hud-right"><span><b id="focusWords">506</b> 字</span><button class="btn btn-ghost small" id="exitFocus">退出专注 <kbd>Esc</kbd></button></div>
+  </div>
+
+  <div class="selection-toolbar" id="selectionToolbar" hidden>
+    <button data-cmd="bold" title="加粗"><b>B</b></button>
+    <button data-cmd="italic" title="斜体"><i>I</i></button>
+    <button data-cmd="underline" title="下划线"><u>U</u></button>
+    <span class="sel-sep"></span>
+    <button data-cmd="mark" title="高亮">高亮</button>
+    <button data-cmd="ai" title="就这段问 AI"><svg class="icon"><use href="#i-spark"/></svg>问 AI</button>
+  </div>
+
+  <div class="palette-backdrop" id="palette" hidden>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="命令面板">
+      <div class="palette-search">
+        <svg class="icon"><use href="#i-search"/></svg>
+        <input id="paletteInput" type="text" placeholder="输入页面、章节、人物或命令…" autocomplete="off" spellcheck="false">
+        <kbd>ESC</kbd>
+      </div>
+      <div class="palette-results" id="paletteResults"></div>
+      <footer class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>Esc</kbd> 关闭</span><span class="palette-brand">织章 · 命令</span></footer>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+      <header class="modal-head">
+        <div><span class="eyebrow">APPEARANCE</span><h2 id="settingsTitle">写作外观</h2></div>
+        <button class="icon-btn" data-close-modal aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </header>
+      <div class="settings-body">
+        <section class="setting-group">
+          <div class="setting-label"><b>纸色</b><small>界面会记住你这次的选择，但原型不写入本地存储。</small></div>
+          <div class="theme-options" id="themeOptions">
+            <button data-theme-choice="light" class="is-active"><span class="theme-swatch light"></span><b>宣纸</b><small>日间</small></button>
+            <button data-theme-choice="dark"><span class="theme-swatch dark"></span><b>夜墨</b><small>夜间</small></button>
+          </div>
+        </section>
+        <section class="setting-group setting-row">
+          <div class="setting-label"><b>正文字号</b><small>只影响编辑器里的正文。</small></div>
+          <div class="range-wrap"><input type="range" id="fontSizeRange" min="16" max="23" step="1" value="19"><output id="fontSizeOut">19 px</output></div>
+        </section>
+        <section class="setting-group setting-row">
+          <div class="setting-label"><b>行距</b><small>长段落更需要呼吸。</small></div>
+          <div class="range-wrap"><input type="range" id="lineHeightRange" min="17" max="25" step="1" value="21"><output id="lineHeightOut">2.1</output></div>
+        </section>
+        <section class="setting-group setting-row">
+          <div class="setting-label"><b>减少动效</b><small>关闭页面切换与浮层过渡。</small></div>
+          <label class="switch"><input type="checkbox" id="reduceMotion"><span></span></label>
+        </section>
+        <section class="shortcut-list">
+          <p class="eyebrow">KEYBOARD</p>
+          <div><span>命令面板</span><kbd>Ctrl</kbd><kbd>K</kbd></div>
+          <div><span>专注模式</span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F</kbd></div>
+          <div><span>退出浮层</span><kbd>Esc</kbd></div>
+        </section>
+      </div>
+      <footer class="modal-foot"><span>以上设置只作用于当前原型页面。</span><button class="btn btn-primary" data-close-modal>完成</button></footer>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="chapterModal" hidden>
+    <form class="modal chapter-modal" id="chapterForm" role="dialog" aria-modal="true" aria-labelledby="chapterModalTitle">
+      <header class="modal-head">
+        <div><span class="eyebrow">NEW CHAPTER</span><h2 id="chapterModalTitle">新建章节</h2></div>
+        <button class="icon-btn" type="button" data-close-modal aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </header>
+      <div class="modal-body">
+        <label class="field"><span>章节标题</span><input name="title" type="text" maxlength="40" placeholder="例如：潮汐之后" required></label>
+        <label class="field"><span>所属卷</span><select name="volume"><option value="1">第一卷 · 雾中来信</option><option value="2">第二卷 · 潮汐之下</option></select></label>
+        <label class="field"><span>本章目标 <small>可稍后补</small></span><textarea name="goal" rows="3" maxlength="120" placeholder="这一章要推进什么？留下什么疑问？"></textarea></label>
+      </div>
+      <footer class="modal-foot"><span>会加入目录末尾，不会自动生成正文。</span><button class="btn btn-primary" type="submit">加入目录</button></footer>
+    </form>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <span id="toastText"></span>
+    <button id="toastAction" hidden></button>
+    <button class="toast-close" id="toastClose" aria-label="关闭提示"><svg class="icon"><use href="#i-close"/></svg></button>
+  </div>
+
+  <div class="drawer-root" id="drawerRoot"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

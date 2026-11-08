@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import { DomainError } from '../../contracts/api'
+import { DomainError, requiredId } from '../../contracts/api'
 import {
   MAX_KNOWLEDGE_HISTORY_PAGE, MAX_KNOWLEDGE_ITEMS, MAX_KNOWLEDGE_SOURCES,
   parseCreateKnowledgeItem, parseKnowledgeFields, parseKnowledgeItemInput,
@@ -122,6 +122,25 @@ export class KnowledgeRepository {
     })
   }
 
+  updateItemWithSources(input: UpdateKnowledgeItemInput, expectedRevisionId: string, sources: readonly KnowledgeSourceInput[]): KnowledgeItemDetail {
+    return perform(() => {
+      const data = parseUpdateKnowledgeItem(input)
+      const expected = requiredId(expectedRevisionId).toLowerCase()
+      if (data.source || !sources.length || sources.length > MAX_KNOWLEDGE_SOURCES) {
+        throw new DomainError({ code: 'INVALID_INPUT', message: '关联或修订须提供明确且数量受限的来源集合。' })
+      }
+      const { db } = this.studio.getKnowledgeDatabase(data.bookId)
+      return db.transaction(() => {
+        // 作者查看过的实体修订和知识库 CAS 同时成立，才能追加来源或保存字段修订。
+        const current = this.readDetail(db, data.bookId, data.id)
+        if (current.revisions[0]?.id !== expected) {
+          throw new DomainError({ code: 'REVISION_CONFLICT', message: '目标实体已有新修订，请重新读取并核对，当前审阅不会覆盖新资料。' })
+        }
+        return this.writeItem(data, data.id, sources.map((source) => parseKnowledgeSource(source, data.bookId)))
+      }).immediate()
+    })
+  }
+
   private writeItem(data: CreateKnowledgeItemInput, existingId?: string, additionalSources: readonly KnowledgeSourceInput[] = []): KnowledgeItemDetail {
     const { db } = this.studio.getKnowledgeDatabase(data.bookId)
     const id = existingId ?? randomUUID()
@@ -136,6 +155,15 @@ export class KnowledgeRepository {
       if (previous?.kind === 'person' && data.fields.kind !== 'person' && (db.pragma('user_version', { simple: true }) as number) >= 4 &&
           db.prepare("SELECT record_id FROM story_entity_refs WHERE entity_id = ? AND role = 'cognition_subject' LIMIT 1").get(id)) {
         throw new DomainError({ code: 'INVALID_INPUT', message: '这个人物仍被人物认知记录引用，请先调整对应认知主体，再更改条目类型。' })
+      }
+      if (previous && (previous.kind === 'person' || previous.kind === 'place') && data.fields.kind !== previous.kind &&
+          db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scene_cards'").get()) {
+        // 归档场景仍保留人物和地点语义；改类型前须解除现存场景关联，旧库无场景表时跳过。
+        const scene = db.prepare(`SELECT id FROM scene_cards
+          WHERE json_extract(fields_json, '$.locationId') = ?
+            OR EXISTS (SELECT 1 FROM json_each(scene_cards.fields_json, '$.characterIds') WHERE value = ?)
+          LIMIT 1`).get(id, id)
+        if (scene) throw new DomainError({ code: 'INVALID_INPUT', message: '这个人物或地点仍被场景卡引用（包括归档场景），请先调整场景关联，再更改条目类型。' })
       }
       const sources = [...(data.source ? [data.source] : []), ...additionalSources].filter((source, index, values) => {
         this.requireSource(source)

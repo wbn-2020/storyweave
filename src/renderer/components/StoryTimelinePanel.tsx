@@ -299,7 +299,7 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
       </div>
       <p className={shared.helpText}>性质与作者决定分别标注，全部筛选包含已否决记录。未来计划、AI 推断与人物认知不能视为既成事实，作者采纳也不等于事实核实。</p>
       <div className={styles.toolbar}>
-        <div className={`${shared.segmented} ${styles.orders}`} role="group" aria-label="时间线排序方式">
+        <div className={styles.orders} role="group" aria-label="时间线排序方式">
           <button type="button" disabled={disabled} aria-pressed={listing.order === 'story'} onClick={() => refreshSnapshot({ order: 'story' })}>故事顺序</button>
           <button type="button" disabled={disabled} aria-pressed={listing.order === 'disclosure'} onClick={() => refreshSnapshot({ order: 'disclosure' })}>披露章节顺序</button>
         </div>

@@ -4,9 +4,9 @@ import { DomainError, requiredId, requiredText } from '../../contracts/api'
 import { countCharacters, documentToText, parseManuscript, type ManuscriptDocument } from '../../contracts/manuscript'
 import { parseKnowledgeSource, type KnowledgeSourceInput } from '../../contracts/knowledge'
 import {
-  FORESHADOW_STAGES, MAX_STORY_HISTORY_PAGE, MAX_STORY_RECORDS, MAX_STORY_SOURCES, STORY_KINDS,
+  FORESHADOW_STAGES, MAX_COGNITION_STATES, MAX_STORY_HISTORY_PAGE, MAX_STORY_RECORDS, MAX_STORY_SOURCES, STORY_EVOLUTION_SCHEMA_VERSION, STORY_KINDS,
   parseCreateStoryRecord, parseListStoryRecords, parseStoryFields, parseStoryRecordInput, parseStoryRevisionInput, parseStoryTime, parseUpdateStoryRecord,
-  type CreateStoryRecordInput, type Disclosure, type ListStoryRecordsInput, type StoryRecordDetail,
+  type CognitionFields, type CognitionState, type CreateStoryRecordInput, type Disclosure, type ListStoryRecordsInput, type PlannedPayoff, type StoryRecordDetail,
   type StoryRecordFields, type StoryRecordInput, type StoryRecordListItem, type StoryRecordPage, type StoryRecordSummary,
   type StoryRevision, type StoryRevisionInput, type StoryRevisionSummary, type StorySource, type UpdateStoryRecordInput,
 } from '../../contracts/story'
@@ -118,12 +118,23 @@ function links(fields: StoryRecordFields): { entities: EntityRef[]; events: Even
 
 function disclosures(fields: StoryRecordFields): Disclosure[] {
   return fields.kind === 'foreshadow'
-    ? [fields.disclosure, fields.plannedPayoff, fields.actualPayoff, ...fields.milestones.map((item) => item.disclosure)]
+    ? [fields.disclosure, ...(fields.plannedPayoff.state === 'located' ? [fields.plannedPayoff] : []), fields.actualPayoff, ...fields.milestones.map((item) => item.disclosure)]
     : [fields.disclosure]
 }
 
 function ensureMilestoneHistory(previous: StoryRecordFields, next: StoryRecordFields): void {
   if (previous.kind !== next.kind) invalid('已有记录的类型不能更改，请另建对应类型的记录。')
+  if (previous.kind === 'cognition' && next.kind === 'cognition') {
+    // 同一状态的内容一经保存就固定；故事里的变化另建后继状态，避免后期真相覆盖早期误解。
+    const fixed = (fields: CognitionFields) => ({ title: fields.title, description: fields.description, personId: fields.personId,
+      attitude: fields.attitude, concealed: fields.concealed, acquisitionEventId: fields.acquisitionEventId })
+    if (JSON.stringify(fixed(previous)) !== JSON.stringify(fixed(next))) invalid('已保存的认知内容不能改写；请用“记录认知变化”追加新的故事状态。作者决定、复核标记与来源仍可更新。')
+    if (previous.storyTime.kind !== 'unknown' && previous.storyTime.order !== null && JSON.stringify(previous.storyTime) !== JSON.stringify(next.storyTime)) {
+      invalid('已确定的认知形成时间不能移动；请保留旧状态并追加变化。')
+    }
+    if (previous.evolution && JSON.stringify(previous.evolution) !== JSON.stringify(next.evolution)) invalid('已保存的认知变迁关系、有效截止与转换来源不能改写。')
+    if (!previous.evolution && next.evolution?.previousId) invalid('旧认知记录只能补充初始有效期；已有内容不能改挂到另一认知链。')
+  }
   if (previous.kind !== 'foreshadow' || next.kind !== 'foreshadow') return
   // 已记录的里程碑属于创作历史，只能追加，不能通过整条保存删改旧阶段和出处。
   if (next.milestones.length < previous.milestones.length || previous.milestones.some((item, index) =>
@@ -203,6 +214,11 @@ export class StoryRepository {
 
   private writeRecord(data: CreateStoryRecordInput, existingId?: string): StoryRecordDetail {
     const { db } = this.studio.getStoryDatabase(data.bookId)
+    const extended = data.fields.kind === 'cognition' && data.fields.evolution !== undefined ||
+      data.fields.kind === 'foreshadow' && 'label' in data.fields.plannedPayoff
+    if (extended && (db.pragma('user_version', { simple: true }) as number) < STORY_EVOLUTION_SCHEMA_VERSION) {
+      throw new DomainError({ code: 'FORBIDDEN', message: '请先在故事记录面板备份升级作品，再保存计划范围与认知变迁。' })
+    }
     const id = existingId ?? randomUUID()
     const detail = db.transaction(() => {
       const state = readState(db, data.bookId)
@@ -220,6 +236,11 @@ export class StoryRepository {
       const references = links(data.fields)
       this.requireLinks(db, data.bookId, references)
       this.requireDisclosures(db, disclosures(data.fields))
+      if (data.fields.kind === 'foreshadow') {
+        this.requirePlannedPayoff(db, data.fields.plannedPayoff)
+        if (data.fields.stage === 'resolved' && data.fields.actualPayoff.state !== 'located') invalid('标记已回收前，请选择实际回收的固定正文版本与段落。')
+      }
+      if (data.fields.kind === 'cognition') this.requireCognitionState(db, data.bookId, data.fields, existingId)
       const candidates = [...(data.source ? [data.source] : []), ...(data.fields.kind === 'foreshadow'
         ? data.fields.milestones.flatMap((item) => item.source ? [item.source] : []) : [])]
       const unique = [...new Map(candidates.map((source) => [JSON.stringify(source), source])).values()]
@@ -280,6 +301,108 @@ export class StoryRepository {
     }
     const event = db.prepare("SELECT id FROM story_records WHERE id = ? AND book_id = ? AND kind = 'event'")
     for (const ref of references.events) if (!event.get(ref.id, bookId)) invalid('关联事件不存在于当前作品，请先建立事件记录。')
+  }
+
+  private requirePlannedPayoff(db: Database.Database, target: PlannedPayoff): void {
+    if (target.state === 'volume' && target.volumeId && !db.prepare('SELECT id FROM volumes WHERE id = ?').get(target.volumeId)) {
+      invalid('计划回收关联的卷不存在；尚未建立的卷请使用文字名称并取消已有卷关联。')
+    }
+    if ((target.state === 'chapter' || target.state === 'scene') && target.chapterId && !db.prepare('SELECT id FROM chapters WHERE id = ?').get(target.chapterId)) {
+      invalid('计划回收关联的章节不存在；尚未建立的章节可只填写计划名称。')
+    }
+    if (target.state === 'scene' && target.sceneId) {
+      if (!db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'scene_cards'").get()) invalid('本书尚未启用场景卡；可先填写场景计划名称。')
+      const scene = db.prepare('SELECT chapter_id FROM scene_cards WHERE id = ?').get(target.sceneId) as { chapter_id: string | null } | undefined
+      if (!scene || (target.chapterId !== null && scene.chapter_id !== target.chapterId)) invalid('计划回收的场景身份或章节归属不符。')
+    }
+  }
+
+  private requireCognitionState(db: Database.Database, bookId: string, fields: CognitionFields, existingId?: string): void {
+    const evolution = fields.evolution
+    if (!evolution) return
+    const origin = evolution.knowledgeOrigin
+    if (origin && !db.prepare(`SELECT r.id FROM knowledge_item_revisions r JOIN knowledge_items k ON k.id = r.item_id
+      WHERE k.book_id = ? AND r.item_id = ? AND r.id = ?`).get(bookId, origin.itemId, origin.revisionId)) {
+      invalid('认知转换来源不属于本书的固定知识修订，请重新读取来源条目。')
+    }
+    if (!evolution.previousId) return
+    if (evolution.previousId === existingId) invalid('认知状态不能以前态关联自己。')
+    const previous = summary(readRecord(db, bookId, evolution.previousId))
+    if (previous.fields.kind !== 'cognition' || previous.fields.personId !== fields.personId) invalid('前一认知状态必须属于本书同一人物。')
+    const before = previous.fields.storyTime
+    const after = fields.storyTime
+    if (before.kind === 'unknown' || before.order === null || after.kind === 'unknown' || after.order === null || after.order <= before.order) {
+      invalid('认知变化须严格晚于前一状态；请先补全双方的故事排序值。')
+    }
+    const history = this.readCognitionHistory(db, bookId, previous.id)
+    if (history.some((item) => item.fields.evolution?.previousId === previous.id && item.id !== existingId)) invalid('该状态已有后继变化，请打开认知历程中的最后一个状态继续追加。')
+    if (!existingId && history.length >= MAX_COGNITION_STATES) invalid(`一条认知历程最多记录 ${MAX_COGNITION_STATES} 个状态。`)
+    if (evolution.kind === 'concealed') {
+      const end = previous.fields.evolution?.validUntil
+      if (previous.fields.evolution?.kind === 'forgotten' || previous.fields.evolution?.kind === 'refuted' ||
+        end && end.kind !== 'unknown' && end.order !== null && end.order <= after.order) {
+        invalid('已遗忘、推翻或到期的认知不能仅通过隐瞒变化恢复；请记录修正后的新认识。')
+      }
+    }
+    if (evolution.kind === 'concealed' && (fields.description !== previous.fields.description || fields.attitude !== previous.fields.attitude || fields.concealed === previous.fields.concealed)) {
+      invalid('隐瞒变化须保留原认知内容与态度，并切换隐瞒标记；内容变化请选择修正。')
+    }
+  }
+
+  private readCognitionHistory(db: Database.Database, bookId: string, recordId: string): CognitionState[] {
+    const latest = db.prepare('SELECT fields_json FROM story_record_revisions WHERE record_id = ? ORDER BY knowledge_revision DESC LIMIT 1')
+    const read = (id: string): CognitionState => {
+      const record = summary(readRecord(db, bookId, id))
+      if (record.fields.kind !== 'cognition') throw storageFailure()
+      const revision = latest.get(id) as { fields_json: string } | undefined
+      if (!revision || JSON.stringify(storedFields(revision.fields_json, bookId)) !== JSON.stringify(record.fields)) throw storageFailure()
+      return { id, fields: record.fields, effectiveUntil: record.fields.evolution?.validUntil ?? { kind: 'unknown' } }
+    }
+    const initial = read(recordId)
+    const personId = initial.fields.personId
+    const previous = new Set<string>([recordId])
+    let root = initial
+    while (root.fields.evolution?.previousId) {
+      const id = root.fields.evolution.previousId
+      if (previous.has(id) || previous.size >= MAX_COGNITION_STATES) throw storageFailure()
+      previous.add(id)
+      const parent = read(id)
+      const before = parent.fields.storyTime
+      const after = root.fields.storyTime
+      if (parent.fields.personId !== personId || before.kind === 'unknown' || after.kind === 'unknown' ||
+        before.order === null || after.order === null || before.order >= after.order) throw storageFailure()
+      root = parent
+    }
+    const history: CognitionState[] = []
+    const seen = new Set<string>()
+    // 复用人物引用索引一次读取后继身份，避免每一步扫描全书 JSON；仅加载本链的完整内容。
+    const successorRows = db.prepare(`SELECT s.id, json_extract(s.fields_json, '$.evolution.previousId') AS previous_id
+      FROM story_entity_refs ref JOIN story_records s ON s.id = ref.record_id AND s.book_id = ref.book_id
+      WHERE ref.book_id = ? AND ref.entity_id = ? AND ref.role = 'cognition_subject' AND s.kind = 'cognition'
+        AND json_extract(s.fields_json, '$.evolution.previousId') IS NOT NULL LIMIT ?`)
+      .all(bookId, personId, MAX_STORY_RECORDS + 1) as { id: string; previous_id: string }[]
+    if (successorRows.length > MAX_STORY_RECORDS) throw storageFailure()
+    const successors = new Map<string, string[]>()
+    for (const row of successorRows) successors.set(row.previous_id, [...(successors.get(row.previous_id) ?? []), row.id])
+    let state: CognitionState | null = root
+    while (state) {
+      if (seen.has(state.id) || seen.size >= MAX_COGNITION_STATES || state.fields.personId !== personId) throw storageFailure()
+      seen.add(state.id)
+      const children = successors.get(state.id) ?? []
+      if (children.length > 1) throw storageFailure()
+      const child: CognitionState | null = children[0] ? read(children[0]) : null
+      if (child) {
+        const before = state.fields.storyTime
+        const after = child.fields.storyTime
+        if (before.kind === 'unknown' || after.kind === 'unknown' || before.order === null || after.order === null || before.order >= after.order) throw storageFailure()
+        const end = state.effectiveUntil
+        if (end.kind === 'unknown' || end.order !== null && after.order < end.order) state.effectiveUntil = after
+      }
+      history.push(state)
+      state = child
+    }
+    if (!seen.has(recordId)) throw storageFailure()
+    return history
   }
 
   private requireDisclosures(db: Database.Database, locations: Disclosure[]): void {
@@ -370,6 +493,7 @@ export class StoryRepository {
       .get(id) as { fields_json: string } | undefined
     if (!revisions[0] || !latest || JSON.stringify(storedFields(latest.fields_json, bookId)) !== JSON.stringify(record.fields)) throw storageFailure()
     return { ...record, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision, sources, revisions,
-      labels: this.readLabels(db, bookId, record.fields) }
+      labels: this.readLabels(db, bookId, record.fields),
+      ...(record.fields.kind === 'cognition' ? { cognitionHistory: this.readCognitionHistory(db, bookId, id) } : {}) }
   }
 }

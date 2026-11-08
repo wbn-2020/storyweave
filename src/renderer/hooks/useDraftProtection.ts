@@ -5,8 +5,8 @@ import type { useChapterSession } from './useChapterSession'
 import { request } from '../request'
 
 type ChapterSession = ReturnType<typeof useChapterSession>
-interface ProtectionState { editorSessionId: string | null; editSequence: number; createdAt: string | null; error: string | null }
-const emptyState: ProtectionState = { editorSessionId: null, editSequence: -1, createdAt: null, error: null }
+interface ProtectionState { editorSessionId: string | null; editSequence: number; createdAt: string | null; error: string | null; warning: string | null }
+const emptyState: ProtectionState = { editorSessionId: null, editSequence: -1, createdAt: null, error: null, warning: null }
 
 export function useDraftProtection(api: StudioApi | undefined, scope: string | undefined, session: ChapterSession) {
   const [state, setState] = useState<ProtectionState>(emptyState)
@@ -38,6 +38,7 @@ export function useDraftProtection(api: StudioApi | undefined, scope: string | u
     pendingSince.current = null
     let createdAt: string | null = null
     let error: string | null = null
+    let warning: string | null = null
     try {
       const document = parseManuscript(current.draft)
       const result = await request(() => origin.api!.checkpointDraft({
@@ -45,7 +46,7 @@ export function useDraftProtection(api: StudioApi | undefined, scope: string | u
         bookId: current.chapter!.bookId, chapterId: current.chapter!.id, baseRevisionId: current.chapter!.revisionId,
         title: current.chapter!.title, document,
       }))
-      if (result.ok) createdAt = result.data.createdAt
+      if (result.ok) { createdAt = result.data.createdAt; warning = result.data.warning ?? null }
       else error = result.error.message
     } catch { error = '当前草稿暂未生成恢复检查点，请保留窗口或另存草稿副本。' }
     finally {
@@ -53,7 +54,7 @@ export function useDraftProtection(api: StudioApi | undefined, scope: string | u
       // 完成时只更新原编辑会话的提示；旧章与旧书库回执不能冒充当前草稿的保护状态。
       const active = latest.current
       if (mounted.current && active.scope === origin.scope && active.session.getCurrent().editorSessionId === current.editorSessionId) {
-        setState({ editorSessionId: current.editorSessionId, editSequence: current.editSequence, createdAt, error })
+        setState({ editorSessionId: current.editorSessionId, editSequence: current.editSequence, createdAt, error, warning })
       }
       if (mounted.current) setWake((value) => value + 1)
     }
@@ -76,6 +77,7 @@ export function useDraftProtection(api: StudioApi | undefined, scope: string | u
 
   const retry = useCallback(() => {
     attempted.current = null
+    setState((previous) => ({ ...previous, error: null, warning: null }))
     void capture()
   }, [capture])
 

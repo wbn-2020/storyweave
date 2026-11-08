@@ -11,6 +11,7 @@ import { DraftRecovery } from './draft-recovery'
 import { DraftImports, parseDraftTarget } from './draft-imports'
 import { AiSessions } from './ai-sessions'
 import { parseBookRecoveryExportInput, parseBookRecoveryRestoreInput } from '../../contracts/book-recovery'
+import { bookExportExtension, parseBookExportCommitInput } from '../../contracts/export'
 
 let mainWindow: BrowserWindow | null = null
 let service: ServiceClient | null = null
@@ -29,18 +30,22 @@ let recoveredInstance: ServiceClient | null = null
 let recoveryRequestId: string | null = null
 const previousReceipts = new Map<string, CompletedRequest>()
 let closeResponse: { id: string; resolve: (value: boolean) => void } | null = null
+let lastAiRecoveryNotice: string | null = null
 const draftRecovery = new DraftRecovery()
 const draftImports = new DraftImports()
 const aiSessions = new AiSessions()
 
 const rendererCommands = new Set<RendererCommand>([
   'workspace.get', 'workspace.select', 'book.create', 'book.get',
+  'workbench.get', 'workbench.brief', 'workbench.scene', 'workbench.issue', 'workbench.applyIssue', 'workbench.goal', 'workbench.session',
+  'inspiration.list', 'inspiration.save', 'inspiration.copy',
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
+  'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.commitFile',
   'import.select', 'import.reparse', 'import.chapter', 'import.commit', 'book.exportFile', 'draft.copy', 'service.restart',
   'recovery.exportFile', 'recovery.select', 'recovery.restore',
-  'draft.checkpoint', 'draft.list', 'draft.select', 'draft.preview', 'draft.commit',
+  'draft.checkpoint', 'draft.list', 'draft.rotate', 'draft.select', 'draft.preview', 'draft.commit',
   'knowledge.status', 'knowledge.upgrade', 'knowledge.list', 'knowledge.get', 'knowledge.create', 'knowledge.update',
   'notes.list', 'notes.get', 'notes.create', 'notes.update', 'notes.promote',
   'story.list', 'story.timeline', 'story.galaxy', 'story.get', 'story.revision', 'story.create', 'story.update',
@@ -59,12 +64,29 @@ function createService(): ServiceClient {
       const snapshot = output as WorkspaceSnapshot
       rememberedWorkspaceRoot = snapshot.rootPath
       if (draftRecovery.bind(snapshot.rootPath)) draftImports.clear()
-    } else if (command === 'chapter.save') draftRecovery.saved(root, output as SaveChapterOutput)
+    } else if (command === 'chapter.save' || command === 'revision.merge') draftRecovery.saved(root, output as SaveChapterOutput)
   })
 }
 
 function workspaceResult<T extends WorkspaceSnapshot | null>(result: Result<T>): Result<T> {
   return result.ok && result.data !== null ? { ok: true, data: draftRecovery.attach(result.data) as T } : result
+}
+
+async function completeWorkspaceRead<T extends WorkspaceSnapshot | null>(client: ServiceClient, result: Result<T>): Promise<Result<T>> {
+  if (result.ok && result.data?.rootPath && !closing && !draining) {
+    const settled = await aiSessions.restorePending(client)
+    if (settled.ok) lastAiRecoveryNotice = null
+    else {
+      const notice = `${result.data.rootPath}:${settled.error.message}`
+      if (notice !== lastAiRecoveryNotice && mainWindow && !mainWindow.isDestroyed()) {
+        lastAiRecoveryNotice = notice
+        await dialog.showMessageBox(mainWindow, { type: 'warning', title: '模型结果需要核对',
+          message: '书库已打开，留存的模型结果尚未全部补存。',
+          detail: `${settled.error.message} 请在原候选或向量任务中重新读取核对。不会再次向模型发送请求。`, buttons: ['返回工作室'] })
+      }
+    }
+  }
+  return workspaceResult(result)
 }
 
 function decorateReceipt(response: CompletedRequest): CompletedRequest {
@@ -134,13 +156,20 @@ function setupIpc(): void {
           recoveryRequestId = null
         }
         const status = current && current.state !== 'unknown' ? current : previous ? { state: 'completed' as const, response: previous } : { state: 'unknown' as const }
+        if (status.state === 'completed' && service && status.response.result.ok &&
+            (status.response.command === 'workspace.open' || status.response.command === 'workspace.get') &&
+            service.getWorkspaceRoot() === status.response.result.data?.rootPath) {
+          await completeWorkspaceRead(service, status.response.result)
+        }
         return { ok: true, data: status.state === 'completed' ? { ...status, response: decorateReceipt(status.response) } : status }
       }
       if (command === 'draft.copy') return await chooseDraftCopy(payload)
       // 检查点独立于业务进程；只有切库、关闭排空或恢复中才暂缓，防止保存到错误书库。
-      if (command === 'draft.checkpoint' || command === 'draft.list') {
+      if (command === 'draft.checkpoint' || command === 'draft.list' || command === 'draft.rotate') {
         if (choosingFile || restarting || draining) return failure('WORKSPACE_BUSY', '桌面正在切换或关闭，请稍后再处理草稿副本。')
-        return { ok: true, data: command === 'draft.checkpoint' ? draftRecovery.checkpoint(payload) : draftRecovery.list(payload) }
+        if (command === 'draft.rotate' && closing) return failure('WORKSPACE_BUSY', '正在关闭，请返回工作室后再建立检查点新代。')
+        return { ok: true, data: command === 'draft.checkpoint' ? draftRecovery.checkpoint(payload)
+          : command === 'draft.rotate' ? draftRecovery.rotate(payload) : draftRecovery.list(payload) }
       }
       if (command === 'service.restart') {
         if (payload !== undefined) return failure('INVALID_INPUT', '恢复服务不接受路径或重放请求。')
@@ -174,14 +203,14 @@ function setupIpc(): void {
             if (response.result.ok) {
               recoveryService = null
               recoveryRequestId = null
-              return workspaceResult(response.result)
+              return await completeWorkspaceRead(service, response.result)
             }
             if (response.result.error.code === 'REQUEST_TIMEOUT' || response.result.error.code === 'SERVICE_UNAVAILABLE') return response.result
             recoveryRequestId = null
           }
           // 已恢复的实例只续读当前书库，允许界面在后续章节读取失败时重试，不再次重开或重放旧操作。
           if (service === recoveredInstance && recoveryService !== service) {
-            return workspaceResult(await service.request('workspace.get', undefined))
+            return await completeWorkspaceRead(service, await service.request('workspace.get', undefined))
           }
           // 只有本次恢复创建的新进程可重试确定失败的重开，不重新启动仍活动的旧进程。
           const result = rememberedWorkspaceRoot
@@ -193,7 +222,7 @@ function setupIpc(): void {
           } else {
             recoveryRequestId = result.error.requestId ?? null
           }
-          return workspaceResult(result)
+          return await completeWorkspaceRead(service, result)
         } finally { restarting = false }
       }
       if (!service || draining) return failure('SERVICE_UNAVAILABLE', '本地作品服务正在关闭，请保留当前稿件。')
@@ -227,7 +256,7 @@ function setupIpc(): void {
           const rootPath = checkedWorkspaceDirectory(selection.filePaths[0]!)
           const result = await service.request('workspace.open', { rootPath })
           if (result.ok) rememberedWorkspaceRoot = result.data.rootPath
-          return workspaceResult(result)
+          return await completeWorkspaceRead(service, result)
         } finally { choosingFile = false }
       }
       if (command === 'recovery.exportFile' || command === 'recovery.select' || command === 'recovery.restore') {
@@ -272,7 +301,7 @@ function setupIpc(): void {
         const target = parseDraftTarget(payload)
         if (!isRecord(payload)) return failure('INVALID_INPUT', '草稿预览参数无效。')
         const id = requiredId(payload.checkpointId)
-        const bytes = draftRecovery.read(target.scope, id)
+        const bytes = draftRecovery.read(target.scope, id, payload.generationId)
         return { ok: true, data: draftImports.prepare(bytes, `${id}.json`, target) }
       }
       if (command === 'draft.commit') {
@@ -299,6 +328,24 @@ function setupIpc(): void {
           return await service.request('import.prepare', { ...validated.payload, filePath: selection.filePaths[0]! })
         } finally { choosingFile = false }
       }
+      if (command === 'book.export.commitFile') {
+        const input = parseBookExportCommitInput(payload)
+        const target = mainWindow
+        if (!target) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
+        choosingFile = true
+        try {
+          const extension = bookExportExtension(input.format)
+          const selection = await dialog.showSaveDialog(target, {
+            title: '按已确认预览导出（仅新建文件）', buttonLabel: '创建导出文件和清单',
+            defaultPath: `作品导出-${Date.now()}.${extension}`,
+            filters: [{ name: input.format === 'epub' ? 'EPUB 电子书' : input.format === 'markdown' ? 'Markdown 文本' : '纯文本', extensions: [extension] }],
+          })
+          if (selection.canceled || !selection.filePath) return { ok: true, data: null }
+          if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未创建导出文件。')
+          // 导出模块按固定预览独占创建正文和清单，主进程只负责原生路径选择。
+          return await service.request('book.export.commit', { ...input, filePath: selection.filePath })
+        } finally { choosingFile = false }
+      }
       if (command === 'book.exportFile') {
         if (!isRecord(payload)) return failure('INVALID_INPUT', '导出选项无效。')
         const validated = parseServiceRequest({ id: randomUUID(), command: 'book.export', payload: { ...payload, filePath: 'selected-by-native-dialog.txt' } })
@@ -320,7 +367,7 @@ function setupIpc(): void {
         } finally { choosingFile = false }
       }
       const request = parseServiceRequest({ id: randomUUID(), command, payload })
-      if (request.command === 'workspace.get') return workspaceResult(await service.request('workspace.get', undefined))
+      if (request.command === 'workspace.get') return await completeWorkspaceRead(service, await service.request('workspace.get', undefined))
       return await service.request(request.command, request.payload)
     } catch (error) {
       return error instanceof DomainError

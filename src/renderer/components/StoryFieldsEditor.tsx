@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { BookSnapshot, ChapterSnapshot, StudioApi } from '../../contracts/api'
-import { AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_NATURES, type KnowledgeSourceInput } from '../../contracts/knowledge'
-import { COGNITION_ATTITUDES, MAX_FORESHADOW_MILESTONES, MAX_STORY_LINKS, type Disclosure, type ForeshadowMilestone, type StoryKind, type StoryRecordFields, type StoryTime } from '../../contracts/story'
+import { AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_NATURES, type KnowledgeItemDetail, type KnowledgeSourceInput } from '../../contracts/knowledge'
+import { COGNITION_ATTITUDES, COGNITION_CHANGES, MAX_FORESHADOW_MILESTONES, MAX_STORY_LINKS, plannedPayoffText, type CognitionChangeKind, type CognitionFields, type Disclosure, type ForeshadowMilestone, type PlannedPayoff, type StoryKind, type StoryRecordFields, type StoryTime } from '../../contracts/story'
 import type { ManuscriptBlock } from '../../contracts/manuscript'
 import { request } from '../request'
 import shared from '../App.module.css'
@@ -10,6 +10,7 @@ import styles from './StoryPanel.module.css'
 export const storyKindLabels: Record<StoryKind, string> = { relation: '实体关系', event: '事件时间线', foreshadow: '伏笔', cognition: '人物认知' }
 export const stageLabels = { planned: '计划', planted: '已埋设', advanced: '推进', revealed: '已揭示', resolved: '已回收', abandoned: '放弃' }
 const attitudeLabels = { knows: '知道', believes: '相信', misunderstands: '误解', suspects: '怀疑' }
+export const cognitionChangeLabels = { formed: '形成', revised: '修正', refuted: '推翻', concealed: '隐瞒变化', forgotten: '遗忘' }
 const natureLabels = { author_setting: '作者设定', future_plan: '未来计划', narrative_claim: '正文陈述', character_belief: '人物认知', ai_derived: 'AI 整理', ai_inference: 'AI 推断', external_reference: '外部参考' }
 const decisionLabels = { unreviewed: '未处理', adopted: '已采纳', rejected: '已否决', review_later: '要求复核' }
 const freshnessLabels = { current: '当前', affected: '受影响', updating: '更新中', failed: '更新失败' }
@@ -21,7 +22,8 @@ export function initialStoryFields(kind: StoryKind): StoryRecordFields {
   if (kind === 'relation') return { ...common, kind, fromEntityId: '', toEntityId: '', relationType: '', direction: 'directed', validFrom: { kind: 'unknown' }, validUntil: { kind: 'unknown' }, startEventId: null, endEventId: null }
   if (kind === 'event') return { ...common, kind, storyTime: { kind: 'unknown' }, participantIds: [], mentionedEntityIds: [], stateChanges: [] }
   if (kind === 'foreshadow') return { ...common, kind, nature: 'future_plan', storyTime: { kind: 'unknown' }, stage: 'planned', entityIds: [], eventIds: [], milestones: [], plannedPayoff: { state: 'unknown' }, actualPayoff: { state: 'undisclosed' } }
-  return { ...common, kind, nature: 'character_belief', storyTime: { kind: 'unknown' }, personId: '', attitude: 'knows', concealed: false, acquisitionEventId: null }
+  return { ...common, kind, nature: 'character_belief', storyTime: { kind: 'unknown' }, personId: '', attitude: 'knows', concealed: false, acquisitionEventId: null,
+    evolution: { kind: 'formed', previousId: null, validUntil: { kind: 'unknown' } } }
 }
 
 export function blockText(block: ManuscriptBlock): string {
@@ -33,10 +35,73 @@ export function timeLabel(value: StoryTime): string {
 }
 
 export function disclosureLabel(value: Disclosure, book: BookSnapshot): string {
-  if (value.state === 'unknown') return '披露位置未知'
-  if (value.state === 'undisclosed') return '尚未披露'
+  if (value.state !== 'located') return value.state === 'unknown' ? '披露位置未知' : '尚未披露'
   const chapter = book.chapters.find((item) => item.id === value.chapterId)
   return `${chapter ? `第 ${chapter.position + 1} 章 · ${chapter.title}` : `章节 ${value.chapterId}`} · 固定段落 ${value.blockId}`
+}
+
+export function plannedPayoffLabel(value: PlannedPayoff, book: BookSnapshot): string {
+  if (value.state === 'unknown' || value.state === 'undisclosed') return '计划范围尚未决定'
+  if (value.state === 'located') return disclosureLabel(value, book)
+  if (value.state === 'volume' && value.volumeId) {
+    const volume = book.volumes.find((item) => item.id === value.volumeId)
+    return `${plannedPayoffText(value)}${volume ? ` · 关联 ${volume.title}` : ' · 原关联卷已不可用'}`
+  }
+  if ((value.state === 'chapter' || value.state === 'scene') && value.chapterId) {
+    const chapter = book.chapters.find((item) => item.id === value.chapterId)
+    return `${plannedPayoffText(value)}${chapter ? ` · 第 ${chapter.position + 1} 章 ${chapter.title}` : ' · 原关联章已不可用'}`
+  }
+  return plannedPayoffText(value)
+}
+
+interface PlannedPayoffEditorProps {
+  value: PlannedPayoff; api: StudioApi; book: BookSnapshot; disabled: boolean
+  onChange: (value: PlannedPayoff) => void; onReadingChange: ReadingChange
+  scenes?: { id: string; title: string; chapterId: string | null }[]
+}
+
+function PlannedPayoffEditor({ value, api, book, disabled, onChange, onReadingChange, scenes = [] }: PlannedPayoffEditorProps) {
+  const [availableScenes, setAvailableScenes] = useState(scenes)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const ticket = useRef(0)
+  const key = useId()
+  const latest = useRef(onReadingChange)
+  latest.current = onReadingChange
+  useEffect(() => () => { ticket.current += 1; latest.current(key, false) }, [key])
+  async function loadScenes() {
+    if (disabled || loading) return
+    const currentTicket = ++ticket.current
+    setLoading(true); setError(null); onReadingChange(key, true)
+    const result = await request(() => api.getWorkbench({ bookId: book.book.id }))
+    if (currentTicket !== ticket.current) return
+    setLoading(false); latest.current(key, false)
+    if (!result.ok) { setError(result.error.message); return }
+    if (result.data.bookId !== book.book.id) { setError('场景列表的作品身份不符。'); return }
+    if (result.data.requiresUpgrade) { setError('本书需先在创作工具中备份升级，才能读取场景卡；仍可填写场景计划名称。'); return }
+    setAvailableScenes(result.data.scenes.filter((scene) => !scene.archived))
+  }
+  const choice = value.state === 'undisclosed' ? 'unknown' : value.state
+  function selectScope(state: PlannedPayoff['state']) {
+    const label = 'label' in value ? value.label : ''
+    if (state === 'volume') onChange({ state, volumeId: null, label })
+    else if (state === 'chapter') onChange({ state, chapterId: null, label })
+    else if (state === 'scene') onChange({ state, sceneId: null, chapterId: null, label })
+    else if (state === 'text') onChange({ state, label })
+    else if (state === 'unknown') onChange({ state })
+    else if (state === 'located') onChange({ state, chapterId: '', revisionId: '', blockId: '' })
+  }
+  return <fieldset><legend>计划回收范围</legend><div className={styles.stack}>
+    <label>计划目标<select value={choice} disabled={disabled} onChange={(event) => selectScope(event.target.value as PlannedPayoff['state'])}>
+      <option value="unknown">尚未决定</option><option value="volume">某一卷</option><option value="chapter">某一章</option><option value="scene">某个场景</option><option value="text">文字描述范围</option><option value="located">已有固定正文位置</option>
+    </select></label>
+    {'label' in value && <label>范围说明<input value={value.label} maxLength={500} disabled={disabled} onChange={(event) => onChange({ ...value, label: event.target.value })} placeholder={value.state === 'volume' ? '例如：尚未建立的第三卷末尾' : value.state === 'scene' ? '例如：主角第二次进入旧宅的场景' : '例如：终局前两章，身份揭晓之后'} /></label>}
+    {value.state === 'volume' && <label>关联已有卷（可不选）<select disabled={disabled} value={value.volumeId ?? ''} onChange={(event) => { const volume = book.volumes.find((item) => item.id === event.target.value); onChange({ ...value, volumeId: volume?.id ?? null, label: value.label || volume?.title || '' }) }}><option value="">只保存计划名称</option>{book.volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.title}</option>)}</select></label>}
+    {(value.state === 'chapter' || value.state === 'scene') && <label>关联已有章节（可不选）<select disabled={disabled} value={value.chapterId ?? ''} onChange={(event) => { const chapter = book.chapters.find((item) => item.id === event.target.value); onChange({ ...value, chapterId: chapter?.id ?? null, ...(value.state === 'scene' ? { sceneId: null } : {}), label: value.label || chapter?.title || '' }) }}><option value="">尚未建章 / 暂不关联</option>{book.chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.position + 1} 章 · {chapter.title}</option>)}</select></label>}
+    {value.state === 'scene' && <><button type="button" className={shared.button} disabled={disabled || loading} onClick={() => void loadScenes()}>{loading ? '正在读取场景…' : '读取 / 刷新场景卡'}</button><label>关联已有场景卡（可不选）<select disabled={disabled || loading} value={value.sceneId ?? ''} onChange={(event) => { const scene = availableScenes.find((item) => item.id === event.target.value); onChange({ ...value, sceneId: scene?.id ?? null, chapterId: scene ? scene.chapterId : value.chapterId, label: value.label || scene?.title || '' }) }}><option value="">只保存场景计划名称</option>{value.sceneId && !availableScenes.some((scene) => scene.id === value.sceneId) && <option value={value.sceneId}>已关联场景 {value.sceneId}</option>}{availableScenes.filter((scene) => !value.chapterId || scene.chapterId === value.chapterId).map((scene) => <option key={scene.id} value={scene.id}>{scene.title}</option>)}</select></label>{error && <p className={styles.error} role="alert">{error}</p>}</>}
+    {value.state === 'located' && <DisclosureEditor label="已有计划位置" value={value} api={api} book={book} disabled={disabled} onReadingChange={onReadingChange} onChange={onChange} />}
+    <p className={styles.help}>计划可先于卷、章和正文建立。实际回收另行选择固定版本与段落；计划位置不表示事情已经发生，也不推导故事时间。</p>
+  </div></fieldset>
 }
 
 export function TimeEditor({ label, value, disabled, onChange }: { label: string; value: StoryTime; disabled: boolean; onChange: (value: StoryTime) => void }) {
@@ -142,10 +207,63 @@ function ReferencePicker({ label, api, bookId, value, onChange, disabled, names,
   </fieldset>
 }
 
-interface EditorProps { fields: StoryRecordFields; onChange: (value: StoryRecordFields) => void; api: StudioApi; book: BookSnapshot; disabled: boolean; names: Record<string, string>; savedMilestones: number; onReadingChange: ReadingChange }
-export function StoryFieldsEditor({ fields, onChange, api, book, disabled, names, savedMilestones, onReadingChange }: EditorProps) {
+function KnowledgeCognitionImport({ fields, onChange, api, book, disabled, names, onReadingChange }: {
+  fields: CognitionFields; onChange: (fields: CognitionFields) => void; api: StudioApi; book: BookSnapshot
+  disabled: boolean; names: Record<string, string>; onReadingChange: ReadingChange
+}) {
+  const [selectedId, setSelectedId] = useState('')
+  const [preview, setPreview] = useState<KnowledgeItemDetail | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const ticket = useRef(0)
+  const key = useId()
+  const latest = useRef(onReadingChange)
+  latest.current = onReadingChange
+  useEffect(() => () => { ticket.current += 1; latest.current(key, false) }, [key])
+  async function readOrigin() {
+    if (disabled || loading || !selectedId) return
+    const id = selectedId
+    const currentTicket = ++ticket.current
+    setLoading(true); setPreview(null); setError(null); onReadingChange(key, true)
+    const result = await request(() => api.getKnowledgeItem({ bookId: book.book.id, id }))
+    if (currentTicket !== ticket.current) return
+    setLoading(false); latest.current(key, false)
+    if (!result.ok) { setError(result.error.message); return }
+    const revision = result.data.revisions[0]
+    if (result.data.bookId !== book.book.id || result.data.id !== id || !revision || revision.itemId !== id || revision.fields.summary !== result.data.summary) {
+      setError('知识条目身份或固定修订不符，请重新读取。'); return
+    }
+    setPreview(result.data)
+  }
+  function useOrigin() {
+    const revision = preview?.revisions[0]
+    if (disabled || !preview || !revision || !fields.evolution) return
+    onChange({ ...fields, title: fields.title || preview.name, description: revision.fields.summary, nature: 'character_belief',
+      authorDecision: 'unreviewed', conflictState: 'unchecked',
+      evolution: { ...fields.evolution, knowledgeOrigin: { itemId: preview.id, revisionId: revision.id } } })
+    setPreview(null)
+  }
+  return <fieldset><legend>从普通知识建立人物认知（可选）</legend><div className={styles.stack}>
+    <ReferencePicker label="选择本书知识条目" api={api} bookId={book.book.id} value={selectedId ? [selectedId] : []} single names={names} disabled={disabled || loading} onChange={(ids) => { setSelectedId(ids[0] ?? ''); setPreview(null); setError(null) }} />
+    <button type="button" className={shared.button} disabled={disabled || loading || !selectedId} onClick={() => void readOrigin()}>{loading ? '正在读取…' : '读取固定知识版本'}</button>
+    {preview && <><strong>{preview.name}</strong><blockquote className={styles.blockPreview}>{preview.revisions[0]?.fields.summary || '该知识条目没有说明。'}</blockquote><button type="button" className={shared.button} disabled={disabled} onClick={useOrigin}>用此说明填写认知（替换本次草稿内容）</button></>}
+    {fields.evolution?.knowledgeOrigin && <p className={styles.help}>已关联知识 {fields.evolution.knowledgeOrigin.itemId} · 固定版本 {fields.evolution.knowledgeOrigin.revisionId}</p>}
+    <p className={styles.help}>转换后须明确选择人物、获知时间和态度，并审阅改写内容。知识出处不等于人物已经获知；原知识条目保持其原有性质。</p>
+    {error && <p className={styles.error} role="alert">{error}</p>}
+  </div></fieldset>
+}
+
+interface EditorProps {
+  fields: StoryRecordFields; onChange: (value: StoryRecordFields) => void; api: StudioApi; book: BookSnapshot
+  disabled: boolean; names: Record<string, string>; savedMilestones: number; onReadingChange: ReadingChange
+  savedCognition?: CognitionFields; previousCognition?: CognitionFields
+  scenes?: PlannedPayoffEditorProps['scenes']
+}
+export function StoryFieldsEditor({ fields, onChange, api, book, disabled, names, savedMilestones, onReadingChange, savedCognition, previousCognition, scenes }: EditorProps) {
   const picker = { api, bookId: book.book.id, disabled, names }
   const location = { api, book, disabled, onReadingChange }
+  const cognitionLocked = fields.kind === 'cognition' && Boolean(savedCognition)
+  const cognitionContentLocked = cognitionLocked || fields.kind === 'cognition' && fields.evolution?.kind === 'concealed'
   function addMilestone() {
     if (fields.kind !== 'foreshadow' || disabled || fields.milestones.length >= MAX_FORESHADOW_MILESTONES || fields.stage === 'resolved' || fields.stage === 'abandoned') return
     const milestone: ForeshadowMilestone = { id: crypto.randomUUID(), stage: fields.milestones.length ? 'advanced' : 'planted', note: '', storyTime: { kind: 'unknown' }, disclosure: { state: 'unknown' } }
@@ -157,8 +275,10 @@ export function StoryFieldsEditor({ fields, onChange, api, book, disabled, names
     onChange({ ...fields, stage: milestones[milestones.length - 1]?.stage ?? 'planned', milestones })
   }
   return <>
-    <label>记录名称<input value={fields.title} maxLength={120} disabled={disabled} required onChange={(event) => onChange({ ...fields, title: event.target.value })} autoFocus /></label>
-    <label>{fields.kind === 'cognition' ? '人物所知、所信或误解的具体内容' : '内容、条件与适用范围'}<textarea rows={5} value={fields.description} maxLength={20000} disabled={disabled} onChange={(event) => onChange({ ...fields, description: event.target.value })} /></label>
+    {cognitionLocked && <p className={styles.help}>本状态已保存，内容固定。可补充来源、更新采用与复核标记；人物在故事中改变认识时，请返回详情使用“记录认知变化”。</p>}
+    <label>记录名称<input value={fields.title} maxLength={120} disabled={disabled || cognitionLocked} required onChange={(event) => onChange({ ...fields, title: event.target.value })} autoFocus /></label>
+    <label>{fields.kind === 'cognition' ? '人物所知、所信或误解的具体内容（推翻 / 遗忘时填写变化说明）' : '内容、条件与适用范围'}<textarea rows={5} value={fields.description} maxLength={20000} disabled={disabled || cognitionContentLocked} onChange={(event) => onChange({ ...fields, description: event.target.value })} /></label>
+    {fields.kind === 'cognition' && !cognitionContentLocked && <KnowledgeCognitionImport fields={fields} onChange={onChange} api={api} book={book} disabled={disabled} names={names} onReadingChange={onReadingChange} />}
     {fields.kind === 'relation' && <>
       <ReferencePicker {...picker} label="关系起点" single value={fields.fromEntityId ? [fields.fromEntityId] : []} onChange={(value) => onChange({ ...fields, fromEntityId: value[0] ?? '' })} />
       <ReferencePicker {...picker} label="关系终点" single value={fields.toEntityId ? [fields.toEntityId] : []} onChange={(value) => onChange({ ...fields, toEntityId: value[0] ?? '' })} />
@@ -166,20 +286,29 @@ export function StoryFieldsEditor({ fields, onChange, api, book, disabled, names
       <TimeEditor label="关系生效时间" value={fields.validFrom} disabled={disabled} onChange={(value) => onChange({ ...fields, validFrom: value })} /><TimeEditor label="关系结束时间" value={fields.validUntil} disabled={disabled} onChange={(value) => onChange({ ...fields, validUntil: value })} />
       <ReferencePicker {...picker} type="event" label="建立关系的事件（可空）" single value={fields.startEventId ? [fields.startEventId] : []} onChange={(value) => onChange({ ...fields, startEventId: value[0] ?? null })} /><ReferencePicker {...picker} type="event" label="结束关系的事件（可空）" single value={fields.endEventId ? [fields.endEventId] : []} onChange={(value) => onChange({ ...fields, endEventId: value[0] ?? null })} />
     </>}
-    {fields.kind !== 'relation' && <TimeEditor label={fields.kind === 'cognition' ? '人物获知 / 形成认知的时间' : '故事内时间'} value={fields.storyTime} disabled={disabled} onChange={(value) => onChange({ ...fields, storyTime: value })} />}
+    {fields.kind !== 'relation' && <TimeEditor label={fields.kind === 'cognition' ? '人物获知 / 本次认知变化的时间' : '故事内时间'} value={fields.storyTime} disabled={disabled || Boolean(savedCognition && savedCognition.storyTime.kind !== 'unknown' && savedCognition.storyTime.order !== null)} onChange={(value) => onChange({ ...fields, storyTime: value })} />}
     {fields.kind === 'event' && <>
       <ReferencePicker {...picker} label="实际参与者" value={fields.participantIds} onChange={(value) => onChange({ ...fields, participantIds: value })} /><ReferencePicker {...picker} label="仅被提及的对象" value={fields.mentionedEntityIds} onChange={(value) => onChange({ ...fields, mentionedEntityIds: value })} /><p className={styles.help}>参与、在场或被提及均不会自动生成知情记录。人物认知需要单独记录。</p>
       <fieldset><legend>事件造成的状态变化</legend><div className={styles.stack}>{fields.stateChanges.map((change, index) => <fieldset key={change.id}><legend>状态变化 {index + 1}</legend><div className={styles.stack}><ReferencePicker {...picker} label="变化对象" single value={change.entityId ? [change.entityId] : []} onChange={(value) => onChange({ ...fields, stateChanges: fields.stateChanges.map((item) => item.id === change.id ? { ...item, entityId: value[0] ?? '' } : item) })} /><label>属性<input value={change.attribute} maxLength={120} disabled={disabled} onChange={(event) => onChange({ ...fields, stateChanges: fields.stateChanges.map((item) => item.id === change.id ? { ...item, attribute: event.target.value } : item) })} /></label><div className={styles.columns}><label>变化前<textarea rows={2} value={change.before} maxLength={2000} disabled={disabled} onChange={(event) => onChange({ ...fields, stateChanges: fields.stateChanges.map((item) => item.id === change.id ? { ...item, before: event.target.value } : item) })} /></label><label>变化后<textarea rows={2} value={change.after} maxLength={2000} disabled={disabled} onChange={(event) => onChange({ ...fields, stateChanges: fields.stateChanges.map((item) => item.id === change.id ? { ...item, after: event.target.value } : item) })} /></label></div><button type="button" className={shared.button} disabled={disabled} onClick={() => onChange({ ...fields, stateChanges: fields.stateChanges.filter((item) => item.id !== change.id) })}>移除此变化项</button></div></fieldset>)}<button type="button" className={shared.button} disabled={disabled || fields.stateChanges.length >= MAX_STORY_LINKS} onClick={() => onChange({ ...fields, stateChanges: [...fields.stateChanges, { id: crypto.randomUUID(), entityId: '', attribute: '', before: '', after: '' }] })}>添加状态变化</button></div><p className={styles.help}>每次保存留存不可变快照，修改变化项后仍可在历史中核对旧记录。</p></fieldset>
     </>}
     {fields.kind === 'cognition' && <>
-      <ReferencePicker {...picker} type="person" label="认知主体（人物）" single value={fields.personId ? [fields.personId] : []} onChange={(value) => onChange({ ...fields, personId: value[0] ?? '' })} /><label>认知态度<select value={fields.attitude} disabled={disabled} onChange={(event) => onChange({ ...fields, attitude: event.target.value as typeof fields.attitude })}>{COGNITION_ATTITUDES.map((value) => <option key={value} value={value}>{attitudeLabels[value]}</option>)}</select></label><label className={shared.checkLabel}><input type="checkbox" checked={fields.concealed} disabled={disabled} onChange={(event) => onChange({ ...fields, concealed: event.target.checked })} />人物正在隐瞒这一认知（独立于是否相信及读者是否知道）</label><ReferencePicker {...picker} type="event" label="获知 / 形成认知的事件（可空）" single value={fields.acquisitionEventId ? [fields.acquisitionEventId] : []} onChange={(value) => onChange({ ...fields, acquisitionEventId: value[0] ?? null })} />
+      <ReferencePicker {...picker} disabled={disabled || cognitionLocked || Boolean(fields.evolution?.previousId)} type="person" label="认知主体（人物）" single value={fields.personId ? [fields.personId] : []} onChange={(value) => onChange({ ...fields, personId: value[0] ?? '' })} />
+      {fields.evolution && <><label>本次认知变化<select value={fields.evolution.kind} disabled={disabled || cognitionLocked || !fields.evolution.previousId} onChange={(event) => {
+        const kind = event.target.value as CognitionChangeKind
+        onChange({ ...fields, ...(kind === 'concealed' && previousCognition ? { description: previousCognition.description, attitude: previousCognition.attitude, concealed: !previousCognition.concealed } : {}), evolution: { ...fields.evolution!, kind } })
+      }}>{COGNITION_CHANGES.filter((kind) => fields.evolution?.previousId ? kind !== 'formed' : kind === 'formed').map((kind) => <option key={kind} value={kind}>{cognitionChangeLabels[kind]}</option>)}</select></label>
+      {fields.evolution.previousId && <p className={styles.help}>前态：{previousCognition?.title ?? fields.evolution.previousId}。保存后，前态在本次变化时点结束；旧内容继续用于此前时点。</p>}
+      <TimeEditor label="有效截止（可未知；不含截止时点）" value={fields.evolution.validUntil} disabled={disabled || Boolean(savedCognition?.evolution)} onChange={(value) => onChange({ ...fields, evolution: { ...fields.evolution!, validUntil: value } })} /></>}
+      {!fields.evolution && <button type="button" className={shared.button} disabled={disabled} onClick={() => onChange({ ...fields, evolution: { kind: 'formed', previousId: null, validUntil: { kind: 'unknown' } } })}>为此旧记录补充有效期</button>}
+      <label>认知态度<select value={fields.attitude} disabled={disabled || cognitionContentLocked} onChange={(event) => onChange({ ...fields, attitude: event.target.value as typeof fields.attitude })}>{COGNITION_ATTITUDES.map((value) => <option key={value} value={value}>{attitudeLabels[value]}</option>)}</select></label><label className={shared.checkLabel}><input type="checkbox" checked={fields.concealed} disabled={disabled || cognitionLocked} onChange={(event) => onChange({ ...fields, concealed: event.target.checked })} />人物正在隐瞒这一认知（独立于是否相信及读者是否知道）</label><ReferencePicker {...picker} disabled={disabled || cognitionLocked} type="event" label="获知 / 形成认知的事件（可空）" single value={fields.acquisitionEventId ? [fields.acquisitionEventId] : []} onChange={(value) => onChange({ ...fields, acquisitionEventId: value[0] ?? null })} />
+      {(fields.evolution?.kind === 'refuted' || fields.evolution?.kind === 'forgotten') && <p className={styles.help}>此状态会结束前一认知，并从人物 AI 附加资料中排除。人物形成新的认识时，请在此状态之后继续追加修正。</p>}
     </>}
     {fields.kind === 'foreshadow' && <>
       <ReferencePicker {...picker} label="伏笔关联实体" value={fields.entityIds} onChange={(value) => onChange({ ...fields, entityIds: value })} /><ReferencePicker {...picker} type="event" label="伏笔关联事件" value={fields.eventIds} onChange={(value) => onChange({ ...fields, eventIds: value })} />
       <fieldset><legend>伏笔进展 · {stageLabels[fields.stage]}</legend><p className={styles.help}>按顺序追加埋设、推进、揭示和回收。已保存里程碑保留原内容；揭示与回收分别记录。</p>
         {fields.milestones.map((milestone, index) => <div key={milestone.id} className={styles.milestone}>{index < savedMilestones ? <><strong>{index + 1} · {stageLabels[milestone.stage]}（已保存）</strong><p>{milestone.note}</p><small>{timeLabel(milestone.storyTime)}；{disclosureLabel(milestone.disclosure, book)}</small>{milestone.source && <small>来源：{milestone.source.sourceType === 'chapter_text' ? '固定正文' : milestone.source.sourceType === 'external' ? '外部说明' : '作者输入'} · {milestone.source.quote}</small>}</> : <div className={styles.stack}><strong>新增里程碑 {index + 1}</strong><label>阶段<select value={milestone.stage} disabled={disabled} onChange={(event) => updateMilestone(index, { ...milestone, stage: event.target.value as ForeshadowMilestone['stage'] })}>{(['planted', 'advanced', 'revealed', 'resolved', 'abandoned'] as const).map((value) => <option key={value} value={value}>{stageLabels[value]}</option>)}</select></label><label>本次进展说明<textarea rows={3} value={milestone.note} maxLength={2000} disabled={disabled} onChange={(event) => updateMilestone(index, { ...milestone, note: event.target.value })} /></label><TimeEditor label="里程碑故事时间" value={milestone.storyTime} disabled={disabled} onChange={(value) => updateMilestone(index, { ...milestone, storyTime: value })} /><DisclosureEditor {...location} label="里程碑读者披露位置" value={milestone.disclosure} onChange={(value) => updateMilestone(index, { ...milestone, disclosure: value })} /><SourceEditor {...location} value={milestone.source} onChange={(value) => { const { source: previousSource, ...rest } = milestone; void previousSource; updateMilestone(index, { ...rest, ...(value ? { source: value } : {}) }) }} />{index === fields.milestones.length - 1 && <button type="button" className={shared.button} disabled={disabled} onClick={() => { const milestones = fields.milestones.slice(0, -1); onChange({ ...fields, stage: milestones[milestones.length - 1]?.stage ?? 'planned', milestones }) }}>撤销本条未保存进展</button>}</div>}</div>)}
         <button type="button" className={shared.button} disabled={disabled || fields.milestones.length >= MAX_FORESHADOW_MILESTONES || fields.stage === 'resolved' || fields.stage === 'abandoned'} onClick={addMilestone}>追加伏笔进展</button>
-      </fieldset><DisclosureEditor {...location} label="计划回收位置" value={fields.plannedPayoff} onChange={(value) => onChange({ ...fields, plannedPayoff: value })} /><DisclosureEditor {...location} label="实际回收位置" value={fields.actualPayoff} onChange={(value) => onChange({ ...fields, actualPayoff: value })} />
+      </fieldset><PlannedPayoffEditor {...location} scenes={scenes} value={fields.plannedPayoff} onChange={(value) => onChange({ ...fields, plannedPayoff: value })} /><DisclosureEditor {...location} label="实际回收证据 · 固定正文版本与段落" value={fields.actualPayoff} onChange={(value) => onChange({ ...fields, actualPayoff: value })} />
     </>}
     <DisclosureEditor {...location} label="读者首次披露位置" value={fields.disclosure} onChange={(value) => onChange({ ...fields, disclosure: value })} />
     <div className={styles.columns}><label>知识性质<select value={fields.nature} disabled={disabled} onChange={(event) => onChange({ ...fields, nature: event.target.value as StoryRecordFields['nature'] })}>{KNOWLEDGE_NATURES.map((value) => <option key={value} value={value}>{natureLabels[value]}</option>)}</select></label><label>作者决定<select value={fields.authorDecision} disabled={disabled} onChange={(event) => onChange({ ...fields, authorDecision: event.target.value as StoryRecordFields['authorDecision'] })}>{AUTHOR_DECISIONS.map((value) => <option key={value} value={value}>{decisionLabels[value]}</option>)}</select></label><label>新鲜度标注<select value={fields.freshness} disabled={disabled} onChange={(event) => onChange({ ...fields, freshness: event.target.value as StoryRecordFields['freshness'] })}>{KNOWLEDGE_FRESHNESS.map((value) => <option key={value} value={value}>{freshnessLabels[value]}</option>)}</select></label><label>冲突标注<select value={fields.conflictState} disabled={disabled} onChange={(event) => onChange({ ...fields, conflictState: event.target.value as StoryRecordFields['conflictState'] })}>{CONFLICT_STATES.map((value) => <option key={value} value={value}>{conflictLabels[value]}</option>)}</select></label></div>
@@ -195,8 +324,8 @@ export function StoryFieldsView({ fields, book, names }: { fields: StoryRecordFi
     {fields.kind === 'relation' && <><dt>关系两端</dt><dd>{label(fields.fromEntityId)} {fields.direction === 'directed' ? '→' : '↔'} {label(fields.toEntityId)}</dd><dt>关系类型</dt><dd>{fields.relationType}</dd><dt>生效时间</dt><dd>{timeLabel(fields.validFrom)}</dd><dt>结束时间</dt><dd>{timeLabel(fields.validUntil)}</dd><dt>建立事件</dt><dd>{label(fields.startEventId)}</dd><dt>结束事件</dt><dd>{label(fields.endEventId)}</dd></>}
     {fields.kind !== 'relation' && <><dt>{fields.kind === 'cognition' ? '获知时间' : '故事时间'}</dt><dd>{timeLabel(fields.storyTime)}</dd></>}
     {fields.kind === 'event' && <><dt>实际参与</dt><dd>{labels(fields.participantIds)}</dd><dt>被提及对象</dt><dd>{labels(fields.mentionedEntityIds)}</dd></>}
-    {fields.kind === 'cognition' && <><dt>认知主体</dt><dd>{label(fields.personId)}</dd><dt>认知态度</dt><dd>{attitudeLabels[fields.attitude]} · {fields.concealed ? '正在隐瞒' : '未标记隐瞒'}</dd><dt>获知事件</dt><dd>{label(fields.acquisitionEventId)}</dd></>}
-    {fields.kind === 'foreshadow' && <><dt>当前进展</dt><dd>{stageLabels[fields.stage]}</dd><dt>关联实体</dt><dd>{labels(fields.entityIds)}</dd><dt>关联事件</dt><dd>{labels(fields.eventIds)}</dd><dt>计划回收</dt><dd>{disclosureLabel(fields.plannedPayoff, book)}</dd><dt>实际回收</dt><dd>{disclosureLabel(fields.actualPayoff, book)}</dd></>}
+    {fields.kind === 'cognition' && <><dt>认知主体</dt><dd>{label(fields.personId)}</dd><dt>认知态度</dt><dd>{attitudeLabels[fields.attitude]} · {fields.concealed ? '正在隐瞒' : '未标记隐瞒'}</dd><dt>获知事件</dt><dd>{label(fields.acquisitionEventId)}</dd>{fields.evolution && <><dt>变化类型</dt><dd>{cognitionChangeLabels[fields.evolution.kind]}</dd><dt>设定有效截止</dt><dd>{timeLabel(fields.evolution.validUntil)} · 不含截止时点，后继状态可提前结束本状态</dd>{fields.evolution.knowledgeOrigin && <><dt>转换来源</dt><dd>知识 {fields.evolution.knowledgeOrigin.itemId}<small>固定版本 {fields.evolution.knowledgeOrigin.revisionId}；内容经作者转换为本人物的认知</small></dd></>}</>}</>}
+    {fields.kind === 'foreshadow' && <><dt>当前进展</dt><dd>{stageLabels[fields.stage]}</dd><dt>关联实体</dt><dd>{labels(fields.entityIds)}</dd><dt>关联事件</dt><dd>{labels(fields.eventIds)}</dd><dt>计划回收</dt><dd>{plannedPayoffLabel(fields.plannedPayoff, book)}</dd><dt>实际回收</dt><dd>{disclosureLabel(fields.actualPayoff, book)}</dd></>}
   </dl>
     {fields.kind === 'event' && fields.stateChanges.length > 0 && <><h4>状态变化</h4><ol>{fields.stateChanges.map((change) => <li key={change.id}><p>{label(change.entityId)} · {change.attribute}</p><p>{change.before || '未记录变化前状态'} → {change.after || '未记录变化后状态'}</p></li>)}</ol></>}
     {fields.kind === 'foreshadow' && fields.milestones.length > 0 && <><h4>伏笔历程</h4><ol>{fields.milestones.map((milestone) => <li key={milestone.id}><p>{stageLabels[milestone.stage]} · {milestone.note}</p><small>{timeLabel(milestone.storyTime)}；{disclosureLabel(milestone.disclosure, book)}</small>{milestone.source && <small>来源说明 / 引文：{milestone.source.quote}{milestone.source.sourceType === 'chapter_text' && <> · 固定版本 {milestone.source.revisionId} · 段落 {milestone.source.blockId}</>}</small>}</li>)}</ol></>}

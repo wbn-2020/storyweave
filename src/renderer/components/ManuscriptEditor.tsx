@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import { NodeSelection, Selection } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import UniqueID from '@tiptap/extension-unique-id'
 import type { ManuscriptDocument } from '../../contracts/manuscript'
@@ -8,24 +9,36 @@ import { ManuscriptSearchHighlights } from './manuscript-search'
 import { ManuscriptSearch } from './ManuscriptSearch'
 import styles from './ManuscriptEditor.module.css'
 import paper from './PaperSurface.module.css'
+import type { WritingPosition } from '../writing-location'
 
 interface Props {
+  title: string
   document: ManuscriptDocument
   disabled: boolean
   readOnly?: boolean
   displayPreferences: DisplayPreferences
   onChange: (document: unknown, plainText: string) => void
   onComposition: (active: boolean) => void
+  initialPosition?: WritingPosition | null
+  onPositionChange?: (position: WritingPosition) => void
 }
 
-export function ManuscriptEditor({ document, disabled, readOnly = false, displayPreferences, onChange, onComposition }: Props) {
-  const callbacks = useRef({ onChange, onComposition })
-  callbacks.current = { onChange, onComposition }
+function selectionPosition(selection: Selection): WritingPosition | null {
+  const node = selection instanceof NodeSelection ? selection.node : selection.$from.depth > 0 ? selection.$from.node(1) : null
+  return typeof node?.attrs.id === 'string'
+    ? { blockId: node.attrs.id, offset: selection instanceof NodeSelection ? 0 : selection.$from.parentOffset } : null
+}
+
+export function ManuscriptEditor({ title, document, disabled, readOnly = false, displayPreferences, onChange, onComposition, initialPosition, onPositionChange }: Props) {
+  const callbacks = useRef({ onChange, onComposition, onPositionChange })
+  callbacks.current = { onChange, onComposition, onPositionChange }
+  const openingPosition = useRef(initialPosition)
   const composing = useRef(false)
   const [compositionActive, setCompositionActive] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [replaceOpen, setReplaceOpen] = useState(false)
   const [searchFocus, setSearchFocus] = useState(0)
+  const [locationNotice, setLocationNotice] = useState<string | null>(null)
   const container = useRef<HTMLDivElement>(null)
   const compositionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const disabledRef = useRef(disabled)
@@ -73,7 +86,46 @@ export function ManuscriptEditor({ document, disabled, readOnly = false, display
     onUpdate: ({ editor: activeEditor }) => {
       callbacks.current.onChange(activeEditor.getJSON(), activeEditor.getText({ blockSeparator: '\n' }))
     },
+    onSelectionUpdate: ({ editor: activeEditor }) => {
+      const position = selectionPosition(activeEditor.state.selection)
+      if (position) callbacks.current.onPositionChange?.(position)
+    },
   })
+
+  useLayoutEffect(() => {
+    const position = openingPosition.current
+    if (!editor || editor.isDestroyed || !position?.blockId) return
+    let targetOffset = -1
+    editor.state.doc.forEach((block, offset) => {
+      if (targetOffset >= 0 || block.attrs.id !== position.blockId) return
+      targetOffset = offset
+      if (block.isTextblock) {
+        const inside = Number.isSafeInteger(position.offset) ? Math.max(0, Math.min(position.offset!, block.content.size)) : 0
+        editor.commands.setTextSelection(offset + 1 + inside)
+      } else {
+        // 横线没有合法文本光标，使用节点选区；未来不可选节点则退到附近合法位置。
+        const selection = NodeSelection.isSelectable(block) ? NodeSelection.create(editor.state.doc, offset) : Selection.near(editor.state.doc.resolve(offset))
+        editor.view.dispatch(editor.state.tr.setSelection(selection))
+      }
+    })
+    if (targetOffset < 0) {
+      setLocationNotice(position.reveal ? '定位段落已不存在，已打开章节开头。正文未修改。' : '原光标所在段落已不存在，已保留原滚动位置。')
+      if (position.reveal) editor.view.dispatch(editor.state.tr.setSelection(Selection.atStart(editor.state.doc)))
+    }
+    const restoredPosition = selectionPosition(editor.state.selection)
+    if (restoredPosition) callbacks.current.onPositionChange?.(restoredPosition)
+    if (!position.reveal) return
+    const selection = editor.state.selection
+    // 等待父级布局完成后显式滚动；普通恢复不主动滚动，以免覆盖 App 保存的 scrollTop。
+    const frame = requestAnimationFrame(() => {
+      if (editor.isDestroyed || !container.current?.isConnected || !editor.state.selection.eq(selection)) return
+      const target = targetOffset >= 0 ? editor.view.nodeDOM(targetOffset) : null
+      if (target instanceof Element) target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' })
+      else container.current.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'auto' })
+      if (!disabledRef.current && !readOnlyRef.current && !composing.current) editor.view.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [editor])
 
   const active = useEditorState({
     editor,
@@ -152,6 +204,7 @@ export function ManuscriptEditor({ document, disabled, readOnly = false, display
     </div>
     {searchOpen && <ManuscriptSearch editor={editor} disabled={disabled} readOnly={readOnly} composing={compositionActive} replaceOpen={replaceOpen} focusRequest={searchFocus}
       onToggleReplace={() => setReplaceOpen((current) => !current)} onClose={() => { setSearchOpen(false); editor.view.focus() }} />}
+    <header className={styles.paperHeading}><span>{readOnly ? '归档作品 · 只读' : '章节正文'}</span><h2>{title}</h2>{locationNotice && <p className={styles.searchHint} role="status">{locationNotice}</p>}</header>
     <EditorContent editor={editor} className={styles.content} />
   </div>
 }

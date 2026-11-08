@@ -3,7 +3,7 @@ import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, open
 import { join, normalize, resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import {
-  DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText,
+  DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText, parseCreateBookInput,
   type BookInput, type BookSnapshot, type BookSummary, type ChapterInput,
   type ChapterSnapshot, type ChapterSummary, type CreateBookInput,
   type CreateChapterInput, type SaveChapterInput, type SaveChapterOutput,
@@ -24,6 +24,9 @@ import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
+import { INSPIRATION_APPLICATION_ID, INSPIRATION_SCHEMA, WORKBENCH_SCHEMA } from '../workbench/schema'
+import { recordWritingActivity } from '../workbench/writing-activity'
+import type { WritingDay } from '../../contracts/workbench'
 import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
 import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION, STUDIO_APPLICATION_ID, STUDIO_SCHEMA, STUDIO_SCHEMA_VERSION } from './schema'
 
@@ -170,7 +173,7 @@ function verifyDatabase(db: Database.Database, applicationId: number): void {
   if (db.pragma('application_id', { simple: true }) === applicationId && version === 1) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '此书库使用旧版 v1 格式，需要专门的迁移工具。当前版本未修改旧库，也不支持直接恢复旧格式。' })
   }
-  const supported = applicationId === BOOK_APPLICATION_ID ? version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === 9 || version === 10 || version === 11 || version === BOOK_SCHEMA_VERSION : version === STUDIO_SCHEMA_VERSION
+  const supported = applicationId === BOOK_APPLICATION_ID ? Number.isInteger(version) && version >= 2 && version <= BOOK_SCHEMA_VERSION : version === STUDIO_SCHEMA_VERSION
   if (db.pragma('application_id', { simple: true }) !== applicationId || !supported) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '数据库格式或版本不受当前程序支持，未修改该数据库。' })
   }
@@ -223,6 +226,7 @@ export class StudioRepository {
   private rootPath: string | null = null
   private studio: Database.Database | null = null
   private activeBook: OpenBook | null = null
+  private inspiration: Database.Database | null = null
   private recoveryGeneration = 0
 
   getWorkspace(): WorkspaceSnapshot {
@@ -283,8 +287,8 @@ export class StudioRepository {
 
   createBook(input: CreateBookInput): BookSnapshot {
     return perform(() => {
-      const data = payload(input)
-      const title = requiredText(data.title, '作品名', 120)
+      const data = parseCreateBookInput(input)
+      const title = data.title
       const studio = this.requireStudio()
       const count = studio.prepare('SELECT COUNT(*) AS count FROM books').get() as { count: number }
       if (count.count >= MAX_BOOKS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前书库已达到 ${MAX_BOOKS} 部作品的上限。` })
@@ -304,13 +308,26 @@ export class StudioRepository {
           db.pragma(`application_id = ${BOOK_APPLICATION_ID}`)
           db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
           db.prepare('INSERT INTO book_meta (singleton, id, title, created_at, updated_at) VALUES (1, ?, ?, ?, ?)').run(id, title, now, now)
+          if (data.starter) {
+            // 新手引导只保存作者填写的种子，不凭空创建人物事实；首章与前提同事务建立。
+            const seed = data.starter
+            const premise = [seed.protagonist && `主角：${seed.protagonist}`, seed.desire && `愿望：${seed.desire}`, seed.obstacle && `阻碍：${seed.obstacle}`].filter(Boolean).join('\n')
+            db.prepare('UPDATE workbench_settings SET premise = ? WHERE singleton = 1').run(premise)
+            const chapterId = randomUUID(), revisionId = randomUUID()
+            const documentJson = JSON.stringify(emptyDocument())
+            db.prepare(`INSERT INTO chapters (id, title, position, goal, viewpoint, current_revision_id, created_at, updated_at)
+              VALUES (?, ?, 0, ?, ?, ?, ?, ?)`).run(chapterId, seed.firstChapterTitle, seed.desire, seed.protagonist, revisionId, now, now)
+            db.prepare(`INSERT INTO chapter_revisions (id, chapter_id, document_json, plain_text, content_hash, character_count, sequence, reason, created_at)
+              VALUES (?, ?, ?, '', ?, 0, 1, 'created', ?)`).run(revisionId, chapterId, documentJson, this.hash(documentJson), now)
+            this.recordChapterChange(db, chapterId, revisionId, now)
+          }
         })()
         // 每书主库先成为完整资产，再登记工作室目录；登记失败时保留已创建文件。
         studio.prepare('INSERT INTO books (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)').run(id, title, now, now)
       } finally {
         db.close()
       }
-      return { book: { id, title, genre: '', synopsis: '', archivedAt: null, revision: 0, createdAt: now, updatedAt: now }, chapters: [], volumes: [] }
+      return this.getBook({ bookId: id })
     })
   }
 
@@ -372,7 +389,7 @@ export class StudioRepository {
     })
   }
 
-  saveChapter(input: SaveChapterInput): SaveChapterOutput {
+  saveChapter(input: SaveChapterInput, source: WritingDay['source'] = 'manual', restoredFromRevisionId?: string): SaveChapterOutput {
     return perform(() => {
       const data = payload(input)
       const bookId = requiredId(data.bookId).toLowerCase()
@@ -393,15 +410,19 @@ export class StudioRepository {
         if (current.content_hash === contentHash && current.document_json === documentJson) return false
         const revisionId = randomUUID()
         const now = new Date().toISOString()
+        const restoredFrom = restoredFromRevisionId === undefined ? null : requiredId(restoredFromRevisionId).toLowerCase()
+        if (restoredFrom && (source !== 'restore' || !db.prepare('SELECT id FROM chapter_revisions WHERE id = ? AND chapter_id = ?').get(restoredFrom, chapterId))) {
+          throw new DomainError({ code: 'INVALID_INPUT', message: '局部恢复来源必须是当前章节的有效历史版本。' })
+        }
         db.prepare(`INSERT INTO chapter_revisions
-          (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'saved')`).run(revisionId, chapterId, expectedRevisionId, documentJson, plainText, contentHash, characterCount, now, this.nextSequence(db))
+          (id, chapter_id, parent_revision_id, document_json, plain_text, content_hash, character_count, created_at, sequence, reason, restored_from_revision_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(revisionId, chapterId, expectedRevisionId, documentJson, plainText, contentHash, characterCount, now, this.nextSequence(db), restoredFrom ? 'restored' : 'saved', restoredFrom)
         const updated = db.prepare("UPDATE chapters SET current_revision_id = ?, updated_at = ?, status = 'writing' WHERE id = ? AND current_revision_id = ?")
           .run(revisionId, now, chapterId, expectedRevisionId)
         if (updated.changes !== 1) throw new DomainError({ code: 'REVISION_CONFLICT', message: '章节版本已变化，本次保存没有覆盖新稿。' })
         // 在事务内核对真正落库的表示，失败时同时回滚历史和当前指针。
         verifyDocument(this.readChapterRow(db, chapterId))
-        this.recordChapterChange(db, chapterId, revisionId, now)
+        this.recordChapterChange(db, chapterId, revisionId, now, source)
         return true
       }).immediate()
       // AI 采用借用同书外层事务，目录缓存只能在外层提交或回滚后更新。
@@ -754,7 +775,7 @@ export class StudioRepository {
           .run(revisionId, chapterId, documentJson, plainText, this.hash(documentJson), characterCount, now, this.nextSequence(db))
         verifyDocument(this.readChapterRow(db, chapterId))
         this.normalizeChapterPositions(db, now)
-        this.recordChapterChange(db, chapterId, revisionId, now)
+        this.recordChapterChange(db, chapterId, revisionId, now, 'restore')
       }).immediate()
       this.updateCatalog(this.readBookMetadata(db, bookId))
       return this.readChapter({ bookId, chapterId })
@@ -801,7 +822,7 @@ export class StudioRepository {
       const db = this.openBook(bookId)
       const schemaVersion = db.pragma('user_version', { simple: true })
       const row = db.prepare('SELECT knowledge_revision FROM book_meta WHERE singleton = 1').get() as { knowledge_revision: number } | undefined
-      if ((schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4 && schemaVersion !== 5 && schemaVersion !== 6 && schemaVersion !== 7 && schemaVersion !== 8 && schemaVersion !== 9 && schemaVersion !== 10 && schemaVersion !== 11 && schemaVersion !== BOOK_SCHEMA_VERSION) || !row ||
+      if ((!Number.isInteger(schemaVersion) || schemaVersion < 2 || schemaVersion > BOOK_SCHEMA_VERSION) || !row ||
           !Number.isSafeInteger(row.knowledge_revision) || row.knowledge_revision < 0) throw storageFailure()
       if (schemaVersion >= 3) {
         // 状态查询只核对既有结构，不以读取为由补建表或修改旧作品。
@@ -893,6 +914,7 @@ export class StudioRepository {
         if (previousVersion < 10) db.exec(MEMORY_VECTOR_SCHEMA)
         if (previousVersion < 11) db.exec(AI_MEMORY_MAINTENANCE_SCHEMA)
         if (previousVersion < 12) db.exec(NOTES_SCHEMA)
+        if (previousVersion < 13) db.exec(WORKBENCH_SCHEMA)
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
         this.recordMutation(db, 'book.metadata', new Date().toISOString())
@@ -914,7 +936,7 @@ export class StudioRepository {
       const id = requiredId(bookId).toLowerCase()
       const db = this.openBook(id)
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== BOOK_SCHEMA_VERSION) {
+      if (!Number.isInteger(version) || version < 3 || version > BOOK_SCHEMA_VERSION) {
         throw new DomainError({ code: 'FORBIDDEN', message: '请先在知识库页面备份并升级这部作品，再使用知识条目。' })
       }
       return { db, book: this.readBookMetadata(db, id) }
@@ -947,6 +969,36 @@ export class StudioRepository {
       this.readBookMetadata(db, id)
       // 旧书可只读整理状态；领域仓储自行检查最低版本，读取不会触发隐式迁移。
       return db
+    })
+  }
+
+  getInspirationDatabase(create = false): Database.Database | null {
+    return perform(() => {
+      const directory = this.requireRoot()
+      assertLocalPath(directory, true)
+      const path = join(directory, 'inspiration.sqlite')
+      const existing = assertDatabasePaths(path)
+      if (!existing && !create) return null
+      if (this.inspiration?.open) return this.inspiration
+      const check = (db: Database.Database) => {
+        if (db.pragma('application_id', { simple: true }) !== INSPIRATION_APPLICATION_ID || db.pragma('user_version', { simple: true }) !== 1) throw storageFailure()
+      }
+      if (existing) {
+        const probe = new Database(path, { readonly: true, fileMustExist: true, timeout: 2000 })
+        try { check(probe) } finally { probe.close() }
+      }
+      const db = new Database(path, { fileMustExist: existing, timeout: 2000 })
+      try {
+        configure(db)
+        if (existing) check(db)
+        else db.transaction(() => {
+          db.exec(INSPIRATION_SCHEMA)
+          db.pragma(`application_id = ${INSPIRATION_APPLICATION_ID}`)
+          db.pragma('user_version = 1')
+        }).immediate()
+        this.inspiration = db
+        return db
+      } catch (error) { db.close(); throw error }
     })
   }
 
@@ -1064,6 +1116,8 @@ export class StudioRepository {
   }
 
   close(): void {
+    if (this.inspiration?.open) this.inspiration.close()
+    this.inspiration = null
     this.recoveryGeneration += 1
     if (this.activeBook?.db.open) this.activeBook.db.close()
     this.activeBook = null
@@ -1251,11 +1305,12 @@ export class StudioRepository {
       .run(randomUUID(), kind, chapterId, revisionId, row.revision, now)
   }
 
-  private recordChapterChange(db: Database.Database, chapterId: string, revisionId: string, now: string): void {
+  private recordChapterChange(db: Database.Database, chapterId: string, revisionId: string, now: string, source?: WritingDay['source']): void {
     db.prepare('UPDATE book_meta SET revision = revision + 1, updated_at = ? WHERE singleton = 1').run(now)
     const row = db.prepare('SELECT revision FROM book_meta WHERE singleton = 1').get() as { revision: number }
     db.prepare(`INSERT INTO outbox (id, kind, chapter_id, revision_id, book_revision, created_at)
       VALUES (?, 'chapter.changed', ?, ?, ?, ?)`).run(randomUUID(), chapterId, revisionId, row.revision, now)
+    recordWritingActivity(db, chapterId, revisionId, now, source)
   }
 
   private updateCatalog(book: BookSummary): void {

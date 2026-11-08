@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type {
   AppError, BookSnapshot, BookSummary, ChapterSnapshot, ChapterSummary, CommandMap, CompletedRequest,
-  Result, ServiceCommand, StudioApi, WorkspaceSnapshot,
+  Result, ServiceCommand, StudioApi, WorkspaceSnapshot, CreateBookInput,
 } from '../contracts/api'
 import { parseManuscript } from '../contracts/manuscript'
 import type { CreateKnowledgeItemInput, KnowledgeItemDetail, KnowledgeStatus, UpdateKnowledgeItemInput } from '../contracts/knowledge'
@@ -14,7 +14,10 @@ import type { BookRecoveryRestoreReceipt } from '../contracts/book-recovery'
 import { isNoteWriteReceiptFor, type CreateNoteInput, type NoteDetail, type PromoteNoteInput, type UpdateNoteInput } from '../contracts/notes'
 import { ManuscriptEditor } from './components/ManuscriptEditor'
 import { BookShelf, ChapterOutline } from './components/LibraryPanels'
-import { BookDetailsDialog, ChapterDetailsDialog, ConfirmDialog, ExportDialog, NameDialog, type BookFields, type ChapterFields, type ExportFields } from './components/EditingDialogs'
+import { WelcomeWorkspace } from './components/WelcomeWorkspace'
+import { StudioIcon } from './components/StudioIcon'
+import { Dialog } from './components/Dialog'
+import { BookDetailsDialog, ChapterDetailsDialog, ConfirmDialog, NameDialog, type BookFields, type ChapterFields } from './components/EditingDialogs'
 import { RevisionHistory } from './components/RevisionHistory'
 import { TextImportDialog } from './components/TextImportDialog'
 import { OrphanBooksDialog, RecoveryDialog } from './components/RecoveryDialogs'
@@ -31,6 +34,14 @@ import { AiPanel } from './components/AiPanel'
 import { AiMemoryTasksPanel } from './components/AiMemoryTasksPanel'
 import { AiSummaryPanel } from './components/AiSummaryPanel'
 import { BookRecoveryPanel } from './components/BookRecoveryPanel'
+import { NewBookDialog } from './components/NewBookDialog'
+import { ExportBookPanel } from './components/ExportBookPanel'
+import { CompanionPanel, type CompanionNavigateTarget } from './components/CompanionPanel'
+import { WorkbenchPanel } from './components/WorkbenchPanel'
+import { InspirationPanel } from './components/InspirationPanel'
+import { isRevisionMergeOutputFor, type RevisionMergeInput } from '../contracts/revision-merge'
+import type { BookExportCommitInput } from '../contracts/export'
+import { lastWritingBook, rememberWritingPosition, writingPosition, type WritingPosition } from './writing-location'
 import { useChapterSession } from './hooks/useChapterSession'
 import { useDraftProtection } from './hooks/useDraftProtection'
 import { useDisplayPreferences } from './hooks/useDisplayPreferences'
@@ -39,10 +50,12 @@ import styles from './App.module.css'
 
 interface Props { api?: StudioApi }
 type ViewState = 'loading' | 'ready' | 'error'
+type StudioSurface = 'home' | 'shelf' | 'write'
+type WorkspaceTool = 'knowledge' | 'galaxy' | 'timeline' | 'notes' | 'workbench'
 type Modal =
   | { kind: 'newBook' } | { kind: 'newChapter'; volumeId: string | null }
   | { kind: 'volume'; volumeId?: string } | { kind: 'bookDetails'; book: BookSummary }
-  | { kind: 'chapterDetails' } | { kind: 'history' } | { kind: 'finalize' } | { kind: 'preferences' } | { kind: 'notes' }
+  | { kind: 'chapterDetails' } | { kind: 'history' } | { kind: 'finalize' } | { kind: 'preferences' } | { kind: 'notes' } | { kind: 'workbench' } | { kind: 'inspiration' }
   | { kind: 'import' } | { kind: 'export' } | { kind: 'orphans' } | { kind: 'recovery' } | { kind: 'bookRecovery' } | { kind: 'draftImport' } | { kind: 'knowledge' } | { kind: 'story'; initialKind?: 'event' } | { kind: 'timeline' } | { kind: 'galaxy' } | { kind: 'reader' } | { kind: 'memory' } | { kind: 'ai' } | { kind: 'aiMemoryTasks' } | { kind: 'aiSummary' } | null
 interface DraftReceipt { bookId: string; chapterId: string; editSequence: number; loadEpoch: number; filePath: string }
 
@@ -55,6 +68,12 @@ function toChapterSummary(chapter: ChapterSnapshot): ChapterSummary {
 export function App({ api }: Props) {
   const display = useDisplayPreferences()
   const [viewState, setViewState] = useState<ViewState>('loading')
+  const [surface, setSurface] = useState<StudioSurface>('home')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const [companionOpen, setCompanionOpen] = useState(false)
+  const [returnLocation, setReturnLocation] = useState<{ root: string; bookId: string; chapterId: string; blockId?: string; offset?: number; scrollTop?: number } | null>(null)
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot>({ rootPath: null, books: [] })
   const workspaceRef = useRef(workspace)
   workspaceRef.current = workspace
@@ -76,6 +95,10 @@ export function App({ api }: Props) {
   const knowledgeDirty = useRef(false)
   const storyDirty = useRef(false)
   const notesDirty = useRef(false)
+  const workbenchDirty = useRef(false)
+  const inspirationDirty = useRef(false)
+  const manuscriptScroll = useRef<HTMLElement>(null)
+  const navigationPosition = useRef<{ bookId: string; chapterId: string; position: WritingPosition } | null>(null)
   const memoryWorking = useRef(false)
   const aiDirty = useRef(false)
   const detailsDirty = useRef(false)
@@ -117,15 +140,31 @@ export function App({ api }: Props) {
   const protection = useDraftProtection(api, workspace.recoveryScope, session)
   const chapter = session.session.chapter
   const archived = Boolean(book?.book.archivedAt)
+  const studioView = surface === 'write' && book ? 'write' : surface === 'shelf' && workspace.rootPath ? 'shelf' : 'home'
+  const recentBooks = [...workspace.books].sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))
+  const rememberedBook = workspace.books.find((item) => item.id === lastWritingBook(workspace.rootPath))
+  const featuredBook = book?.book ?? rememberedBook ?? recentBooks.find((item) => !item.archivedAt) ?? recentBooks[0]
 
-  async function changeView(operation: () => Promise<void>, fromMemoryPanel = false, fromNotesPanel = false) {
+  useLayoutEffect(() => {
+    if (!chapter || studioView !== 'write') return
+    const position = writingPosition(workspace.rootPath, chapter.bookId)
+    const reveal = navigationPosition.current?.bookId === chapter.bookId && navigationPosition.current.chapterId === chapter.id
+    // 来源跳转由编辑器将目标段落滚入视野；普通返回仍恢复作者离开时的滚动位置。
+    if (manuscriptScroll.current && !reveal) manuscriptScroll.current.scrollTop = position?.chapterId === chapter.id ? position.scrollTop ?? 0 : 0
+    navigationPosition.current = null
+    rememberWritingPosition(workspace.rootPath, chapter.bookId, chapter.id)
+  }, [workspace.rootPath, chapter?.bookId, chapter?.id, session.session.loadEpoch, studioView])
+
+  async function changeView(operation: () => Promise<void>, fromMemoryPanel = false, fromNotesPanel = false, fromWorkbenchPanel = false) {
     if (transition.current || recoveryLock.current) return
     if (bookRecoveryDirty.current) { setMessage('作品备份或恢复仍在处理或等待回执，请先在面板中核对。'); return }
     if (memoryWorking.current && !fromMemoryPanel) { setMessage('记忆面板仍有处理中或未确认的请求，请先核对回执后再切换。'); return }
     if (notesDirty.current && !fromNotesPanel) { setMessage('笔记有未保存修改或未确认请求，请先在素材与笔记中处理。'); return }
+    if ((workbenchDirty.current || inspirationDirty.current) && !fromWorkbenchPanel) { setMessage('创作工具还有未保存表单或待核对请求，请先在面板中处理。'); return }
     if (session.isComposing()) { setMessage('请先完成当前输入，再继续操作。'); return }
     transition.current = true
-    flushSync(() => setBusy(true))
+    // 先关闭窄屏导航面板，再打开目标页面或对话框，避免两个模态焦点相互覆盖。
+    flushSync(() => { setBusy(true); setNavigationOpen(false) })
     setMessage(null)
     try {
       // 切换目录、恢复与定稿都先冻结并保存，再读取当前版本执行后续命令。
@@ -145,7 +184,7 @@ export function App({ api }: Props) {
   }
 
   async function mutate<K extends ServiceCommand>(command: K, run: () => Promise<Result<CommandMap[K]['output'] | null>>, apply: (value: CommandMap[K]['output']) => void | boolean | Promise<void | boolean>) {
-    const preserveForm = command === 'book.update' || command === 'chapter.update' || command.startsWith('knowledge.') || command.startsWith('story.') || command.startsWith('memory.') || command.startsWith('ai.') || command.startsWith('notes.')
+    const preserveForm = command === 'book.create' || command === 'book.update' || command === 'chapter.update' || command.startsWith('knowledge.') || command.startsWith('story.') || command.startsWith('memory.') || command.startsWith('ai.') || command.startsWith('notes.') || command.startsWith('workbench.') || command.startsWith('inspiration.')
     const receive = async (response: CompletedRequest): Promise<boolean> => {
       if (response.command !== command) return false
       // command 已核对；映射类型的关联在跨回调处由这一处收窄保留。
@@ -191,6 +230,7 @@ export function App({ api }: Props) {
     if (!enter && bookRef.current?.book.id !== snapshot.book.id) return
     const current = session.getCurrent().chapter
     updateCurrentBook(snapshot)
+    if (enter) setSurface('write')
     if (current?.bookId === snapshot.book.id) {
       const summary = snapshot.chapters.find((item) => item.id === current.id)
       if (summary?.revisionId === current.revisionId) session.load({ ...current, ...summary, bookRevision: snapshot.book.revision })
@@ -213,31 +253,45 @@ export function App({ api }: Props) {
   }
 
   async function acceptChapter(saved: ChapterSnapshot, refreshDirectory = false) {
-    onSaved(saved); session.load(saved); setModal(null)
+    onSaved(saved); session.load(saved); setModal(null); setSurface('write')
     if (refreshDirectory) await refreshCurrentBook(saved.bookId)
   }
 
-  async function openWorkspace() {
+  async function openWorkspace(next?: 'newBook' | 'import') {
     if (!api) return
     await changeView(async () => {
       await mutate('workspace.open', () => api.selectWorkspace(), (snapshot) => {
-        session.load(null); setWorkspace(snapshot); updateCurrentBook(null); setViewState('ready'); setModal(null)
+        session.load(null); setWorkspace(snapshot); updateCurrentBook(null); setViewState('ready'); setSurface('home'); setFocused(false)
+        setReturnLocation(null)
+        setModal(snapshot.rootPath && next ? { kind: next } : null)
       })
     })
   }
 
-  async function openBook(bookId: string) {
+  async function openBook(bookId: string, chapterId?: string) {
     if (!api) return
     await changeView(async () => {
       const result = await request(() => api.getBook({ bookId }))
       if (!result.ok) { setMessage(result.error.message); return }
+      if (result.data.book.id !== bookId) { setMessage('返回的作品与所选作品不一致，请重新打开。'); return }
+      const last = writingPosition(workspaceRef.current.rootPath, bookId)
+      const targetChapter = chapterId ? result.data.chapters.find((item) => item.id === chapterId)
+        : result.data.chapters.find((item) => item.id === last?.chapterId) ?? result.data.chapters[0]
+      if (chapterId && !targetChapter) { setMessage('所选章节已不在作品目录中，请刷新工作台后重试。'); return }
+      const current = session.getCurrent().chapter
+      if (current?.bookId !== bookId) setReturnLocation(null)
+      // 同一章且目录版本未变化时只恢复页面，保留正文选区和撤销栈。
+      if (current?.bookId === bookId && current.id === targetChapter?.id && current.revisionId === targetChapter.revisionId && current.bookRevision === result.data.book.revision) {
+        updateCurrentBook(result.data); upsertShelf(result.data.book); setModal(null); setSurface('write'); return
+      }
       let first: ChapterSnapshot | null = null
-      if (result.data.chapters[0]) {
-        const read = await request(() => api.readChapter({ bookId, chapterId: result.data.chapters[0].id }))
+      if (targetChapter) {
+        const read = await request(() => api.readChapter({ bookId, chapterId: targetChapter.id }))
         if (!read.ok) { setMessage(read.error.message); return }
+        if (read.data.bookId !== bookId || read.data.id !== targetChapter.id) { setMessage('返回的正文与所选章节不一致，请重新打开。'); return }
         first = read.data
       }
-      session.load(first); updateCurrentBook(result.data); upsertShelf(result.data.book); setModal(null)
+      session.load(first); updateCurrentBook(result.data); upsertShelf(result.data.book); setModal(null); setSurface('write')
     })
   }
 
@@ -251,8 +305,101 @@ export function App({ api }: Props) {
     })
   }
 
+  async function navigateCompanion(target: CompanionNavigateTarget) {
+    if (!api || bookRef.current?.book.id !== target.bookId) return
+    const beforeSave = session.getCurrent().chapter
+    await changeView(async () => {
+      const result = await request(() => api.readChapter({ bookId: target.bookId, chapterId: target.chapterId }))
+      if (!result.ok) { setMessage(result.error.message); return }
+      const next = result.data
+      const current = session.getCurrent().chapter
+      // 同章待保存稿可能由本次门禁推进版本，只接受本窗口已确认的保存，不能放过外部版本变化。
+      const savedHere = beforeSave?.bookId === target.bookId && beforeSave.id === target.chapterId && beforeSave.revisionId === target.expectedRevisionId
+        && current?.bookId === target.bookId && current.id === target.chapterId && current.revisionId === next.revisionId
+      if (next.bookId !== target.bookId || next.id !== target.chapterId || next.revisionId !== target.expectedRevisionId && !savedHere || !next.document.content.some((block) => block.attrs.id === target.blockId)) {
+        setMessage('来源对应的当前稿已变化，请在伴随资料中重新核对；原写作位置已保留。'); return
+      }
+      const root = workspaceRef.current.rootPath
+      if (root && current) {
+        const previous = writingPosition(root, current.bookId)
+        setReturnLocation((first) => first?.root === root && first.bookId === current.bookId ? first
+          : { ...(previous?.chapterId === current.id ? previous : {}), root, bookId: current.bookId, chapterId: current.id, scrollTop: manuscriptScroll.current?.scrollTop ?? previous?.scrollTop })
+      }
+      navigationPosition.current = { bookId: target.bookId, chapterId: target.chapterId, position: { blockId: target.blockId, offset: 0, reveal: true } }
+      rememberWritingPosition(root, target.bookId, target.chapterId, { blockId: target.blockId, offset: 0 })
+      session.load(next); setSurface('write')
+    })
+  }
+
+  async function returnFromCompanion() {
+    const destination = returnLocation
+    if (!api || !destination || destination.root !== workspaceRef.current.rootPath || destination.bookId !== bookRef.current?.book.id) return
+    await changeView(async () => {
+      const result = await request(() => api.readChapter({ bookId: destination.bookId, chapterId: destination.chapterId }))
+      if (!result.ok) { setMessage(result.error.message); return }
+      if (result.data.bookId !== destination.bookId || result.data.id !== destination.chapterId) { setMessage('返回位置的章节身份不匹配。'); return }
+      rememberWritingPosition(destination.root, destination.bookId, destination.chapterId, destination)
+      session.load(result.data); setReturnLocation(null)
+    })
+  }
+
+  async function mergeSelectedRevision(input: RevisionMergeInput) {
+    if (!api) return
+    await changeView(async () => {
+      await mutate('revision.merge', () => api.mergeRevision(input), async (value) => {
+        if (!isRevisionMergeOutputFor(input, value)) return false
+        await acceptChapter(value.chapter)
+        return true
+      })
+    })
+  }
+
   async function showShelf() {
-    await changeView(async () => { session.load(null); updateCurrentBook(null); setModal(null) })
+    await changeView(async () => { session.load(null); updateCurrentBook(null); setReturnLocation(null); setModal(null); setSurface('shelf'); setFocused(false) })
+  }
+
+  async function showHome() {
+    // 返回工作台仍经过保存门禁；保留当前作品，供数据概览与故事工具共用。
+    await changeView(async () => { setSurface('home'); setFocused(false); setModal(null) })
+  }
+
+  function startBook(kind: 'newBook' | 'import') {
+    if (workspace.rootPath) showDialog({ kind })
+    else void openWorkspace(kind)
+  }
+
+  async function openWorkspaceTool(bookId: string, kind: WorkspaceTool) {
+    if (!api) return
+    await changeView(async () => {
+      // 工具只需要作品目录。跨作品时等新目录读取成功后再释放旧章节。
+      if (bookRef.current?.book.id !== bookId) {
+        const result = await request(() => api.getBook({ bookId }))
+        if (!result.ok) { setMessage(result.error.message); return }
+        if (result.data.book.id !== bookId) { setMessage('返回的作品与所选作品不一致，请重新打开。'); return }
+        session.load(null); updateCurrentBook(result.data); upsertShelf(result.data.book)
+      }
+      setModal({ kind })
+    })
+  }
+
+  function openToolFromNav(kind: WorkspaceTool) {
+    if (book) showDialog({ kind })
+    else if (featuredBook) void openWorkspaceTool(featuredBook.id, kind)
+    else startBook('newBook')
+  }
+
+  function resumeWriting() {
+    if (book && session.getCurrent().chapter?.bookId === book.book.id) void changeView(async () => { setSurface('write'); setModal(null) })
+    else if (book) void openBook(book.book.id)
+    else if (featuredBook) void openBook(featuredBook.id)
+    else startBook('newBook')
+  }
+
+  function showDraftProtection() {
+    if (transition.current || recoveryLock.current || session.isComposing() || modal || !book || !workspace.recoveryScope) return
+    // 容量检查与分代由主进程处理；不依赖故障服务先保存成功，窗口正文仍原样保留。
+    setNavigationOpen(false)
+    setModal({ kind: 'draftImport' })
   }
 
   function showDialog(next: Exclude<Modal, null>) {
@@ -280,10 +427,18 @@ export function App({ api }: Props) {
     })
   }
 
-  async function createBook(title: string) {
+  async function createBook(input: CreateBookInput) {
     if (!api) return
     await changeView(async () => {
-      await mutate('book.create', () => api.createBook({ title }), (snapshot) => { applyBook(snapshot, true); setModal(null) })
+      await mutate('book.create', () => api.createBook(input), async (snapshot) => {
+        applyBook(snapshot, true); setModal(null)
+        const first = snapshot.chapters[0]
+        if (first) {
+          const read = await request(() => api.readChapter({ bookId: snapshot.book.id, chapterId: first.id }))
+          if (read.ok && read.data.bookId === snapshot.book.id && read.data.id === first.id) session.load(read.data)
+          else setMessage('作品已建立，请从目录打开第一章。')
+        }
+      })
     })
   }
 
@@ -514,13 +669,16 @@ export function App({ api }: Props) {
     })
   }
 
-  async function exportBook(fields: ExportFields) {
+  async function exportBook(input: BookExportCommitInput) {
     if (!api) return
     await changeView(async () => {
       const current = bookRef.current
       if (!current) return
-      await mutate('book.export', () => api.exportBook({ bookId: current.book.id, expectedBookRevision: current.book.revision, ...fields }), (receipt) => {
-        setModal(null); setMessage('已导出 ' + receipt.chapterCount + ' 章、' + receipt.characterCount.toLocaleString() + ' 字到：' + receipt.filePath)
+      if (input.bookId !== current.book.id || input.expectedBookRevision !== current.book.revision) { setMessage('作品已更新，请重新生成导出预览。'); return }
+      await mutate('book.export.commit', () => api.commitBookExport(input), (receipt) => {
+        if (receipt.bookId !== input.bookId || receipt.bookRevision !== input.expectedBookRevision || receipt.exportId !== input.token || receipt.manifestHash !== input.manifestHash) return false
+        setModal(null); setMessage(`已导出 ${receipt.chapterCount} 章、${receipt.characterCount.toLocaleString()} 字符到：${receipt.filePath}；固定版本清单：${receipt.manifestPath}`)
+        return true
       })
     })
   }
@@ -546,14 +704,22 @@ export function App({ api }: Props) {
     return null
   }
 
+  function openNavigation() {
+    if (modal || recoveryLock.current || receiptCheck.current || closeLocked.current || session.isComposing() || session.getCurrent().saving) return
+    // 等待切换时禁止重开导航；未确认回执仍需保留进入恢复的入口。
+    if (transition.current && !pendingMutation.current) return
+    setNavigationOpen(true)
+  }
+
   function openRecovery(preservedForm = false) {
     if (recoveryLock.current || receiptCheck.current || closeLocked.current || session.isComposing() || session.getCurrent().saving) return
     if (transition.current && !pendingMutation.current) return
     // 资料与 AI 改稿独立于正文副本；只有面板确认留存后才能转入恢复。
-    if ((detailsDirty.current || knowledgeDirty.current || storyDirty.current || notesDirty.current || memoryWorking.current || aiDirty.current || bookRecoveryDirty.current) && !preservedForm) {
+    if ((detailsDirty.current || knowledgeDirty.current || storyDirty.current || notesDirty.current || workbenchDirty.current || inspirationDirty.current || memoryWorking.current || aiDirty.current || bookRecoveryDirty.current) && !preservedForm) {
       setMessage('当前面板有未保存修改或未确认请求，请先处理或在面板内留存副本后再进入恢复。'); return
     }
     session.pauseAutoSave(true)
+    flushSync(() => setNavigationOpen(false))
     setMessage(null); setModal({ kind: 'recovery' })
   }
 
@@ -631,15 +797,17 @@ export function App({ api }: Props) {
         event.preventDefault()
         if (!transition.current && !recoveryLock.current && !bookRecoveryDirty.current && modal?.kind !== 'recovery' && modal?.kind !== 'bookRecovery') void session.flush()
       }
-      if (!modal && !event.defaultPrevented && !session.isComposing() && !busy && chapter) {
-        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'Enter') {
+      if (studioView === 'write' && !modal && !navigationOpen && !event.defaultPrevented && !session.isComposing() && chapter) {
+        if (event.key === 'Escape' && focused) {
+          event.preventDefault(); setFocused(false)
+        } else if (!busy && (event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'Enter') {
           event.preventDefault(); setFocused((value) => !value)
-        } else if (event.key === 'Escape') setFocused(false)
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [session.flush, session.isComposing, modal, busy, chapter])
+  }, [session.flush, session.isComposing, modal, navigationOpen, busy, chapter, focused, studioView])
 
   useEffect(() => { if (!chapter) setFocused(false) }, [chapter])
 
@@ -655,6 +823,7 @@ export function App({ api }: Props) {
       if (knowledgeDirty.current) { setMessage('知识条目有未保存修改，请先保存或在知识库面板中明确放弃，再关闭窗口。'); return false }
       if (storyDirty.current) { setMessage('故事记录有未保存修改，请先保存或在故事记录面板中明确放弃，再关闭窗口。'); return false }
       if (notesDirty.current) { setMessage('笔记有未保存修改或未确认请求，请先在素材与笔记中保存或处理，再关闭窗口。'); return false }
+      if (workbenchDirty.current || inspirationDirty.current) { setMessage('创作工具有未保存修改或待核对请求，请先在面板中处理。'); return false }
       if (memoryWorking.current) { setMessage('本批整理操作尚未确认，请等回执返回后再关闭。'); return false }
       if (aiDirty.current) { setMessage('AI 面板仍有未确认请求或未保存修改，请先处理后再关闭。'); return false }
       if (bookRecoveryDirty.current) { setMessage('作品备份或恢复尚未确认，请先核对原回执后再关闭。'); return false }
@@ -674,10 +843,12 @@ export function App({ api }: Props) {
     onCheck: () => void checkMutationReceipt(), onRecover: () => openRecovery(true) } : undefined
   const closeModal = () => {
     if (recoveryLock.current) return
-    if ((modal?.kind === 'bookDetails' || modal?.kind === 'chapterDetails') && detailsDirty.current) { setDetailsCloseRequested(true); return }
+    if ((modal?.kind === 'bookDetails' || modal?.kind === 'chapterDetails' || modal?.kind === 'newBook') && detailsDirty.current) { setDetailsCloseRequested(true); return }
     if (modal?.kind === 'knowledge' && knowledgeDirty.current) return
     if (modal?.kind === 'story' && storyDirty.current) return
     if (modal?.kind === 'notes' && notesDirty.current) return
+    if (modal?.kind === 'workbench' && workbenchDirty.current) return
+    if (modal?.kind === 'inspiration' && inspirationDirty.current) return
     if (modal?.kind === 'memory' && memoryWorking.current) return
     if ((modal?.kind === 'ai' || modal?.kind === 'aiMemoryTasks' || modal?.kind === 'aiSummary') && aiDirty.current) return
     if (modal?.kind === 'bookRecovery' && bookRecoveryDirty.current) return
@@ -687,51 +858,102 @@ export function App({ api }: Props) {
     else if (modal?.kind === 'recovery') setModal(null)
   }
 
-  return <div className={`${styles.appShell} ${focused && chapter ? styles.focusMode : ''}`}>
-    <aside className={styles.sidebar} aria-label="工作室导航">
-      <div className={styles.brand}><span className={styles.brandMark} aria-hidden="true" /><div><strong>织章</strong><small>STORYWEAVE</small></div></div>
-      <button className={styles.workspaceButton} type="button" onClick={() => void openWorkspace()} disabled={!api || busy || bookRecoveryLocked || session.session.saving}><span className={styles.bookGlyph} aria-hidden="true">卷</span><span><strong>{workspace.rootPath ? '本地作品库' : '选择作品库'}</strong><small>{workspace.rootPath ? '点击切换目录' : '尚未选择目录'}</small></span></button>
-      <nav className={styles.nav} aria-label="作品功能"><button className={`${styles.navItem} ${!book ? styles.navItemActive : ''}`} type="button" onClick={() => void showShelf()} disabled={busy || bookRecoveryLocked || !workspace.rootPath}><span aria-hidden="true">册</span>我的书架</button>{book && <><div className={`${styles.navItem} ${styles.navItemActive}`} aria-current="page"><span aria-hidden="true">写</span>正文创作</div><button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'reader' })} disabled={!api || busy || bookRecoveryLocked}><span aria-hidden="true">读</span>作品阅读</button><button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'galaxy' })} disabled={!api || busy || bookRecoveryLocked}><span aria-hidden="true">星</span>故事星海</button><button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'timeline' })} disabled={!api || busy || bookRecoveryLocked}><span aria-hidden="true">序</span>故事时间线</button></>}<button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'bookRecovery' })} disabled={!api || busy || bookRecoveryLocked || session.session.saving}><span aria-hidden="true">存</span>作品备份与恢复</button></nav>
-      <div className={styles.sidebarFooter}><span className={styles.statusDot} />本地保存优先<span className={styles.version}>写作工作室</span></div>
-    </aside>
-    <main className={styles.main}>
-      <header className={styles.topbar}><div><span className={styles.crumb}>工作室{book ? ' / ' + book.book.title : ''}</span><h1>{chapter?.title ?? book?.book.title ?? '我的书架'}</h1></div>
-        <div className={styles.topActions}>{book && <><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'bookDetails', book: book.book })} disabled={busy}>作品资料</button><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'knowledge' })} disabled={busy}>本书知识库</button><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'story' })} disabled={busy}>故事记录</button><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'memory' })} disabled={busy}>记忆与检索</button><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'aiMemoryTasks' })} disabled={busy}>章节整理任务</button><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'aiSummary' })} disabled={busy}>分层汇总</button><button className={styles.button} type="button" onClick={() => showDialog({ kind: 'export' })} disabled={busy || book.chapters.length === 0}>导出</button></>}
-          {chapter && <><span className={styles.saveState} role="status">{saveLabel(session.session)}</span><button className={styles.button} type="button" onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}>保存 <kbd>Ctrl S</kbd></button><button className={styles.button} type="button" aria-pressed={focused} title="切换专注模式（Ctrl+Shift+Enter），Esc退出" onClick={() => setFocused(!focused)} disabled={busy || session.session.composing}>{focused ? '退出专注' : '专注写作'}</button></>}
-          <button className={styles.button} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}>显示偏好</button>
-          <button className={styles.button} type="button" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}>草稿与恢复</button>
+  const navigation = <>
+      <div className={styles.brand}><span className={styles.brandMark} aria-hidden="true"><StudioIcon name="pen" size={23} /></span><div><strong>织章</strong><small>StoryWeave</small></div></div>
+      <button className={styles.workspaceButton} type="button" onClick={() => void openWorkspace()} disabled={!api || busy || bookRecoveryLocked || session.session.saving}>
+        <StudioIcon name="folder" /><span><small>{workspace.rootPath ? '当前作品库' : '本地创作空间'}</small><strong title={book?.book.title ?? workspace.rootPath ?? undefined}>{book?.book.title ?? (workspace.rootPath ? '我的作品库' : '选择作品库')}</strong></span><StudioIcon name="down" size={14} />
+      </button>
+      <nav className={styles.nav} aria-label="作品功能">
+        <button className={`${styles.navItem} ${studioView === 'home' ? styles.navItemActive : ''}`} type="button" aria-current={studioView === 'home' ? 'page' : undefined} onClick={() => void showHome()} disabled={busy || bookRecoveryLocked}><StudioIcon name="home" />工作台</button>
+        <button className={`${styles.navItem} ${studioView === 'write' ? styles.navItemActive : ''}`} type="button" aria-current={studioView === 'write' ? 'page' : undefined} onClick={resumeWriting} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="pen" />写作</button>
+        <button className={`${styles.navItem} ${studioView === 'shelf' ? styles.navItemActive : ''}`} type="button" aria-current={studioView === 'shelf' ? 'page' : undefined} onClick={() => workspace.rootPath ? void showShelf() : void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="books" />作品书架<span className={styles.navCount}>{workspace.rootPath ? workspace.books.filter((item) => !item.archivedAt).length : '—'}</span></button>
+        <span className={styles.navLabel}>故事空间</span>
+        <button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => openToolFromNav('workbench')} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="list" />规划与审稿</button>
+        <button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => openToolFromNav('knowledge')} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="read" />故事设定</button>
+        <button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => openToolFromNav('galaxy')} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="galaxy" />关系星海</button>
+        <button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => openToolFromNav('timeline')} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="timeline" />故事时间线</button>
+        <button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => openToolFromNav('notes')} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="notes" />灵感与笔记</button>
+        <button className={styles.navItem} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'inspiration' })} disabled={!api || !workspace.rootPath || busy || bookRecoveryLocked}><StudioIcon name="spark" />全局灵感收件箱</button>
+        {book && <>
+          <details className={styles.navGroup}>
+            <summary><StudioIcon name="layers" />整理与审阅<StudioIcon name="down" size={14} /></summary>
+            <button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'reader' })} disabled={busy}>作品阅读</button>
+            <button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'bookDetails', book: book.book })} disabled={busy}>作品资料</button>
+            <button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'story' })} disabled={busy}>故事记录</button>
+            <button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'memory' })} disabled={busy}>记忆与检索</button>
+            <button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'aiMemoryTasks' })} disabled={busy}>章节整理任务</button>
+            <button className={styles.navItem} type="button" onClick={() => showDialog({ kind: 'aiSummary' })} disabled={busy}>分层汇总</button>
+          </details>
+        </>}
+      </nav>
+      <div className={styles.sidebarTools}>
+        <button className={styles.navItem} type="button" title="作品备份与恢复" onClick={() => showDialog({ kind: 'bookRecovery' })} disabled={!api || busy || bookRecoveryLocked || session.session.saving}><StudioIcon name="archive" />作品备份与恢复</button>
+        <button className={styles.navItem} type="button" title="草稿与恢复" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" />草稿与恢复</button>
+        <button className={styles.navItem} type="button" title="显示偏好" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}><StudioIcon name="settings" />显示偏好</button>
+      </div>
+      <div className={styles.sidebarFooter}><span className={styles.statusDot} />本地创作 · 数据由你掌管<small>每一个故事，都值得被写下。</small></div>
+    </>
+
+  return <div className={`${styles.appShell} ${sidebarCollapsed ? styles.sidebarCollapsed : ''} ${studioView === 'write' && focused && chapter ? styles.focusMode : ''}`}>
+    <aside id="studio-sidebar" className={styles.sidebar} aria-label="工作室导航">{navigation}</aside>
+    <main className={`${styles.main} ${studioView !== 'write' ? styles.homeMain : ''}`}>
+      <header className={styles.topbar}>
+        <div className={styles.breadcrumb}><button className={styles.sidebarToggle} type="button" title={sidebarCollapsed ? '显示侧栏' : '隐藏侧栏'} aria-label={sidebarCollapsed ? '显示侧栏' : '隐藏侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="studio-sidebar" onClick={() => setSidebarCollapsed((value) => !value)}><StudioIcon name="sidebar" size={19} /></button><div><h1>{studioView === 'write' ? '正文创作' : studioView === 'shelf' ? '作品书架' : '工作台'}</h1><span className={styles.crumb} title={book?.book.title}>{book ? book.book.title : '个人创作空间'}</span></div></div>
+        {studioView !== 'write' && <nav className={styles.workspaceTabs} aria-label="工作室页面"><button type="button" aria-current={studioView === 'home' ? 'page' : undefined} onClick={() => void showHome()} disabled={busy || bookRecoveryLocked}>工作台</button><button type="button" aria-current={studioView === 'shelf' ? 'page' : undefined} onClick={() => workspace.rootPath ? void showShelf() : void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}>作品书架</button></nav>}
+        <div className={styles.topActions}>
+          {studioView === 'write' && chapter && <><span className={`${styles.saveState} ${session.session.error ? styles.saveError : session.session.dirty || session.session.saving || session.session.composing ? styles.savePending : ''}`} role="status"><span className={styles.statusDot} />{saveLabel(session.session)}</span><button className={styles.button} type="button" onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}><StudioIcon name="save" size={15} />保存 <kbd>Ctrl S</kbd></button><button className={styles.button} type="button" aria-pressed={focused} title="切换专注模式（Ctrl+Shift+Enter），Esc退出" onClick={() => setFocused(!focused)} disabled={session.session.composing || (busy && !focused)}><StudioIcon name="focus" size={15} />{focused ? '退出专注' : '专注写作'}</button></>}
+          {studioView === 'write' && book ? focused ? <><button className={styles.button} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}><StudioIcon name="settings" size={15} />显示偏好</button><button className={styles.button} type="button" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={15} />草稿与恢复</button></> : <button className={styles.button} type="button" onClick={() => showDialog({ kind: 'export' })} disabled={busy || book.chapters.length === 0}><StudioIcon name="export" size={15} />导出</button> : <><span className={styles.localBadge}><span className={styles.statusDot} />{workspace.rootPath ? '已连接作品库' : '本地创作'}</span><button className={styles.iconButton} type="button" aria-label="显示偏好" title="显示偏好" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked}><StudioIcon name="settings" size={18} /></button></>}
         </div>
       </header>
       {message && !modal && <div className={styles.notice} role="alert"><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
       {display.warning && !modal && <div className={styles.notice} role="status"><span>{display.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={display.retrySave}>保存当前显示偏好</button></div>}
       {pendingMessage && <div className={styles.notice} role="alert"><span>{pendingMessage}</span><button className={styles.receiptButton} type="button" onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
       {session.session.error && <div className={`${styles.notice} ${styles.noticeError}`} role="alert"><span>{session.session.error.message}{session.session.error.code === 'REVISION_CONFLICT' && ' 请从“草稿与恢复”另存后重载磁盘版本。'}</span></div>}
-      {session.session.dirty && protection.state.error && <div className={`${styles.notice} ${styles.noticeError}`} role="alert"><span>恢复检查点未更新：{protection.state.error}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={protection.retry}>重试留存</button></div>}
+      {session.session.dirty && protection.state.error && <div className={`${styles.notice} ${styles.noticeError}`} role="alert"><span>恢复检查点未更新：{protection.state.error}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={protection.retry}>重试留存</button><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing || Boolean(modal)} onClick={showDraftProtection}>查看容量与分代</button></div>}
+      {protection.state.warning && <div className={styles.notice} role="status"><span>{protection.state.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing || Boolean(modal)} onClick={showDraftProtection}>查看容量与分代</button></div>}
       {archived && <div className={styles.notice}><span>此作品已归档，可阅读和导出。继续编辑前请在作品资料中解除归档。</span></div>}
-      {!workspace.rootPath ? <EmptyWorkspace onOpen={() => void openWorkspace()} busy={busy} available={Boolean(api)} /> : !book ? <BookShelf books={workspace.books} onOpen={(id) => void openBook(id)} onEdit={(item) => showDialog({ kind: 'bookDetails', book: item })} onCreate={() => showDialog({ kind: 'newBook' })} onImport={() => showDialog({ kind: 'import' })} onRecover={() => showDialog({ kind: 'orphans' })} busy={busy} /> : <>
-        <div className={styles.chapterActions}><span>{book.chapters.length} 章 · {book.volumes.length} 卷</span><div className={styles.actionRow}>
-          <button type="button" onClick={() => void changeView(async () => { await refreshCurrentBook(book.book.id) })} disabled={busy}>刷新目录</button>
-          <button type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'notes' })} disabled={!api || busy || bookRecoveryLocked}>素材与笔记</button>
-          {chapter && <button type="button" onClick={() => showDialog({ kind: 'ai' })} disabled={busy}>AI 协作</button>}
-          <button type="button" onClick={() => showDialog({ kind: 'draftImport' })} disabled={busy || archived || !workspace.recoveryScope}>从草稿恢复新章</button>
-          {chapter && <><button type="button" onClick={() => showDialog({ kind: 'chapterDetails' })} disabled={busy || archived}>{chapter.status === 'finalized' ? '资料 / 重开工作稿' : '本章资料'}</button><button type="button" onClick={() => showDialog({ kind: 'history' })} disabled={busy}>版本历史</button><button type="button" onClick={() => showDialog({ kind: 'finalize' })} disabled={busy || archived || (chapter.status === 'finalized' && !session.session.dirty)}>作者定稿</button></>}
-        </div></div>
-        <div className={styles.writeLayout}>
+      {studioView === 'home' && <WelcomeWorkspace api={api} workspace={workspace} currentBook={book} onOpenWorkspace={() => void openWorkspace()} onCreate={() => startBook('newBook')} onImport={() => startBook('import')} onShelf={() => workspace.rootPath ? void showShelf() : void openWorkspace()} onRecover={() => showDialog({ kind: 'bookRecovery' })} onPreferences={() => showDialog({ kind: 'preferences' })} onOpenBook={(id, chapterId) => void openBook(id, chapterId)} onTool={(id, kind) => void openWorkspaceTool(id, kind)} busy={busy || bookRecoveryLocked} />}
+      {studioView === 'shelf' && <BookShelf books={workspace.books} onOpen={(id) => void openBook(id)} onEdit={(item) => showDialog({ kind: 'bookDetails', book: item })} onCreate={() => showDialog({ kind: 'newBook' })} onImport={() => showDialog({ kind: 'import' })} onRecover={() => showDialog({ kind: 'orphans' })} busy={busy || bookRecoveryLocked} />}
+      {book && <div className={styles.editorSurface} hidden={studioView !== 'write'} inert={studioView !== 'write'}>
+        <div className={styles.chapterActions}>
+          <span className={styles.chapterTitle}>{chapter?.title ?? '选择或新建章节'}<small>{book.chapters.length} 章 · {book.volumes.length} 卷</small></span>
+          <button className={styles.chapterOutlineToggle} type="button" aria-label="章节目录" aria-controls="chapter-outline" aria-expanded={outlineOpen || !chapter} onClick={() => setOutlineOpen((value) => !value)} disabled={busy || !chapter || session.session.composing}><StudioIcon name="list" size={16} />目录 · {book.chapters.length} 章<StudioIcon name="down" size={14} /></button>
+          <div className={styles.actionRow}>
+            <button className={styles.button} type="button" aria-expanded={companionOpen} onClick={() => setCompanionOpen((value) => !value)} disabled={busy}><StudioIcon name="read" size={16} />伴随资料</button>
+            {chapter && <button className={styles.aiEntry} type="button" onClick={() => showDialog({ kind: 'ai' })} disabled={busy}><StudioIcon name="spark" size={16} />AI 协作</button>}
+            <details className={styles.chapterTools}>
+              <summary>章节工具<StudioIcon name="down" size={14} /></summary>
+              <div className={styles.chapterToolItems}>
+                {chapter && <><button type="button" onClick={() => showDialog({ kind: 'chapterDetails' })} disabled={busy || archived}>{chapter.status === 'finalized' ? '资料 / 重开工作稿' : '本章资料'}</button><button type="button" onClick={() => showDialog({ kind: 'history' })} disabled={busy}>版本历史</button><button type="button" onClick={() => showDialog({ kind: 'finalize' })} disabled={busy || archived || (chapter.status === 'finalized' && !session.session.dirty)}>作者定稿</button></>}
+                <button type="button" onClick={() => void changeView(async () => { await refreshCurrentBook(book.book.id) })} disabled={busy}>刷新目录</button>
+                <button type="button" onClick={() => showDialog({ kind: 'draftImport' })} disabled={busy || archived || !workspace.recoveryScope}>从草稿恢复新章</button>
+              </div>
+            </details>
+          </div>
+        </div>
+        <div className={`${styles.writeLayout} ${outlineOpen || !chapter ? styles.outlineExpanded : ''} ${companionOpen ? styles.companionExpanded : ''}`}>
           <ChapterOutline book={book} selectedId={chapter?.id} busy={busy} onOpen={(id) => void openChapter(id)} onCreate={(volumeId) => showDialog({ kind: 'newChapter', volumeId })} onVolume={(volumeId) => showDialog({ kind: 'volume', volumeId })} onMoveChapter={(id, direction) => void moveItem('chapter', id, direction)} onMoveVolume={(id, direction) => void moveItem('volume', id, direction)} />
-          <section className={styles.manuscript} aria-label="正文编辑区">{chapter ? <>
+          <section ref={manuscriptScroll} onScroll={(event) => { if (chapter && studioView === 'write') rememberWritingPosition(workspace.rootPath, chapter.bookId, chapter.id, { scrollTop: event.currentTarget.scrollTop }) }} className={styles.manuscript} aria-label="正文编辑区">{chapter ? <>
             <div className={styles.manuscriptMeta}><span>第 {chapter.position + 1} 章 · {statusLabels[chapter.status]}{chapter.viewpoint ? ' · ' + chapter.viewpoint : ''}</span><span>{session.session.characterCount.toLocaleString()} 字{chapter.targetCharacters !== null ? ' / ' + chapter.targetCharacters.toLocaleString() : ''}</span></div>
             {chapter.finalizedRevisionId && <p className={styles.finalizedNote}>已有作者定稿。修改后成为新草稿，原定稿保留。</p>}
-            <ManuscriptEditor key={chapter.bookId + ':' + chapter.id + ':' + session.session.loadEpoch} document={chapter.document} disabled={busy || bookRecoveryLocked || Boolean(modal)} readOnly={archived} displayPreferences={display.preferences} onChange={session.changed} onComposition={session.setComposing} />
-          </> : <div className={styles.emptyChapter}><h2>{book.chapters.length ? '选择一章继续' : '从第一场开始'}</h2><p>{book.chapters.length ? '从左侧目录打开正文。' : '建立章节后，每次正文保存都会留下版本。'}</p>{!archived && <button className={styles.primaryButton} type="button" onClick={() => showDialog({ kind: 'newChapter', volumeId: null })} disabled={busy}>建立章节</button>}</div>}</section>
-          <aside className={styles.memoryAside} aria-label="本章记录"><div className={styles.asideHeading}>本章记录</div>
+            <ManuscriptEditor key={chapter.bookId + ':' + chapter.id + ':' + session.session.loadEpoch} title={chapter.title} document={chapter.document} disabled={studioView !== 'write' || busy || bookRecoveryLocked || Boolean(modal)} readOnly={archived} displayPreferences={display.preferences} onChange={session.changed} onComposition={session.setComposing} initialPosition={navigationPosition.current?.bookId === chapter.bookId && navigationPosition.current.chapterId === chapter.id ? navigationPosition.current.position : writingPosition(workspace.rootPath, chapter.bookId)?.chapterId === chapter.id ? writingPosition(workspace.rootPath, chapter.bookId) : null} onPositionChange={(position) => { if (studioView === 'write') rememberWritingPosition(workspace.rootPath, chapter.bookId, chapter.id, position) }} />
+          </> : <div className={styles.emptyChapter}><h2>{book.chapters.length ? '选择一章继续' : '从第一场开始'}</h2><p>{book.chapters.length ? '从章节目录打开正文。' : '建立章节后，每次正文保存都会留下版本。'}</p>{!archived && <button className={styles.primaryButton} type="button" onClick={() => showDialog({ kind: 'newChapter', volumeId: null })} disabled={busy}>建立章节</button>}</div>}</section>
+          {companionOpen && api ? <aside className={styles.companionAside} aria-label="伴随资料"><CompanionPanel api={api} book={book} chapter={chapter} scopeKey={workspace.rootPath ?? ''} busy={busy || Boolean(modal) || session.session.composing} onNavigate={navigateCompanion} onReturn={returnFromCompanion} canReturn={Boolean(returnLocation && returnLocation.root === workspace.rootPath && returnLocation.bookId === book.book.id)} onClose={() => setCompanionOpen(false)} /></aside> : <aside className={styles.memoryAside} aria-label="本章记录"><div className={styles.asideHeading}>本章记录</div>
             <div className={styles.stateBlock}><strong>{chapter ? saveLabel(session.session) : '等待章节'}</strong><p>停笔片刻后自动保存，也可以按 Ctrl+S。保存失败时，当前草稿会留在窗口。</p>{chapter && <p>{protection.state.createdAt ? `恢复检查点：${displayTime(protection.state.createdAt)}${protection.state.editSequence < session.session.editSequence ? '（之后的输入尚未留存）' : ''}` : '未保存内容会定时留存到作品库的恢复目录。意外退出后，可从“从草稿恢复新章”预览。'}</p>}</div>
             {chapter?.goal && <><div className={styles.asideRule} /><div className={styles.stateBlock}><span className={styles.label}>本章目标</span><p>{chapter.goal}</p></div></>}
             <div className={styles.asideRule} /><div className={styles.stateBlock}><span className={styles.label}>最近保存</span><strong>{chapter ? displayTime(chapter.updatedAt) : '—'}</strong>{chapter?.finalizedAt && <p>最近定稿：{displayTime(chapter.finalizedAt)}</p>}</div>
             <div className={styles.asideRule} /><div className={styles.stateBlock}><span className={styles.label}>作品目录</span><p className={styles.directoryPath}>{workspace.rootPath}</p></div>
-          </aside>
+          </aside>}
         </div>
-      </>}
+      </div>}
     </main>
+    <nav className={styles.mobileTabs} aria-label="主要页面">
+      <button type="button" aria-current={studioView === 'home' ? 'page' : undefined} onClick={() => void showHome()} disabled={busy || bookRecoveryLocked}><StudioIcon name="home" size={21} /><span>工作台</span></button>
+      <button type="button" aria-current={studioView === 'write' ? 'page' : undefined} onClick={resumeWriting} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="pen" size={21} /><span>写作</span></button>
+      <button type="button" aria-current={studioView === 'shelf' ? 'page' : undefined} onClick={() => workspace.rootPath ? void showShelf() : void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="books" size={21} /><span>书架</span></button>
+      <button type="button" aria-haspopup="dialog" aria-expanded={navigationOpen} aria-disabled={Boolean(modal) || recoveryBusy || checkingReceipt || session.session.saving || session.session.composing || (busy && !pendingMessage)} onClick={openNavigation}><StudioIcon name="more" size={21} /><span>更多</span></button>
+    </nav>
+    {navigationOpen && <Dialog title="工作室导航" className={`${styles.lightDialog} ${styles.navigationSheet}`} onClose={() => setNavigationOpen(false)}>{navigation}</Dialog>}
     {modal?.kind === 'preferences' && <DisplayPreferencesPanel preferences={display.preferences} warning={display.warning} busy={busy} onChange={display.update} onReset={display.reset} onRetrySave={display.retrySave} onClose={closeModal} />}
     {modal?.kind === 'notes' && api && book && <NotesPanel key={book.book.id} api={api} book={book} displayPreferences={display.preferences} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { notesDirty.current = value }} onUpgrade={upgradeKnowledge}
       onCreate={(input, accept) => writeNote('notes.create', input, () => api.createNote(input), accept)} onUpdate={(input, accept) => writeNote('notes.update', input, () => api.updateNote(input), accept)} onPromote={(input, accept) => writeNote('notes.promote', input, () => api.promoteNote(input), accept)} />}
@@ -739,17 +961,23 @@ export function App({ api }: Props) {
     {modal?.kind === 'ai' && api && book && chapter && <AiPanel key={book.book.id} api={api} book={book} chapter={chapter} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onUpgrade={upgradeKnowledge} onAdopt={adoptAi} onAdoptMemory={adoptAiMemory} />}
     {modal?.kind === 'aiMemoryTasks' && api && book && <AiMemoryTasksPanel key={book.book.id} api={api} book={book} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onUpgrade={upgradeKnowledge} onAdoptMemory={adoptAiMemory} />}
     {modal?.kind === 'aiSummary' && api && book && <AiSummaryPanel key={book.book.id} api={api} book={book} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onUpgrade={upgradeKnowledge} onAdoptSummary={adoptAiSummary} />}
-    {modal?.kind === 'newBook' && <NameDialog title="新建作品" submitLabel="建立作品" onSubmit={(title) => void createBook(title)} onClose={closeModal} busy={busy} error={modalError} />}
+    {modal?.kind === 'newBook' && <NewBookDialog onSubmit={(input) => void createBook(input)} onImport={() => setModal({ kind: 'import' })} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmCloseRequested={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
+    {modal?.kind === 'workbench' && book && api && <Dialog title="规划、审稿与写作记录" wide className={styles.lightDialog} onClose={closeModal} busy={busy}>
+      <WorkbenchPanel key={`${workspace.rootPath}:${book.book.id}`} api={api} book={book} chapter={chapter} disabled={busy} onDirtyChange={(value) => { workbenchDirty.current = value }} onBookChange={applyBook} onChapterChange={(value) => { onSaved(value); session.load(value) }} onNavigate={(id) => void changeView(async () => { const value = await api.readChapter({ bookId: book.book.id, chapterId: id }); if (value.ok && value.data.bookId === book.book.id && value.data.id === id) { session.load(value.data); setModal(null); setSurface('write') } else setMessage(value.ok ? '章节身份不匹配。' : value.error.message) })} onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} />
+    </Dialog>}
+    {modal?.kind === 'inspiration' && workspace.rootPath && api && <Dialog title="全局灵感与拆书" wide className={styles.lightDialog} onClose={closeModal} busy={busy}>
+      <InspirationPanel key={workspace.rootPath} api={api} books={workspace.books} activeBook={book} disabled={busy} onDirtyChange={(value) => { inspirationDirty.current = value }} onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} onBookChanged={async (id) => { if (bookRef.current?.book.id === id) await refreshCurrentBook(id); else { const value = await request(() => api.getBook({ bookId: id })); if (value.ok) upsertShelf(value.data.book) } }} />
+    </Dialog>}
     {modal?.kind === 'newChapter' && <NameDialog title="新建章节" submitLabel="建立章节" onSubmit={(title) => void createChapter(title, modal.volumeId)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'volume' && <NameDialog title={modal.volumeId ? '修改卷名' : '新建卷'} initialValue={book?.volumes.find((item) => item.id === modal.volumeId)?.title} submitLabel="保存卷名" onSubmit={(title) => void saveVolume(title, modal.volumeId)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'bookDetails' && <BookDetailsDialog key={modal.book.id} book={modal.book} onSubmit={(fields) => void updateBookDetails(modal.book, fields)} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmClose={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
     {modal?.kind === 'chapterDetails' && chapter && book && <ChapterDetailsDialog key={chapter.id} chapter={chapter} volumes={book.volumes} onSubmit={(fields) => void updateChapterDetails(fields)} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmClose={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
-    {modal?.kind === 'history' && chapter && api && <RevisionHistory api={api} chapter={chapter} archived={archived} onRestore={(id) => void restoreRevision(id)} onClose={closeModal} busy={busy} error={modalError} />}
+    {modal?.kind === 'history' && chapter && api && <RevisionHistory api={api} chapter={chapter} archived={archived} onRestore={(id) => void restoreRevision(id)} onMerge={mergeSelectedRevision} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'finalize' && chapter && <ConfirmDialog title="作者定稿" label="确认当前稿为定稿" onSubmit={() => void finalizeChapter()} onClose={closeModal} busy={busy} error={modalError}>当前正文会先保存，再成为本章新的作者定稿。后续编辑会生成工作稿，导出时仍可单独选择这次定稿。</ConfirmDialog>}
     {modal?.kind === 'import' && api && <TextImportDialog api={api} onCommit={(token, title) => void commitImport(token, title)} onClose={closeModal} busy={busy} error={modalError} />}
-    {modal?.kind === 'export' && book && <ExportDialog title={book.book.title} finalizedCount={book.chapters.filter((item) => item.finalizedRevisionId).length} onSubmit={(fields) => void exportBook(fields)} onClose={closeModal} busy={busy} error={modalError} />}
+    {modal?.kind === 'export' && book && api && <ExportBookPanel api={api} book={book} onExport={exportBook} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'orphans' && api && <OrphanBooksDialog api={api} onRegister={(id) => void registerBook(id)} onClose={closeModal} busy={busy} error={modalError} />}
-    {modal?.kind === 'draftImport' && api && book && workspace.recoveryScope && <DraftImportDialog key={workspace.recoveryScope + ':' + book.book.id} api={api} scope={workspace.recoveryScope} book={book.book} busy={busy} error={modalError} onClose={closeModal} onCommit={(token, title) => void commitDraftImport(token, title)} />}
+    {modal?.kind === 'draftImport' && api && book && workspace.recoveryScope && <DraftImportDialog key={workspace.recoveryScope + ':' + book.book.id} api={api} scope={workspace.recoveryScope} book={book.book} busy={busy} error={modalError} onClose={closeModal} onRotated={protection.retry} onCommit={(token, title) => void commitDraftImport(token, title)} />}
     {modal?.kind === 'knowledge' && api && book && <KnowledgePanel key={book.book.id} api={api} book={book} busy={busy} error={modalError} onClose={closeModal} onDirtyChange={(dirty) => { knowledgeDirty.current = dirty }} onUpgrade={upgradeKnowledge} onCreate={createKnowledge} onUpdate={updateKnowledge} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} />}
     {modal?.kind === 'story' && api && book && <StoryPanel key={book.book.id} api={api} book={book} initialKind={modal.initialKind} busy={busy} error={modalError} onClose={closeModal} onDirtyChange={(dirty) => { storyDirty.current = dirty }} onUpgrade={upgradeKnowledge} onCreate={createStory} onUpdate={updateStory} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} />}
     {modal?.kind === 'timeline' && api && book && <StoryTimelinePanel key={book.book.id} api={api} book={book} busy={busy} error={modalError} onClose={closeModal} onOpenRecords={() => showDialog({ kind: 'story', initialKind: 'event' })} />}
@@ -767,8 +995,4 @@ function saveLabel(session: { dirty: boolean; saving: boolean; composing: boolea
   if (session.error?.code === 'REQUEST_TIMEOUT' || session.error?.code === 'SERVICE_UNAVAILABLE') return '保存待确认'
   if (session.error) return '保存失败'
   return session.dirty ? '未保存' : '已保存'
-}
-
-function EmptyWorkspace({ onOpen, busy, available }: { onOpen: () => void; busy: boolean; available: boolean }) {
-  return <section className={styles.emptyState}><span className={styles.emptyMark}>卷</span><h2>选择一处本地作品库</h2><p>作品、正文版本和后续知识资料都会留在你选择的目录中。</p><button className={styles.primaryButton} type="button" onClick={onOpen} disabled={busy || !available}>{!available ? '桌面连接不可用' : busy ? '正在选择…' : '选择作品库目录'}</button><small>首次使用请选一个空目录或已有织章工作室目录。</small></section>
 }

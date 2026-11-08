@@ -107,7 +107,7 @@ export class MemorySearchRepository {
       const data = parseMemorySearchInput(input)
       const db = this.getDatabase(data.bookId)
       requireMemory(db)
-      return db.transaction(() => {
+      return db.transaction((): MemorySearchPage => {
         const book = readBook(db, data.bookId)
         const compiled = toSearchQuery(data.query)
         if (!compiled && !data.entityId && !semantic) {
@@ -217,7 +217,7 @@ export class MemorySearchRepository {
       const data = parseMemoryEvidenceInput(input)
       const db = this.getDatabase(data.bookId)
       requireMemory(db)
-      return db.transaction(() => {
+      return db.transaction((): MemoryEvidence => {
         const book = readBook(db, data.bookId)
         const row = db.prepare(`${CURRENT} SELECT ${CHUNK_COLUMNS} FROM current_artifacts a
           JOIN memory_chunks c ON c.artifact_id = a.id WHERE c.id = ?`).get(data.chunkId) as ChunkRow | undefined

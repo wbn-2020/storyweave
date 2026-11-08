@@ -23,7 +23,7 @@ export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, 
   const previewId = useId()
 
   // 设置始终由父层即时应用；面板没有独立草稿，保存失败也不阻止关闭。
-  return <Dialog title="显示偏好" busy={busy} onClose={onClose}>
+  return <Dialog title="显示偏好" className={shared.lightDialog} busy={busy} onClose={onClose}>
     <div className={styles.panel}>
       <p id={helpId} className={styles.help}>写作和作品阅读共用这套设置，仅调整纸面显示。</p>
       <div className={styles.controls} role="group" aria-label="纸面显示设置" aria-describedby={helpId}>

@@ -179,7 +179,7 @@ export function BookRecoveryPanel(props: Props) {
     if (blocked || needsReconciliation || lock.current || !confirmed || !selected || selected.conflict || selected.targetRoot !== current.current.targetRoot ||
       selectionRef.current?.recoveryEpoch !== current.current.recoveryEpoch) return
     const source: RecoveryRequest = { command: 'recovery.restore', targetRoot: selected.targetRoot, recoveryEpoch: current.current.recoveryEpoch, preview: selected }
-    const input = { token: selected.token, packageId: selected.packageId, manifestHash: selected.manifestHash }
+    const input = { token: selected.token, packageId: selected.packageId, manifestHash: selected.manifestHash, resume: selected.targetState === 'resumable' }
     // 令牌在首次提交时从可用状态移除；失败、超时和补领都不得重复提交这次输入。
     clearPreview(); selectionRef.current = null
     void run(source, () => api.restoreBookRecovery(input))
@@ -247,7 +247,8 @@ export function BookRecoveryPanel(props: Props) {
       </section>}
       <section className={styles.fieldStack} aria-label="备份当前作品">
         <h3>备份当前作品</h3>
-        <p className={styles.helpText}>保存所有已落盘的正文、历史版本、作者定稿、资料与任务记录，以及登记的导入原件。未落盘草稿、书库目录、升级备份和会话密钥不包含在恢复包内。</p>
+        <p className={styles.helpText}>保存书内数据库中的正文、历史版本、作者定稿、资料与任务记录，以及登记的导入原件。恢复前会校验数据库结构、内容和文件摘要。</p>
+        <p className={styles.helpText}>恢复包不含未提交编辑、书库级自动检查点（包括已经落盘的各代草稿）、待补存模型结果、书架目录库、升级备份及显示偏好。全局灵感库 inspiration.sqlite 也不包含；先复制到书内笔记的灵感会随作品备份。请分别保留这些资料；模型会话密钥不会写入备份。完整作品备份不能替代整个工作区的备份。</p>
         <p className={styles.helpText}>{book ? `当前作品：《${book.title}》 · 作品版本 ${book.revision}${book.archivedAt ? ' · 已归档，可备份' : ''}` : '需要备份时，请先从书架打开作品。下方恢复入口可直接使用。'}</p>
         <button className={styles.button} type="button" disabled={blocked || needsReconciliation || !book || !targetRoot} onClick={exportBook}>选择保存位置并备份当前作品</button>
         <p className={styles.helpText}>选择父目录后，将新建一个独立的恢复包子目录。请完整保留其中的文件。</p>
@@ -281,10 +282,11 @@ export function BookRecoveryPanel(props: Props) {
             <p className={styles.directoryPath}>恢复包：{currentPreview.packagePath}</p>
             <p className={styles.directoryPath}>目标作品库：{currentPreview.targetRoot}</p>
           </div>
-          {currentPreview.conflict ? <p className={styles.formError} role="alert">目标作品库已有同一 ID 的作品或作品目录，无法恢复。请选择其他作品库，再重新选择恢复包。已有作品不会被覆盖。</p> : <label className={styles.checkLabel}>
-            <input type="checkbox" checked={confirmed} disabled={blocked || needsReconciliation} onChange={(event) => setConfirmed(event.target.checked)} />我已核对作品、备份时间和目标作品库，确认恢复这份作品。
+          <p className={currentPreview.conflict ? styles.formError : styles.helpText} role={currentPreview.conflict ? 'alert' : 'status'}>{currentPreview.targetMessage}</p>
+          {!currentPreview.conflict && <label className={styles.checkLabel}>
+            <input type="checkbox" checked={confirmed} disabled={blocked || needsReconciliation} onChange={(event) => setConfirmed(event.target.checked)} />{currentPreview.targetState === 'resumable' ? '我已核对恢复来源与目标，确认保留已有文件并续办这次恢复。' : '我已核对作品、备份时间和目标作品库，确认恢复这份作品。'}
           </label>}
-          <button className={styles.primaryButton} type="button" disabled={blocked || needsReconciliation || currentPreview.conflict || !confirmed} onClick={restoreBook}>确认恢复作品</button>
+          <button className={styles.primaryButton} type="button" disabled={blocked || needsReconciliation || currentPreview.conflict || !confirmed} onClick={restoreBook}>{currentPreview.targetState === 'resumable' ? '确认续办恢复' : '确认恢复作品'}</button>
         </>}
         {restored && <div className={styles.fieldStack}>
           <div className={styles.copyReceipt} role="status">《{restored.receipt.book.title}》已恢复完成

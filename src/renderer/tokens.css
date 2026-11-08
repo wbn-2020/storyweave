@@ -13,8 +13,13 @@
   --color-paper: #f4f0e7;
   --color-paper-ink: #363832;
   --color-paper-muted: #68695f;
-  --font-ui: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
-  --font-manuscript: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif;
+  --home-bg: #f5f5f7;
+  --home-ink: #1d1d1f;
+  --home-muted: #636366;
+  --home-accent: #0865d1;
+  --home-line: #e0e2e6;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei UI', system-ui, sans-serif;
+  --font-manuscript: 'Noto Serif SC', 'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif;
   font: 14px/1.65 var(--font-ui);
   background: var(--color-bg);
   color: var(--color-ink);
@@ -23,14 +28,16 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 360px; }
 button, input, select, textarea { font: inherit; }
+svg { flex-shrink: 0; }
 button { color: inherit; cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 button, input { -webkit-tap-highlight-color: transparent; }
+input::placeholder, textarea::placeholder { color: var(--color-muted); opacity: 1; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 h1, h2, h3, p { margin: 0; }
 h1, h2, h3 { font-weight: 500; text-wrap: balance; }
 button, a { touch-action: manipulation; }
-::selection { background: #d8bd9166; }
+::selection { background: #0a84ff30; }
 .fatal-screen { max-width: 680px; padding: 55px 35px; margin: 0 auto; }
 .fatal-screen h1 { font-size: 22px; margin-bottom: 20px; }
 .fatal-screen p { font-size: 13px; line-height: 1.9; color: var(--color-muted); margin-top: 12px; }

@@ -34,6 +34,8 @@ export interface AiPrepareInput extends AiBookInput {
   expectedRevisionId: string
   connectionId: string
   kind: AiTaskKind
+  /** 审稿沿用 plan 存储类型，独立固定语义，不能当成规划采用。 */
+  purpose?: 'review'
   instruction: string
   contextScope: 'chapter' | 'nearby'
   /** 缺省沿用作者视角。 */
@@ -46,6 +48,17 @@ export interface AiPrepareInput extends AiBookInput {
 export interface AiPrepareServiceInput extends AiPrepareInput { connection: AiConnection }
 export interface AiContextBlock { blockId: string; startOffset: number; endOffset: number; text: string }
 export interface AiMessage { role: 'system' | 'user'; content: string }
+export interface AiWritingContext {
+  version: 1
+  settingsRevision: number | null
+  genre: string
+  synopsis: string
+  premise: string
+  style: string
+  narrator: string
+  tense: string
+  rules: string
+}
 export interface AiContextPacket {
   bookId: string
   chapterId: string
@@ -54,6 +67,7 @@ export interface AiContextPacket {
   chapterRevisionId: string
   chapterTitle: string
   kind: AiTaskKind
+  purpose?: 'review'
   instruction: string
   contextScope: 'chapter' | 'nearby'
   /** 旧上下文缺省沿用作者视角。 */
@@ -75,6 +89,8 @@ export interface AiContextPacket {
   summary?: AiSummaryContext
   /** 创作时手选的完整已采用摘要；与生成分层汇总的 summary 互斥。 */
   contextSummaries?: AiContextSummarySnapshot[]
+  /** 独立版本的作者创作约定快照；旧候选缺省不附加，受限视角不发送。 */
+  writingContext?: AiWritingContext
 }
 export interface AiUsage { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }
 export interface AiRunSummary {
@@ -83,6 +99,7 @@ export interface AiRunSummary {
   chapterId: string
   chapterTitle: string
   kind: AiTaskKind
+  purpose?: 'review'
   state: AiRunState
   version: number
   connectionName: string
@@ -125,8 +142,22 @@ export interface AiMemorySuggestion {
   citations: AiMemoryCitation[]
 }
 export interface AiMemoryProposal { items: AiMemorySuggestion[] }
-export interface AiMemoryReviewEntry { sourceIndex: number; fields: KnowledgeItemFields }
-export interface AiMemoryAdoptedEntry extends AiMemoryReviewEntry { itemId: string; citations: AiMemoryCitation[] }
+export type AiMemoryReviewAction = 'create' | 'link' | 'revise' | 'ignore'
+export interface AiMemoryReviewEntry {
+  sourceIndex: number
+  fields: KnowledgeItemFields
+  /** 旧审计缺省为新建。已有实体操作固定目标身份及作者查看过的修订。 */
+  action?: AiMemoryReviewAction
+  targetItemId?: string
+  expectedTargetRevisionId?: string
+}
+export interface AiMemoryAdoptedEntry extends AiMemoryReviewEntry {
+  itemId: string | null
+  citations: AiMemoryCitation[]
+  changed?: boolean
+  previousFields?: KnowledgeItemFields
+  resultingRevisionId?: string
+}
 export interface AiMemoryAdoptInput extends AiVersionInput { entries: AiMemoryReviewEntry[]; maintenanceBaseline?: AiMaintenanceBaseline }
 export interface AiMemoryAdoptReceipt { bookId: string; run: AiRun; status: KnowledgeStatus; itemIds: string[] }
 
@@ -139,12 +170,13 @@ function adoptedRunMatches(input: AiVersionInput, source: AiRun, saved: AiRun): 
     saved.context.bookId === source.context.bookId && saved.context.chapterId === source.context.chapterId && saved.context.kind === source.context.kind &&
     saved.context.bookRevision === source.context.bookRevision && saved.context.knowledgeRevision === source.context.knowledgeRevision &&
     saved.context.chapterRevisionId === source.context.chapterRevisionId && saved.context.promptVersion === source.context.promptVersion &&
+    saved.context.purpose === source.context.purpose && JSON.stringify(saved.context.writingContext) === JSON.stringify(source.context.writingContext) &&
     saved.context.contextHash === source.context.contextHash
 }
 
 export function isAiAdoptReceiptFor(input: AiAdoptInput, source: AiRun, receipt: AiAdoptReceipt): boolean {
   try {
-    return source.context.summary === undefined && !isAiMemoryTask(source.kind) && receipt.bookId === input.bookId && adoptedRunMatches(input, source, receipt.run) &&
+    return source.context.summary === undefined && source.context.purpose !== 'review' && !isAiMemoryTask(source.kind) && receipt.bookId === input.bookId && adoptedRunMatches(input, source, receipt.run) &&
       receipt.run.acceptedText === input.acceptedText && receipt.chapter.bookId === input.bookId && receipt.chapter.id === source.chapterId &&
       receipt.chapter.bookRevision === source.context.bookRevision + 1 && receipt.run.adoptedRevisionId === receipt.chapter.revisionId
   } catch { return false }
@@ -153,18 +185,32 @@ export function isAiAdoptReceiptFor(input: AiAdoptInput, source: AiRun, receipt:
 export function isAiMemoryAdoptReceiptFor(input: AiMemoryAdoptInput, source: AiRun, receipt: AiMemoryAdoptReceipt): boolean {
   try {
     const baseline = input.maintenanceBaseline
+    const savedEntries = receipt.run.memoryAdoptions
+    if (!savedEntries || savedEntries.length !== input.entries.length) return false
+    const changes = savedEntries.filter((entry) => entry.changed ?? true).length
+    const itemIds = savedEntries.flatMap((entry) => entry.itemId === null ? [] : [entry.itemId])
     if (baseline && (receipt.status.schemaVersion < 11 || baseline.expectedBookRevision < source.context.bookRevision || baseline.expectedKnowledgeRevision !== source.context.knowledgeRevision)) return false
     if (source.context.summary !== undefined || receipt.run.context.summary !== undefined || !isAiMemoryTask(source.kind) || receipt.bookId !== input.bookId || !adoptedRunMatches(input, source, receipt.run) ||
       receipt.run.adoptedRevisionId !== source.context.chapterRevisionId || receipt.status.bookId !== input.bookId || receipt.status.schemaVersion < 7 ||
-      receipt.status.bookRevision !== (baseline?.expectedBookRevision ?? source.context.bookRevision) + input.entries.length ||
-      receipt.status.knowledgeRevision !== source.context.knowledgeRevision + input.entries.length ||
-      receipt.itemIds.length !== input.entries.length || new Set(receipt.itemIds).size !== receipt.itemIds.length ||
-      receipt.run.memoryAdoptions?.length !== input.entries.length) return false
+      receipt.status.bookRevision !== (baseline?.expectedBookRevision ?? source.context.bookRevision) + changes ||
+      receipt.status.knowledgeRevision !== source.context.knowledgeRevision + changes ||
+      JSON.stringify(receipt.itemIds) !== JSON.stringify(itemIds) || new Set(itemIds).size !== itemIds.length) return false
     const proposal = parseAiMemoryProposal(source.outputText, source.context)
     return input.entries.every((entry, index) => {
       const saved = receipt.run.memoryAdoptions![index]!
       const original = proposal.items[entry.sourceIndex]
-      return original !== undefined && requiredId(receipt.itemIds[index]) === saved.itemId && saved.sourceIndex === entry.sourceIndex &&
+      const action = entry.action ?? 'create'
+      if (saved.changed !== undefined && typeof saved.changed !== 'boolean') return false
+      if ((saved.action ?? 'create') !== action || saved.targetItemId !== entry.targetItemId ||
+        saved.expectedTargetRevisionId !== entry.expectedTargetRevisionId) return false
+      if (action === 'ignore' ? saved.itemId !== null || saved.changed !== false : saved.itemId === null || requiredId(saved.itemId) !== saved.itemId) return false
+      if (action === 'create' && saved.changed === false) return false
+      if ((action === 'link' || action === 'revise') && (typeof saved.changed !== 'boolean' || saved.itemId !== entry.targetItemId || !saved.previousFields || !saved.resultingRevisionId ||
+        saved.previousFields.kind !== entry.fields.kind || saved.previousFields.nature !== entry.fields.nature ||
+        requiredId(saved.resultingRevisionId) !== saved.resultingRevisionId ||
+        (saved.changed === false && (saved.resultingRevisionId !== entry.expectedTargetRevisionId || JSON.stringify(saved.previousFields) !== JSON.stringify(entry.fields))) ||
+        (action === 'link' && JSON.stringify(saved.previousFields) !== JSON.stringify(entry.fields)))) return false
+      return original !== undefined && saved.sourceIndex === entry.sourceIndex &&
         JSON.stringify(saved.fields) === JSON.stringify(entry.fields) && JSON.stringify(saved.citations) === JSON.stringify(original.citations)
     })
   } catch { return false }
@@ -188,6 +234,18 @@ function positive(value: unknown, label: string, maximum: number): number {
   const number = requiredInteger(value, label, maximum)
   if (number < 1) invalid(`${label}必须大于零。`)
   return number
+}
+export function parseAiWritingContext(value: unknown): AiWritingContext {
+  const data = record(value, ['version', 'settingsRevision', 'genre', 'synopsis', 'premise', 'style', 'narrator', 'tense', 'rules'])
+  if (data.version !== 1) invalid('作品创作约定快照版本无效。')
+  const text = (key: string, maximum: number) => {
+    const value = data[key]
+    if (typeof value !== 'string' || value.length > maximum || value.includes('\0')) invalid('作品创作约定内容无效或超出上限。')
+    return value
+  }
+  return { version: 1, settingsRevision: data.settingsRevision === null ? null : requiredInteger(data.settingsRevision, '创作约定版本'),
+    genre: text('genre', 120), synopsis: text('synopsis', 5000), premise: text('premise', 5000),
+    style: text('style', 5000), narrator: text('narrator', 500), tense: text('tense', 500), rules: text('rules', 10_000) }
 }
 export function parseAiEndpoint(value: unknown): string {
   const raw = requiredText(value, '模型接口地址', 2000)
@@ -231,8 +289,9 @@ export function parseAiBookInput(value: unknown): AiBookInput {
   return { bookId: id(data.bookId) }
 }
 export function parseAiPrepareInput(value: unknown): AiPrepareInput {
-  const data = record(value, ['bookId', 'chapterId', 'expectedBookRevision', 'expectedKnowledgeRevision', 'expectedRevisionId', 'connectionId', 'kind', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs'])
+  const data = record(value, ['bookId', 'chapterId', 'expectedBookRevision', 'expectedKnowledgeRevision', 'expectedRevisionId', 'connectionId', 'kind', 'purpose', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs'])
   if (!['plan', 'continue', 'rewrite', 'summarize', 'extract'].includes(String(data.kind))) invalid('不支持这个协作任务。')
+  if (data.purpose !== undefined && (data.purpose !== 'review' || data.kind !== 'plan')) invalid('审稿用途只能用于审阅任务。')
   if (data.contextScope !== 'chapter' && data.contextScope !== 'nearby') invalid('上下文范围无效。')
   if (data.perspective !== undefined && data.perspective !== 'author' && data.perspective !== 'reader' && data.perspective !== 'character') invalid('上下文视角无效。')
   if ((data.kind === 'summarize' || data.kind === 'extract') && data.perspective !== undefined && data.perspective !== 'author') invalid('章节整理仅支持作者视角。')
@@ -250,6 +309,7 @@ export function parseAiPrepareInput(value: unknown): AiPrepareInput {
   return { bookId: id(data.bookId), chapterId: id(data.chapterId), expectedBookRevision: requiredInteger(data.expectedBookRevision, '作品版本'),
     expectedKnowledgeRevision: requiredInteger(data.expectedKnowledgeRevision, '知识版本'), expectedRevisionId: id(data.expectedRevisionId), connectionId: id(data.connectionId),
     kind: data.kind as AiTaskKind, instruction: requiredText(data.instruction, '协作要求', 6000), contextScope: data.contextScope,
+    ...(data.purpose === 'review' ? { purpose: 'review' as const } : {}),
     selectedBlockIds, memoryChunkIds, ...(data.perspective === 'reader' ? { perspective: 'reader' as const } : {}),
     ...(characterScope ? { perspective: 'character' as const, characterScope } : {}),
     ...(summaryRefs.length ? { summaryRefs } : {}) }
@@ -325,13 +385,22 @@ export function parseAiMemoryAdoptInput(value: unknown, mode: 'input' | 'history
   const data = record(value, ['bookId', 'runId', 'expectedVersion', 'entries', 'maintenanceBaseline'])
   if (!Array.isArray(data.entries) || data.entries.length < 1 || data.entries.length > 20) invalid('请选择 1 至 20 条已经审阅的整理结果。')
   const entries = data.entries.map((value): AiMemoryReviewEntry => {
-    const entry = record(value, ['sourceIndex', 'fields'])
+    const entry = record(value, ['sourceIndex', 'fields', 'action', 'targetItemId', 'expectedTargetRevisionId'])
+    const action = entry.action ?? 'create'
+    if (!['create', 'link', 'revise', 'ignore'].includes(String(action))) invalid('请选择新建、关联、修订或忽略。')
+    const existing = action === 'link' || action === 'revise'
+    if (!existing && (entry.targetItemId !== undefined || entry.expectedTargetRevisionId !== undefined)) invalid('只有关联或修订可以指定已有实体。')
     const fields = parseKnowledgeFields(entry.fields)
     if (mode !== 'history' && fields.summary.includes('\0')) invalid('采用条目说明不能包含空字符（NUL），请修正后再采用。')
-    if (!['ai_derived', 'narrative_claim', 'character_belief', 'ai_inference'].includes(fields.nature) || fields.authorDecision !== 'adopted' || fields.freshness !== 'current' || !fields.summary.trim() || fields.summary.length > 8000) invalid('采用条目须保持整理性质、当前状态和作者采用决定，并有不超过 8,000 字符的说明。')
-    return { sourceIndex: requiredInteger(entry.sourceIndex, '原提议序号', 19), fields }
+    if (!existing && (!['ai_derived', 'narrative_claim', 'character_belief', 'ai_inference'].includes(fields.nature) || fields.authorDecision !== 'adopted' || fields.freshness !== 'current' || !fields.summary.trim() || fields.summary.length > 8000)) invalid('新建或忽略条目须保留原提议性质，并有不超过 8,000 字符的说明。')
+    if (action === 'revise' && (fields.authorDecision !== 'adopted' || fields.freshness !== 'current')) invalid('修订须由作者确认采用并核对为当前资料。')
+    return { sourceIndex: requiredInteger(entry.sourceIndex, '原提议序号', 19), fields,
+      ...(entry.action === undefined ? {} : { action: action as AiMemoryReviewAction }),
+      ...(existing ? { targetItemId: id(entry.targetItemId), expectedTargetRevisionId: id(entry.expectedTargetRevisionId) } : {}) }
   })
   if (new Set(entries.map((entry) => entry.sourceIndex)).size !== entries.length) invalid('同一整理提议不能重复采用。')
+  const targets = entries.flatMap((entry) => entry.targetItemId ? [entry.targetItemId] : [])
+  if (new Set(targets).size !== targets.length) invalid('同批不能多次修改同一实体，请合并审阅内容并忽略重复提议。')
   if (JSON.stringify(entries).length > AI_OUTPUT_LIMIT) invalid('本次采用内容超过 60,000 字符，请减少所选条目或缩短说明。')
   return { ...parseAiVersionInput({ bookId: data.bookId, runId: data.runId, expectedVersion: data.expectedVersion }), entries,
     ...(data.maintenanceBaseline === undefined ? {} : { maintenanceBaseline: parseAiMaintenanceBaseline(data.maintenanceBaseline) }) }

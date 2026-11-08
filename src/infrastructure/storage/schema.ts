@@ -6,9 +6,10 @@ import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memor
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
+import { WORKBENCH_SCHEMA } from '../workbench/schema'
 
 export const STUDIO_SCHEMA_VERSION = 2
-export const BOOK_SCHEMA_VERSION = 12
+export const BOOK_SCHEMA_VERSION = 13
 export const STUDIO_APPLICATION_ID = 0x53545753
 export const BOOK_APPLICATION_ID = 0x53545742
 
@@ -123,4 +124,5 @@ export const BOOK_SCHEMA = `
   ${MEMORY_VECTOR_SCHEMA}
   ${AI_MEMORY_MAINTENANCE_SCHEMA}
   ${NOTES_SCHEMA}
+  ${WORKBENCH_SCHEMA}
 `

@@ -4,6 +4,8 @@ import { StoryRepository } from '../../infrastructure/story/story-repository'
 import { StoryTimelineRepository } from '../../infrastructure/story/timeline-repository'
 import { StoryGalaxyRepository } from '../../infrastructure/story/galaxy-repository'
 import { NotesRepository } from '../../infrastructure/notes/notes-repository'
+import { WorkbenchRepository } from '../../infrastructure/workbench/workbench-repository'
+import { InspirationRepository } from '../../infrastructure/workbench/inspiration-repository'
 import { MemoryRepository } from '../../infrastructure/memory/task-repository'
 import { MemorySearchRepository } from '../../infrastructure/memory/search-repository'
 import { MemoryVectorRepository } from '../../infrastructure/memory/vector-repository'
@@ -14,6 +16,8 @@ import { AiContextSummaryRepository } from '../../infrastructure/ai/context-summ
 import { AiContextRecommendationRepository } from '../../infrastructure/ai/context-recommendation'
 import { StudioRepository } from '../../infrastructure/storage/studio-repository'
 import { BookRecoveryRepository } from '../../infrastructure/storage/book-recovery-repository'
+import { BookExportRepository } from '../../infrastructure/storage/book-export'
+import { mergeRevision } from '../../infrastructure/storage/revision-merge'
 import { parseServiceRequest } from '../request-validation'
 import { writeNewText } from '../file-access'
 import { ImportSessions } from './import-sessions'
@@ -26,6 +30,8 @@ const story = new StoryRepository(repository)
 const timeline = new StoryTimelineRepository(repository)
 const galaxy = new StoryGalaxyRepository(repository)
 const notes = new NotesRepository(repository)
+const workbench = new WorkbenchRepository(repository)
+const inspirations = new InspirationRepository(repository, notes)
 const memory = new MemoryRepository((bookId) => repository.getMemoryDatabase(bookId))
 const memorySearch = new MemorySearchRepository((bookId) => repository.getMemoryDatabase(bookId), (input) => memory.status(input))
 const memoryVectors = new MemoryVectorRepository((bookId) => repository.getMemoryDatabase(bookId), memorySearch)
@@ -36,6 +42,7 @@ const aiContextSummaries = new AiContextSummaryRepository(repository)
 const aiContextRecommendations = new AiContextRecommendationRepository(repository, memorySearch, memoryVectors)
 const imports = new ImportSessions(repository)
 const bookRecovery = new BookRecoveryRepository(repository)
+const bookExports = new BookExportRepository(repository)
 type ServiceOutput = CommandMap[ServiceCommand]['output']
 const MAX_PENDING_REQUESTS = 8
 let pendingRequests = 0
@@ -43,11 +50,26 @@ let requestQueue = Promise.resolve()
 
 async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
   switch (request.command) {
+    case 'revision.merge': return mergeRevision(repository, request.payload)
+    case 'book.export.prepare': return bookExports.prepare(request.payload)
+    case 'book.export.chapter': return bookExports.readChapter(request.payload)
+    case 'book.export.commit': return bookExports.export(request.payload)
+    case 'workbench.get': return workbench.get(request.payload)
+    case 'workbench.brief': return workbench.saveBrief(request.payload)
+    case 'workbench.scene': return workbench.saveScene(request.payload)
+    case 'workbench.issue': return workbench.saveIssue(request.payload)
+    case 'workbench.applyIssue': return workbench.applyIssue(request.payload)
+    case 'workbench.goal': return workbench.saveGoal(request.payload)
+    case 'workbench.session': return workbench.logSession(request.payload)
+    case 'inspiration.list': return inspirations.list(request.payload)
+    case 'inspiration.save': return inspirations.save(request.payload)
+    case 'inspiration.copy': return inspirations.copyToNote(request.payload)
     case 'workspace.get': return repository.getWorkspace()
     case 'workspace.open': {
       const workspace = repository.openWorkspace(request.payload.rootPath)
       imports.clear()
       bookRecovery.clear()
+      bookExports.clear()
       return workspace
     }
     case 'book.create': return repository.createBook(request.payload)
@@ -137,7 +159,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
       const output = writeNewText(request.payload.filePath, (write) => repository.exportBookText(request.payload, write))
       return { ...output.receipt, ...output.value }
     }
-    case 'service.close': imports.clear(); bookRecovery.clear(); repository.close(); return null
+    case 'service.close': imports.clear(); bookRecovery.clear(); bookExports.clear(); repository.close(); return null
   }
 }
 

@@ -13,6 +13,11 @@ import type { AiContextSummaryInput, AiContextSummaryPage } from './ai-context-s
 import type { AiContextRecommendationInput, AiContextRecommendationPage } from './ai-context-recommendation'
 import type { MemoryVectorFinishInput, MemoryVectorPrepareInput, MemoryVectorPrepareServiceInput, MemoryVectorProfileInput, MemoryVectorProfileServiceInput, MemoryVectorReadInput, MemoryVectorRun, MemoryVectorStartInput, MemoryVectorStatus, MemoryVectorVersionInput } from './memory-vector'
 import type { BookRecoveryExportInput, BookRecoveryExportServiceInput, BookRecoveryExportReceipt, BookRecoveryPrepareInput, BookRecoveryPreview, BookRecoveryRestoreInput, BookRecoveryRestoreReceipt } from './book-recovery'
+import type { RecoveryDraftInventory, RecoveryDraftListInput, RecoveryDraftRotateInput } from './book-recovery'
+import type { CopyInspirationInput, InspirationItem, InspirationPage, ListInspirationInput, LogWritingSessionInput, SaveBriefInput, SaveInspirationInput, SaveReviewIssueInput, SaveSceneInput, SaveWritingGoalInput, WorkbenchSnapshot } from './workbench'
+import type { ApplyReviewIssueInput, ApplyReviewIssueReceipt } from './workbench'
+import type { RevisionMergeInput, RevisionMergeOutput } from './revision-merge'
+import type { BookExportPrepareInput, BookExportPreview, BookExportChapterInput, BookExportChapterPreview, BookExportCommitInput, BookExportCommitServiceInput, BookExportReceipt } from './export'
 
 export const IPC_CHANNEL = 'storyweave:request'
 export const CLOSE_REQUEST_CHANNEL = 'storyweave:close-request'
@@ -89,7 +94,8 @@ export interface ChapterSnapshot extends ChapterSummary {
   bookRevision: number
 }
 
-export interface CreateBookInput { title: string }
+export interface BookStarter { firstChapterTitle: string; protagonist: string; desire: string; obstacle: string }
+export interface CreateBookInput { title: string; starter?: BookStarter }
 export interface BookInput { bookId: string }
 export interface CreateChapterInput extends BookInput { title: string; volumeId?: string | null }
 export interface ChapterInput extends BookInput { chapterId: string }
@@ -163,7 +169,7 @@ export interface SaveDraftCopyInput extends ChapterInput { title: string; baseRe
 export interface DraftImportData extends BookMutationInput { title: string; sourceName: string; sourceBytes: Uint8Array }
 export interface DraftScopeInput { scope: string }
 export interface DraftCheckpointInput extends SaveDraftCopyInput, DraftScopeInput { editorSessionId: string; editSequence: number }
-export interface DraftCheckpointReceipt { checkpointId: string; createdAt: string }
+export interface DraftCheckpointReceipt { checkpointId: string; createdAt: string; warning?: string }
 export interface RecoveryDraftSummary extends ChapterInput {
   checkpointId: string
   title: string
@@ -171,9 +177,9 @@ export interface RecoveryDraftSummary extends ChapterInput {
   createdAt: string
   characterCount: number
 }
-export interface RecoveryDraftList { items: RecoveryDraftSummary[]; skipped: number; warnings: string[] }
+export interface RecoveryDraftList extends RecoveryDraftInventory { items: RecoveryDraftSummary[]; skipped: number; warnings: string[] }
 export interface DraftPreviewInput extends BookMutationInput, DraftScopeInput {}
-export interface RecoveryDraftInput extends DraftPreviewInput { checkpointId: string }
+export interface RecoveryDraftInput extends DraftPreviewInput { checkpointId: string; generationId?: string }
 export interface DraftImportPreview extends SaveDraftCopyInput {
   token: string
   sourceName: string
@@ -186,6 +192,20 @@ export interface DraftImportPreview extends SaveDraftCopyInput {
 export interface CommitDraftImportInput extends DraftScopeInput { token: string; title: string }
 
 export interface CommandMap {
+  'revision.merge': { input: RevisionMergeInput; output: RevisionMergeOutput }
+  'book.export.prepare': { input: BookExportPrepareInput; output: BookExportPreview }
+  'book.export.chapter': { input: BookExportChapterInput; output: BookExportChapterPreview }
+  'book.export.commit': { input: BookExportCommitServiceInput; output: BookExportReceipt }
+  'workbench.get': { input: BookInput; output: WorkbenchSnapshot }
+  'workbench.brief': { input: SaveBriefInput; output: WorkbenchSnapshot }
+  'workbench.scene': { input: SaveSceneInput; output: WorkbenchSnapshot }
+  'workbench.issue': { input: SaveReviewIssueInput; output: WorkbenchSnapshot }
+  'workbench.applyIssue': { input: ApplyReviewIssueInput; output: ApplyReviewIssueReceipt }
+  'workbench.goal': { input: SaveWritingGoalInput; output: WorkbenchSnapshot }
+  'workbench.session': { input: LogWritingSessionInput; output: WorkbenchSnapshot }
+  'inspiration.list': { input: ListInspirationInput; output: InspirationPage }
+  'inspiration.save': { input: SaveInspirationInput; output: InspirationItem }
+  'inspiration.copy': { input: CopyInspirationInput; output: NoteDetail }
   'workspace.get': { input: undefined; output: WorkspaceSnapshot }
   'workspace.open': { input: { rootPath: string }; output: WorkspaceSnapshot }
   'book.create': { input: CreateBookInput; output: BookSnapshot }
@@ -296,6 +316,20 @@ export type RequestStatus =
 
 // renderer 只能选择目录并调用领域命令，不能传入任意磁盘路径或 SQL。
 export interface StudioApi {
+  mergeRevision(input: RevisionMergeInput): Promise<Result<RevisionMergeOutput>>
+  prepareBookExport(input: BookExportPrepareInput): Promise<Result<BookExportPreview>>
+  readBookExportChapter(input: BookExportChapterInput): Promise<Result<BookExportChapterPreview>>
+  commitBookExport(input: BookExportCommitInput): Promise<Result<BookExportReceipt | null>>
+  getWorkbench(input: BookInput): Promise<Result<WorkbenchSnapshot>>
+  saveWritingBrief(input: SaveBriefInput): Promise<Result<WorkbenchSnapshot>>
+  saveScene(input: SaveSceneInput): Promise<Result<WorkbenchSnapshot>>
+  saveReviewIssue(input: SaveReviewIssueInput): Promise<Result<WorkbenchSnapshot>>
+  applyReviewIssue(input: ApplyReviewIssueInput): Promise<Result<ApplyReviewIssueReceipt>>
+  saveWritingGoal(input: SaveWritingGoalInput): Promise<Result<WorkbenchSnapshot>>
+  logWritingSession(input: LogWritingSessionInput): Promise<Result<WorkbenchSnapshot>>
+  listInspirations(input: ListInspirationInput): Promise<Result<InspirationPage>>
+  saveInspiration(input: SaveInspirationInput): Promise<Result<InspirationItem>>
+  copyInspirationToNote(input: CopyInspirationInput): Promise<Result<NoteDetail>>
   getWorkspace(): Promise<Result<WorkspaceSnapshot>>
   selectWorkspace(): Promise<Result<WorkspaceSnapshot | null>>
   createBook(input: CreateBookInput): Promise<Result<BookSnapshot>>
@@ -325,7 +359,8 @@ export interface StudioApi {
   restoreBookRecovery(input: BookRecoveryRestoreInput): Promise<Result<BookRecoveryRestoreReceipt>>
   saveDraftCopy(input: SaveDraftCopyInput): Promise<Result<FileWriteReceipt | null>>
   checkpointDraft(input: DraftCheckpointInput): Promise<Result<DraftCheckpointReceipt>>
-  listRecoveryDrafts(input: DraftScopeInput): Promise<Result<RecoveryDraftList>>
+  listRecoveryDrafts(input: RecoveryDraftListInput): Promise<Result<RecoveryDraftList>>
+  rotateRecoveryDrafts(input: RecoveryDraftRotateInput): Promise<Result<RecoveryDraftList>>
   selectDraftImport(input: DraftPreviewInput): Promise<Result<DraftImportPreview | null>>
   previewRecoveryDraft(input: RecoveryDraftInput): Promise<Result<DraftImportPreview>>
   commitDraftImport(input: CommitDraftImportInput): Promise<Result<ChapterSnapshot>>
@@ -391,10 +426,11 @@ export interface StudioApi {
   onCloseCancelled(handler: () => void): () => void
 }
 
-export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare'>
+export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare'>
   | 'workspace.select' | 'request.status' | 'import.select' | 'book.exportFile' | 'draft.copy' | 'service.restart'
   | 'recovery.exportFile' | 'recovery.select'
-  | 'draft.checkpoint' | 'draft.list' | 'draft.select' | 'draft.preview' | 'draft.commit'
+  | 'book.export.commitFile'
+  | 'draft.checkpoint' | 'draft.list' | 'draft.rotate' | 'draft.select' | 'draft.preview' | 'draft.commit'
   | 'ai.configure' | 'ai.start' | 'ai.cancel'
   | 'memory.vector.start'
 
@@ -439,4 +475,14 @@ export function optionalText(value: unknown, label: string, maxLength: number): 
     throw new DomainError({ code: 'INVALID_INPUT', message: `${label}不能超过 ${maxLength} 个字符。` })
   }
   return value.trim()
+}
+
+export function parseCreateBookInput(value: unknown): CreateBookInput {
+  if (!isRecord(value)) throw new DomainError({ code: 'INVALID_INPUT', message: '新作品参数无效。' })
+  const title = requiredText(value.title, '作品名称', 120)
+  if (value.starter === undefined) return { title }
+  if (!isRecord(value.starter)) throw new DomainError({ code: 'INVALID_INPUT', message: '故事种子无效。' })
+  return { title, starter: { firstChapterTitle: requiredText(value.starter.firstChapterTitle, '第一章名称', 120),
+    protagonist: optionalText(value.starter.protagonist, '主角', 500), desire: optionalText(value.starter.desire, '主角的愿望', 2_000),
+    obstacle: optionalText(value.starter.obstacle, '主要阻碍', 2_000) } }
 }

@@ -1,4 +1,4 @@
-.panel { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.panel { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
 .panel button { transition: none; }
 .panel button:focus-visible, .panel select:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .help { color: var(--color-muted); line-height: 1.85; }
@@ -10,7 +10,7 @@
 .warning button { max-width: 100%; margin-top: 10px; }
 .previewSection { margin: 22px 0 16px; }
 .previewHeading { margin-bottom: 10px; font-size: 12px; font-weight: 500; color: var(--color-muted); }
-.preview { min-width: 0; padding: 22px 20px; border-radius: 3px; background: var(--color-paper); color: var(--color-paper-ink); font-family: var(--font-manuscript); font-size: var(--manuscript-font-size); line-height: var(--manuscript-line-height); font-variant-ligatures: none; }
+.preview { min-width: 0; padding: 22px 20px; border-radius: 10px; background: var(--color-paper); color: var(--color-paper-ink); font-family: var(--font-manuscript); font-size: var(--manuscript-font-size); line-height: var(--manuscript-line-height); font-variant-ligatures: none; }
 .preview h4 { margin: 0 0 1em; font-family: inherit; font-size: 1.18em; font-weight: 600; line-height: 1.7; text-wrap: balance; }
 .preview p { margin: 0 0 1em; }
 .preview p:last-child { margin-bottom: 0; }

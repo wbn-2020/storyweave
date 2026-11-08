@@ -5,7 +5,7 @@ import { DomainError, isRecord, requiredId, requiredInteger, type ChapterSnapsho
 import {
   AI_CONTEXT_LIMIT, AI_OUTPUT_LIMIT, AI_PROMPT_VERSION, AI_MEMORY_PROMPT_VERSION, AI_READER_CONTEXT_PROMPT_VERSION, isAiMemoryTask,
   parseAiAdoptInput, parseAiBookInput, parseAiCheckpointInput, parseAiConnectionConfig, parseAiConnectionSaveInput,
-  parseAiFinishInput, parseAiListInput, parseAiMemoryAdoptInput, parseAiMemoryProposal, parseAiPrepareInput, parseAiRunInput, parseAiStartInput, parseAiVersionInput,
+  parseAiFinishInput, parseAiListInput, parseAiMemoryAdoptInput, parseAiMemoryProposal, parseAiPrepareInput, parseAiRunInput, parseAiStartInput, parseAiVersionInput, parseAiWritingContext,
   type AiAdoptInput, type AiAdoptReceipt, type AiBookInput, type AiCheckpointInput, type AiConnection, type AiMaintenanceBaseline,
   type AiConnectionPage, type AiConnectionSaveInput, type AiContextPacket, type AiFinishInput, type AiListInput,
   type AiPrepareServiceInput, type AiRun, type AiRunInput, type AiRunPage, type AiRunState, type AiRunSummary,
@@ -13,8 +13,9 @@ import {
 } from '../../contracts/ai'
 import { AI_SUMMARY_PROMPT_VERSION, parseAiSummaryContext } from '../../contracts/ai-summary'
 import { AI_CONTEXT_SUMMARY_PROMPT_VERSION, contextSummaryRef, parseAiContextSummarySnapshots } from '../../contracts/ai-context-summary'
-import { AI_CHARACTER_CONTEXT_PROMPT_VERSION, characterScopeOf, parseAiCharacterContext } from '../../contracts/ai-character-context'
+import { characterScopeOf, isAiCharacterContextPromptVersion, parseAiCharacterContext } from '../../contracts/ai-character-context'
 import { parseManuscript } from '../../contracts/manuscript'
+import { parseKnowledgeFields } from '../../contracts/knowledge'
 import { parseDisclosure } from '../../contracts/story'
 import { KnowledgeRepository } from '../knowledge/knowledge-repository'
 import type { MemorySearchRepository } from '../memory/search-repository'
@@ -32,6 +33,7 @@ interface ConnectionRow {
 }
 interface SummaryRow {
   sequence: number; id: string; book_id: string; chapter_id: string; chapter_title: string; kind: AiTaskKind
+  purpose: 'review' | null
   state: AiRunState; version: number; connection_id: string; connection_name: string; model: string
   output_characters: number; error: string | null; created_at: string; updated_at: string
 }
@@ -43,7 +45,8 @@ const MAX_CONNECTIONS = 8
 const PAGE_SIZE = 30
 const RUN_STATES: readonly AiRunState[] = ['prepared', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted', 'rejected', 'adopted']
 const SUMMARY_COLUMNS = `sequence, id, book_id, chapter_id, chapter_title, kind, state, version, connection_id,
-  connection_name, model, length(output_text) AS output_characters, error, created_at, updated_at`
+  connection_name, model, length(output_text) AS output_characters, error, created_at, updated_at,
+  CASE WHEN json_valid(context_json) THEN json_extract(context_json, '$.purpose') ELSE NULL END AS purpose`
 const RUN_COLUMNS = `${SUMMARY_COLUMNS}, context_hash, context_integrity_hash, context_json, output_text,
   accepted_text, adopted_revision_id, usage_json, finish_reason`
 const CONNECTION_COLUMNS = 'id, book_id, version, name, base_url, model, context_window, max_output_tokens, updated_at'
@@ -103,11 +106,13 @@ function summary(row: SummaryRow, bookId: string): AiRunSummary {
   try {
     if (row.book_id !== bookId || !['plan', 'continue', 'rewrite', 'summarize', 'extract'].includes(row.kind) || !RUN_STATES.includes(row.state) ||
       [row.sequence, row.version, row.output_characters].some((number) => !Number.isSafeInteger(number) || number < 0) ||
+      (row.purpose !== null && (row.purpose !== 'review' || row.kind !== 'plan')) ||
       row.output_characters > AI_OUTPUT_LIMIT || typeof row.chapter_title !== 'string' || row.chapter_title.length > 120 ||
       typeof row.connection_name !== 'string' || row.connection_name.length > 80 || typeof row.model !== 'string' || row.model.length > 200 ||
       (row.error !== null && (typeof row.error !== 'string' || row.error.length > 500))) throw storageFailure()
     requiredId(row.connection_id)
     return { id: requiredId(row.id), bookId, chapterId: requiredId(row.chapter_id), chapterTitle: row.chapter_title,
+      ...(row.purpose === 'review' ? { purpose: 'review' as const } : {}),
       kind: row.kind, state: row.state, version: row.version, connectionName: row.connection_name, model: row.model,
       outputCharacters: row.output_characters, error: row.error, createdAt: row.created_at, updatedAt: row.updated_at }
   } catch { throw storageFailure() }
@@ -126,10 +131,12 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
     if (config.id !== row.connection_id || config.name !== row.connection_name || config.model !== row.model) throw storageFailure()
     const contextSummaries = value.contextSummaries === undefined ? [] : parseAiContextSummarySnapshots(value.contextSummaries)
     const characterContext = value.characterContext === undefined ? undefined : parseAiCharacterContext(value.characterContext)
+    if (value.writingContext !== undefined && (isAiMemoryTask(row.kind) || value.perspective === 'reader' || value.perspective === 'character' ||
+      JSON.stringify(parseAiWritingContext(value.writingContext)) !== JSON.stringify(value.writingContext))) throw storageFailure()
     if ((value.perspective === 'character') !== Boolean(characterContext)) throw storageFailure()
     parseAiPrepareInput({ bookId, chapterId: value.chapterId, expectedBookRevision: value.bookRevision,
       expectedKnowledgeRevision: value.knowledgeRevision, expectedRevisionId: value.chapterRevisionId, connectionId: config.id,
-      kind: value.kind, instruction: value.instruction, contextScope: value.contextScope, perspective: value.perspective,
+      kind: value.kind, purpose: value.purpose, instruction: value.instruction, contextScope: value.contextScope, perspective: value.perspective,
       selectedBlockIds: value.selectedBlockIds, memoryChunkIds: value.evidence.map((item) => isRecord(item) ? item.chunkId : null),
       ...(characterContext ? { characterScope: characterScopeOf(characterContext) } : {}),
       ...(contextSummaries.length ? { summaryRefs: contextSummaries.map(contextSummaryRef) } : {}) })
@@ -146,7 +153,11 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         !isRecord(value.messages[1]) || value.messages[1].role !== 'user' || value.warnings.some((warning) => typeof warning !== 'string') ||
         value.perspective !== undefined || characterContext !== undefined || value.estimatedInputTokens !== estimated || value.reservedOutputTokens !== config.maxOutputTokens ||
         estimated + config.maxOutputTokens > config.contextWindow) throw storageFailure()
-    } else if (value.promptVersion !== (isAiMemoryTask(row.kind) ? AI_MEMORY_PROMPT_VERSION : characterContext ? AI_CHARACTER_CONTEXT_PROMPT_VERSION : value.perspective === 'reader' ? AI_READER_CONTEXT_PROMPT_VERSION : contextSummaries.length ? AI_CONTEXT_SUMMARY_PROMPT_VERSION : AI_PROMPT_VERSION)) throw storageFailure()
+    } else {
+      const supportedPrompt = characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
+        : value.promptVersion === (isAiMemoryTask(row.kind) ? AI_MEMORY_PROMPT_VERSION : value.perspective === 'reader' ? AI_READER_CONTEXT_PROMPT_VERSION : contextSummaries.length ? AI_CONTEXT_SUMMARY_PROMPT_VERSION : AI_PROMPT_VERSION)
+      if (!supportedPrompt) throw storageFailure()
+    }
     if (characterContext) {
       // 历史记录保留当次身份、时点与认知，不从当前人物条目重新补全旧预览。
       if (JSON.stringify(characterContext) !== JSON.stringify(value.characterContext) ||
@@ -165,7 +176,7 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         return disclosure.state !== 'located' || JSON.stringify(disclosure) !== JSON.stringify(item.readerDisclosure)
       })) throw storageFailure()
     }
-    if (contextSummaries.length || value.perspective === 'reader' || characterContext) {
+    if (contextSummaries.length || value.perspective === 'reader' || characterContext || value.writingContext !== undefined) {
       const estimated = Math.ceil(Buffer.byteLength(JSON.stringify(value.messages), 'utf8') * 1.1) + 1024
       if (value.messages.length !== 2 || !isRecord(value.messages[0]) || value.messages[0].role !== 'system' ||
         !isRecord(value.messages[1]) || value.messages[1].role !== 'user' || value.warnings.some((warning) => typeof warning !== 'string') ||
@@ -203,18 +214,35 @@ function memoryAdoptions(db: Database.Database, candidate: AiRun): AiRun {
     if (!isRecord(value) || Object.keys(value).some((key) => key !== 'entries') || !Array.isArray(value.entries)) throw storageFailure()
     const entries = value.entries
     const checked = parseAiMemoryAdoptInput({ bookId: candidate.bookId, runId: candidate.id, expectedVersion: candidate.version,
-      entries: entries.map((entry: unknown) => isRecord(entry) ? { sourceIndex: entry.sourceIndex, fields: entry.fields } : null) }, 'history')
+      entries: entries.map((entry: unknown) => isRecord(entry) ? { sourceIndex: entry.sourceIndex, fields: entry.fields,
+        ...(entry.action === undefined ? {} : { action: entry.action }),
+        ...(entry.targetItemId === undefined ? {} : { targetItemId: entry.targetItemId, expectedTargetRevisionId: entry.expectedTargetRevisionId }) } : null) }, 'history')
     const proposal = parseAiMemoryProposal(candidate.outputText, candidate.context, 'history')
     const ids = new Set<string>()
     const adopted: AiMemoryAdoptedEntry[] = checked.entries.map((entry, index) => {
       const saved = entries[index]
-      if (!isRecord(saved) || Object.keys(saved).some((key) => !['itemId', 'sourceIndex', 'fields', 'citations'].includes(key))) throw storageFailure()
-      const itemId = requiredId(saved.itemId)
+      if (!isRecord(saved) || Object.keys(saved).some((key) => !['itemId', 'sourceIndex', 'fields', 'citations', 'action', 'targetItemId', 'expectedTargetRevisionId', 'changed', 'previousFields', 'resultingRevisionId'].includes(key))) throw storageFailure()
+      const action = entry.action ?? 'create'
+      const existing = action === 'link' || action === 'revise'
+      const itemId = action === 'ignore' && saved.itemId === null ? null : requiredId(saved.itemId)
       const original = proposal.items[entry.sourceIndex]
-      if (ids.has(itemId) || !original || original.nature !== entry.fields.nature ||
-        (candidate.kind === 'summarize' && entry.fields.kind !== 'other') || JSON.stringify(saved.citations) !== JSON.stringify(original.citations)) throw storageFailure()
-      ids.add(itemId)
-      return { ...entry, itemId, citations: original.citations }
+      if ((itemId !== null && ids.has(itemId)) || !original || (!existing && original.nature !== entry.fields.nature) ||
+        (candidate.kind === 'summarize' && (entry.fields.kind !== 'other' || action !== 'create')) || JSON.stringify(saved.citations) !== JSON.stringify(original.citations)) throw storageFailure()
+      if (saved.changed !== undefined && typeof saved.changed !== 'boolean') throw storageFailure()
+      if (action === 'ignore' && (itemId !== null || saved.changed !== false || saved.resultingRevisionId !== undefined || saved.previousFields !== undefined)) throw storageFailure()
+      if (action === 'create' && (saved.changed === false || saved.previousFields !== undefined)) throw storageFailure()
+      const previousFields = existing ? parseKnowledgeFields(saved.previousFields) : undefined
+      if (existing && (itemId !== entry.targetItemId || typeof saved.changed !== 'boolean' ||
+        previousFields!.kind !== entry.fields.kind || previousFields!.nature !== entry.fields.nature ||
+        (action === 'link' && JSON.stringify(previousFields) !== JSON.stringify(entry.fields)))) throw storageFailure()
+      const resultingRevisionId = saved.resultingRevisionId === undefined ? undefined : requiredId(saved.resultingRevisionId)
+      if (existing && !resultingRevisionId) throw storageFailure()
+      if (existing && (entry.fields.kind !== original.kind || (saved.changed === false &&
+        (resultingRevisionId !== entry.expectedTargetRevisionId || JSON.stringify(previousFields) !== JSON.stringify(entry.fields))))) throw storageFailure()
+      if (itemId !== null) ids.add(itemId)
+      return { ...entry, itemId, citations: original.citations,
+        ...(saved.changed === undefined ? {} : { changed: saved.changed as boolean }),
+        ...(previousFields ? { previousFields } : {}), ...(resultingRevisionId ? { resultingRevisionId } : {}) }
     })
     return { ...candidate, memoryAdoptions: adopted }
   } catch { throw storageFailure() }
@@ -298,7 +326,7 @@ export class AiRepository {
 
   prepare(input: AiPrepareServiceInput): AiRun {
     if (!isRecord(input) || Object.keys(input).some((key) => !['bookId', 'chapterId', 'expectedBookRevision', 'expectedKnowledgeRevision',
-      'expectedRevisionId', 'connectionId', 'kind', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs', 'connection'].includes(key))) invalid('准备请求格式无效。')
+      'expectedRevisionId', 'connectionId', 'kind', 'purpose', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs', 'connection'].includes(key))) invalid('准备请求格式无效。')
     const { connection: requestedConnection, ...request } = input
     const data = parseAiPrepareInput(request)
     const config = checkedConnection(requestedConnection)
@@ -314,7 +342,7 @@ export class AiRepository {
         const context = buildAiContext(this.studio, this.memorySearch, { ...data, connection: stored })
         if (context.bookId !== data.bookId || context.chapterId !== data.chapterId || context.bookRevision !== book.revision ||
           context.knowledgeRevision !== book.knowledge_revision || context.chapterRevisionId !== data.expectedRevisionId ||
-          context.kind !== data.kind || (context.perspective ?? 'author') !== (data.perspective ?? 'author') ||
+          context.kind !== data.kind || context.purpose !== data.purpose || (context.perspective ?? 'author') !== (data.perspective ?? 'author') ||
           JSON.stringify(context.characterContext ? characterScopeOf(context.characterContext) : undefined) !== JSON.stringify(data.characterScope) ||
           !sameConnection(context.connection, stored) || !/^[0-9a-f]{64}$/.test(context.contextHash)) throw storageFailure()
         const id = randomUUID()
@@ -465,6 +493,7 @@ export class AiRepository {
           if (row.state !== 'succeeded') invalid('只有已成功完成的候选可以采用，部分输出请先复制另行处理。')
           if (candidate.context.summary !== undefined) invalid('分层汇总须在汇总任务中审阅，不能写入正文或章节备注。')
           if (isAiMemoryTask(candidate.kind)) invalid('章节整理结果须逐条审阅后采用为知识，不能写入正文或章节备注。')
+          if (candidate.context.purpose === 'review') invalid('审稿候选须在审稿问题中逐项确认并关联固定原稿，不能采用为章节备注或正文。')
           const previous = this.verifyBaseline(db, candidate, false)
           if (!previous) throw storageFailure()
           if (candidate.context.bookRevision >= Number.MAX_SAFE_INTEGER) throw storageFailure()
@@ -487,7 +516,7 @@ export class AiRepository {
             // 新文字只生成纯文本段落；其余富文本块和独立定稿指针沿用原稿。
             const document = parseManuscript({ type: 'doc', content })
             chapter = this.studio.saveChapter({ bookId: data.bookId, chapterId: candidate.chapterId,
-              expectedRevisionId: candidate.context.chapterRevisionId, document }).chapter
+              expectedRevisionId: candidate.context.chapterRevisionId, document }, 'ai').chapter
           }
           db.prepare(`INSERT INTO ai_adoptions (run_id, book_id, chapter_id, original_output, accepted_text,
             previous_revision_id, adopted_revision_id, previous_notes, adopted_notes, book_revision, created_at)
@@ -521,19 +550,34 @@ export class AiRepository {
           const proposal = parseAiMemoryProposal(candidate.outputText, candidate.context)
           const entries = data.entries.map((entry) => {
             const original = proposal.items[entry.sourceIndex]
-            if (!original || entry.fields.nature !== original.nature || (candidate.kind === 'summarize' && entry.fields.kind !== 'other')) invalid('所选条目或知识性质与固定原提议不符，请重新审阅。')
+            const action = entry.action ?? 'create'
+            if (!original || ((action === 'create' || action === 'ignore') && entry.fields.nature !== original.nature) ||
+              (candidate.kind === 'summarize' && (entry.fields.kind !== 'other' || action !== 'create'))) invalid('所选条目、操作或知识性质与固定原提议不符；章节摘要须独立新建。')
             return { ...entry, citations: original.citations }
           })
           const knowledge = new KnowledgeRepository(this.studio)
           let revision = candidate.context.knowledgeRevision
           const adopted: AiMemoryAdoptedEntry[] = []
           for (const entry of entries) {
-            // 每个条目保留全部段落引文；采用状态、不可变历史、事件及版本在同一外层事务提交。
-            const saved = knowledge.createItemWithSources({ bookId: data.bookId, expectedKnowledgeRevision: revision, fields: entry.fields },
-              entry.citations.map((citation) => ({ sourceType: 'chapter_text' as const, bookId: data.bookId,
-                chapterId: candidate.chapterId, revisionId: candidate.context.chapterRevisionId, blockId: citation.blockId, quote: citation.quote })))
+            const action = entry.action ?? 'create'
+            if (action === 'ignore') { adopted.push({ ...entry, itemId: null, changed: false }); continue }
+            const sources = entry.citations.map((citation) => ({ sourceType: 'chapter_text' as const, bookId: data.bookId,
+              chapterId: candidate.chapterId, revisionId: candidate.context.chapterRevisionId, blockId: citation.blockId, quote: citation.quote }))
+            // 来源、作者选择、实体修订和候选终态在同一事务提交；重复来源可能是无变化的关联。
+            const target = action === 'create' ? null : knowledge.getItem({ bookId: data.bookId, id: entry.targetItemId! })
+            const previousFields = target ? parseKnowledgeFields(target.revisions[0]!.fields) : undefined
+            if (target && (target.revisions[0]?.id !== entry.expectedTargetRevisionId || target.knowledgeRevision !== revision)) conflict('目标实体已变化，请重新读取后审阅。')
+            if (previousFields && (previousFields.kind !== proposal.items[entry.sourceIndex]!.kind || previousFields.kind !== entry.fields.kind || previousFields.nature !== entry.fields.nature ||
+              (action === 'link' && JSON.stringify(previousFields) !== JSON.stringify(entry.fields)))) invalid('关联只能追加来源；显式修订须保持目标实体类型与知识性质，请重新核对。')
+            const change = { bookId: data.bookId, expectedKnowledgeRevision: revision, fields: entry.fields }
+            const saved = target
+              ? knowledge.updateItemWithSources({ ...change, id: target.id }, entry.expectedTargetRevisionId!, sources)
+              : knowledge.createItemWithSources(change, sources)
+            const changed = saved.knowledgeRevision !== revision
+            if (saved.knowledgeRevision !== revision + (changed ? 1 : 0)) throw storageFailure()
             revision = saved.knowledgeRevision
-            adopted.push({ ...entry, itemId: saved.id })
+            adopted.push({ ...entry, itemId: saved.id, changed, resultingRevisionId: saved.revisions[0]!.id,
+              ...(previousFields ? { previousFields } : {}) })
           }
           const reviewJson = JSON.stringify({ entries: adopted })
           if (reviewJson.length > AI_OUTPUT_LIMIT) invalid('采用内容与来源合计超过 60,000 字符，请减少条目或缩短说明。')
@@ -542,7 +586,7 @@ export class AiRepository {
           // 记忆采用保留原章修订作为来源锚点，正文与独立定稿指针不变。
           this.advance(db, row, { state: 'adopted', acceptedText: reviewJson, adoptedRevisionId: previous.revisionId })
           return { bookId: data.bookId, run: memoryAdoptions(db, run(readRunRow(db, data.bookId, data.runId), data.bookId)),
-            status: this.studio.getKnowledgeStatus({ bookId: data.bookId }), itemIds: adopted.map((entry) => entry.itemId) }
+            status: this.studio.getKnowledgeStatus({ bookId: data.bookId }), itemIds: adopted.flatMap((entry) => entry.itemId === null ? [] : [entry.itemId]) }
         }).immediate()
       } finally { this.studio.refreshKnowledgeCatalog(data.bookId) }
     })

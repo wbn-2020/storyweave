@@ -19,7 +19,7 @@ export function NameDialog({ title, initialValue = '', submitLabel, onSubmit, ..
   const [value, setValue] = useState(initialValue)
   const id = useId()
   function submit(event: FormEvent) { event.preventDefault(); if (!common.busy && value.trim()) onSubmit(value.trim()) }
-  return <Dialog title={title} {...common}><form onSubmit={submit}>
+  return <Dialog title={title} className={styles.lightDialog} {...common}><form onSubmit={submit}>
     <label htmlFor={id}>名称</label><input id={id} autoFocus autoComplete="off" value={value} onChange={(event) => setValue(event.target.value)} maxLength={120} required disabled={common.busy} />
     <Actions {...common} label={submitLabel} disabled={!value.trim()} />
   </form></Dialog>
@@ -31,7 +31,7 @@ export function BookDetailsDialog({ book, onSubmit, onDirtyChange, confirmClose,
   const dirty = fields.title !== initialFields.title || fields.genre !== initialFields.genre || fields.synopsis !== initialFields.synopsis || fields.archived !== initialFields.archived
   useDetailsDirty(dirty, onDirtyChange)
   function submit(event: FormEvent) { event.preventDefault(); if (!common.busy) onSubmit({ ...fields, title: fields.title.trim() }) }
-  return <Dialog title="作品资料" {...common}><form onSubmit={submit} className={styles.fieldStack}>
+  return <Dialog title="作品资料" className={styles.lightDialog} {...common}><form onSubmit={submit} className={styles.fieldStack}>
     {pendingRecovery && <DetailsRecovery {...pendingRecovery} content={JSON.stringify({ bookId: book.id, baseBookRevision: book.revision, fields }, null, 2)} />}
     <label>作品名<input autoFocus value={fields.title} onChange={(event) => setFields({ ...fields, title: event.target.value })} maxLength={120} required disabled={common.busy} /></label>
     <label>类型<input value={fields.genre} onChange={(event) => setFields({ ...fields, genre: event.target.value })} maxLength={120} placeholder="例如：悬疑 / 奇幻" disabled={common.busy} /></label>
@@ -48,7 +48,7 @@ export function ChapterDetailsDialog({ chapter, volumes, onSubmit, onDirtyChange
   const dirty = fields.title !== initialFields.title || fields.volumeId !== initialFields.volumeId || fields.goal !== initialFields.goal || fields.viewpoint !== initialFields.viewpoint || fields.targetCharacters !== initialFields.targetCharacters || fields.notes !== initialFields.notes || fields.status !== initialFields.status
   useDetailsDirty(dirty, onDirtyChange)
   function submit(event: FormEvent) { event.preventDefault(); if (!common.busy) onSubmit({ ...fields, title: fields.title.trim() }) }
-  return <Dialog title="本章资料" {...common}><form className={styles.fieldStack} onSubmit={submit}>
+  return <Dialog title="本章资料" className={styles.lightDialog} {...common}><form className={styles.fieldStack} onSubmit={submit}>
     {pendingRecovery && <DetailsRecovery {...pendingRecovery} content={JSON.stringify({ bookId: chapter.bookId, chapterId: chapter.id, baseBookRevision: chapter.bookRevision, fields }, null, 2)} />}
     <label>章节名<input autoFocus value={fields.title} onChange={(event) => setFields({ ...fields, title: event.target.value })} maxLength={120} required disabled={common.busy} /></label>
     <div className={styles.twoColumns}><label>所属卷<select value={fields.volumeId ?? ''} onChange={(event) => setFields({ ...fields, volumeId: event.target.value || null })} disabled={common.busy}><option value="">未分卷</option>{volumes.map((volume) => <option value={volume.id} key={volume.id}>{volume.title}</option>)}</select></label>
@@ -64,7 +64,7 @@ export function ChapterDetailsDialog({ chapter, volumes, onSubmit, onDirtyChange
 
 export function ExportDialog({ title, finalizedCount, onSubmit, ...common }: Common & { title: string; finalizedCount: number; onSubmit: (fields: ExportFields) => void }) {
   const [fields, setFields] = useState<ExportFields>({ format: 'txt', scope: 'working', includeChapterTitles: true })
-  return <Dialog title="导出作品" {...common}><form className={styles.fieldStack} onSubmit={(event) => { event.preventDefault(); if (!common.busy) onSubmit(fields) }}>
+  return <Dialog title="导出作品" className={styles.lightDialog} {...common}><form className={styles.fieldStack} onSubmit={(event) => { event.preventDefault(); if (!common.busy) onSubmit(fields) }}>
     <p className={styles.helpText}>《{title}》会按当前卷章顺序导出。在下一步选择保存位置。</p>
     <label>正文范围<select value={fields.scope} onChange={(event) => setFields({ ...fields, scope: event.target.value as ExportFields['scope'] })} disabled={common.busy}><option value="working">全部章节的当前工作稿</option><option value="finalized">已定稿版本（{finalizedCount} 章）</option></select></label>
     <p className={styles.helpText}>{fields.scope === 'finalized' ? '使用每章最近一次作者定稿，跳过从未定稿的章节；定稿后的新修改不在此范围。' : '导出前先保存编辑器中的当前正文。'}</p>
@@ -75,7 +75,7 @@ export function ExportDialog({ title, finalizedCount, onSubmit, ...common }: Com
 }
 
 export function ConfirmDialog({ title, children, label, onSubmit, ...common }: Common & { title: string; children: string; label: string; onSubmit: () => void }) {
-  return <Dialog title={title} {...common}><p className={styles.helpText}>{children}</p><div className={styles.formActions}><button className={styles.button} type="button" onClick={common.onClose} disabled={common.busy}>取消</button><button className={styles.primaryButton} type="button" onClick={onSubmit} disabled={common.busy}>{common.busy ? '处理中…' : label}</button></div></Dialog>
+  return <Dialog title={title} className={styles.lightDialog} {...common}><p className={styles.helpText}>{children}</p><div className={styles.formActions}><button className={styles.button} type="button" onClick={common.onClose} disabled={common.busy}>取消</button><button className={styles.primaryButton} type="button" onClick={onSubmit} disabled={common.busy}>{common.busy ? '处理中…' : label}</button></div></Dialog>
 }
 
 function useDetailsDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {

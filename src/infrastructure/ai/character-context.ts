@@ -1,7 +1,7 @@
 import { DomainError } from '../../contracts/api'
 import { parseAiCharacterContext, type AiCharacterContext, type AiCharacterCognition, type AiCharacterScope } from '../../contracts/ai-character-context'
 import type { MemoryEvidence } from '../../contracts/memory'
-import type { StoryRevision } from '../../contracts/story'
+import { cognitionStateAt, type CognitionState, type StoryRevision } from '../../contracts/story'
 import { KnowledgeRepository } from '../knowledge/knowledge-repository'
 import { StoryRepository } from '../story/story-repository'
 import type { StudioRepository } from '../storage/studio-repository'
@@ -29,6 +29,7 @@ export function createAiCharacterContextReader(studio: StudioRepository, bookId:
 
   const stories = new StoryRepository(studio)
   const revisions = new Map<string, StoryRevision>()
+  const histories = new Map<string, CognitionState[]>()
   const cognition = (item: MemoryEvidence): AiCharacterCognition => {
     if (item.bookId !== bookId || item.sourceKind !== 'story' || item.nature !== 'character_belief') {
       invalid(`“${item.title}”不是标为人物认知的故事资料，请移除后选择该人物的认知片段。`)
@@ -38,6 +39,8 @@ export function createAiCharacterContextReader(studio: StudioRepository, bookId:
       const current = readStored(() => stories.getRecord({ bookId, id: item.sourceId }))
       if (current.bookId !== bookId || current.id !== item.sourceId || current.bookRevision !== bookRevision ||
         current.knowledgeRevision !== knowledgeRevision) storageFailure()
+      if (!current.cognitionHistory?.some((state) => state.id === current.id)) invalid(`“${item.title}”不是可查询的显式人物认知状态。`)
+      histories.set(item.sourceId, current.cognitionHistory)
       if (current.revisions[0]?.id !== item.revisionId) conflict(`“${item.title}”的认知记录已有新修订，请重新整理并选择当前片段。`)
       revision = readStored(() => stories.readRevision({ bookId, id: item.sourceId, revisionId: item.revisionId }))
       if (revision.bookId !== bookId || revision.recordId !== item.sourceId || revision.id !== item.revisionId ||
@@ -55,6 +58,12 @@ export function createAiCharacterContextReader(studio: StudioRepository, bookId:
     const formedAt = fields.storyTime
     if (formedAt.kind === 'unknown' || formedAt.order === null) invalid(`“${item.title}”的认知形成时间缺少明确排序值，请补充后再使用人物视角。`)
     if (formedAt.order > scope.storyOrder) invalid(`“${item.title}”的认知形成晚于所选故事时点，请移除该片段或调整时点。`)
+    const state = cognitionStateAt(histories.get(item.sourceId) ?? [], scope.storyOrder)
+    // 后继变化只用于限定有效区间；不展开后继的真相、关联事件或普通知识内容。
+    if (!state || state.id !== item.sourceId) invalid(`“${item.title}”在所选故事时点已失效或被后继状态替代，请选择当时有效的认知片段。`)
+    if (fields.evolution?.kind === 'forgotten' || fields.evolution?.kind === 'refuted') {
+      invalid(`“${item.title}”记录的是遗忘或推翻，不能作为该人物仍持有的认知发送；如人物形成新认识，请追加修正状态。`)
+    }
     // 隐瞒是主体的表达状态；保留其标记，不能抹去本人认知或推导他人已知。
     return { chunkId: item.chunkId, recordId: item.sourceId, revisionId: revision.id, formedAt,
       attitude: fields.attitude, concealed: fields.concealed }

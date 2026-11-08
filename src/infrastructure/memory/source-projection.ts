@@ -7,7 +7,7 @@ import {
   MEMORY_CHUNK_OVERLAP, MEMORY_CHUNK_SIZE, MEMORY_SOURCE_KINDS, MEMORY_STEP_CHUNKS,
   type MemorySourceKind, type MemorySourceReference,
 } from '../../contracts/memory'
-import { parseStoryFields, type Disclosure, type StoryRecordFields, type StoryTime } from '../../contracts/story'
+import { parseStoryFields, plannedPayoffText, type Disclosure, type StoryRecordFields, type StoryTime } from '../../contracts/story'
 import { toSearchText } from './search-text'
 
 export interface MemorySourceIdentity {
@@ -49,8 +49,7 @@ function timeText(time: StoryTime): string {
 }
 
 function disclosureText(location: Disclosure): string {
-  if (location.state === 'unknown') return '未知'
-  if (location.state === 'undisclosed') return '未披露'
+  if (location.state !== 'located') return location.state === 'unknown' ? '未知' : '未披露'
   return `章节 ${location.chapterId}；修订 ${location.revisionId}；段落 ${location.blockId}`
 }
 
@@ -83,7 +82,7 @@ function storyText(fields: StoryRecordFields): { text: string; entityIds: string
     lines.push(`故事时间：${timeText(fields.storyTime)}`, `伏笔阶段：${STAGE_LABELS[fields.stage]}`)
     if (fields.entityIds.length) lines.push(`关联实体：${fields.entityIds.join('、')}`)
     if (fields.eventIds.length) lines.push(`关联事件：${fields.eventIds.join('、')}`)
-    lines.push(`计划回收位置：${disclosureText(fields.plannedPayoff)}`, `实际回收位置：${disclosureText(fields.actualPayoff)}`)
+    lines.push(`计划回收位置：${plannedPayoffText(fields.plannedPayoff)}`, `实际回收位置：${disclosureText(fields.actualPayoff)}`)
     for (const milestone of fields.milestones) {
       lines.push(`伏笔里程碑：${STAGE_LABELS[milestone.stage]}；故事时间：${timeText(milestone.storyTime)}`,
         milestone.note, `里程碑披露：${disclosureText(milestone.disclosure)}`)
@@ -94,6 +93,12 @@ function storyText(fields: StoryRecordFields): { text: string; entityIds: string
     lines.push(`认知主体：${fields.personId}`, `人物认知态度：${ATTITUDE_LABELS[fields.attitude]}`,
       `认知形成时间：${timeText(fields.storyTime)}`, `人物是否隐瞒：${fields.concealed ? '是' : '否'}`)
     if (fields.acquisitionEventId) lines.push(`获知关联事件：${fields.acquisitionEventId}`)
+    if (fields.evolution) {
+      const labels = { formed: '形成', revised: '修正', refuted: '推翻', concealed: '隐瞒', forgotten: '遗忘' }
+      lines.push(`认知变化：${labels[fields.evolution.kind]}`, `认知有效截止：${timeText(fields.evolution.validUntil)}`)
+      if (fields.evolution.previousId) lines.push(`前一认知状态：${fields.evolution.previousId}`)
+      if (fields.evolution.knowledgeOrigin) lines.push(`转换来源：知识 ${fields.evolution.knowledgeOrigin.itemId}；修订 ${fields.evolution.knowledgeOrigin.revisionId}`)
+    }
   }
   return { text: lines.filter((line) => line !== '').join('\n'), entityIds: Array.from(new Set(entityIds)) }
 }

@@ -1,7 +1,12 @@
 import { DomainError, isRecord, requiredId, requiredInteger, requiredText } from './api'
 import { COGNITION_ATTITUDES, parseStoryTime, type CognitionAttitude, type StoryTime } from './story'
 
-export const AI_CHARACTER_CONTEXT_PROMPT_VERSION = 6
+export const AI_CHARACTER_CONTEXT_LEGACY_PROMPT_VERSION = 6
+export const AI_CHARACTER_CONTEXT_PROMPT_VERSION = 7
+
+export function isAiCharacterContextPromptVersion(value: unknown): value is 6 | 7 {
+  return value === AI_CHARACTER_CONTEXT_LEGACY_PROMPT_VERSION || value === AI_CHARACTER_CONTEXT_PROMPT_VERSION
+}
 
 export interface AiCharacterScope {
   personId: string

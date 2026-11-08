@@ -6,7 +6,7 @@ import { AI_MEMORY_MAINTENANCE_BATCH, AI_MEMORY_MAINTENANCE_PAGE, isAiMemoryMain
 import type { KnowledgeStatus } from '../../contracts/knowledge'
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
-import { AiMemoryReview, createAiMemoryDrafts, type AiMemoryDraft } from './AiMemoryReview'
+import { AiMemoryReview, aiMemoryReviewEntries, createAiMemoryDrafts, type AiMemoryDraft } from './AiMemoryReview'
 import shared from '../App.module.css'
 import layout from './KnowledgePanel.module.css'
 import styles from './AiPanel.module.css'
@@ -515,7 +515,7 @@ function AiMemoryTasksSession({ api, book, busy, error, pendingMessage, checking
     let input: AiMemoryAdoptInput
     const maintenanceBaseline = maintenanceBaselineFor(owner)
     try { input = parseAiMemoryAdoptInput({ bookId: book.book.id, runId: current.id, expectedVersion: current.version,
-      ...(maintenanceBaseline ? { maintenanceBaseline } : {}), entries: drafts.filter((entry) => entry.selected).map(({ sourceIndex, fields }) => ({ sourceIndex, fields })) }) }
+      ...(maintenanceBaseline ? { maintenanceBaseline } : {}), entries: aiMemoryReviewEntries(drafts) }) }
     catch (cause) { setMessage(cause instanceof DomainError ? cause.detail.message : '请核对选择的整理条目。'); return }
     const at = begin('采用本章已审阅的知识建议')
     if (at === null) return
@@ -612,7 +612,7 @@ function AiMemoryTasksSession({ api, book, busy, error, pendingMessage, checking
         </div>}
         {task.currentUnit && <p className={styles.note}>范围内第 {task.currentUnit.ordinal} 章：{task.currentUnit.chapterTitle} · {task.currentUnit.runState ? runLabels[task.currentUnit.runState] : '尚未准备预览'}{task.currentUnit.runId && run?.id !== task.currentUnit.runId && <button type="button" className={shared.textButton} disabled={blocked} onClick={() => openUnit(task.currentUnit!)}>查看当前章候选</button>}</p>}
         {task.units.length > 0 && <details className={styles.history}><summary>本页章节（最多 {AI_MEMORY_TASK_UNIT_PAGE} 章）</summary><ul>{task.units.map((unit) => <li key={unit.ordinal}><button type="button" className={styles.historyItem} disabled={blocked || generating || !unit.runId} aria-current={run?.id === unit.runId ? 'true' : undefined} onClick={() => openUnit(unit)}><span><strong>{unit.ordinal}. {unit.chapterTitle}</strong><small>{unitLabels[unit.state]} · {unit.runState ? runLabels[unit.runState] : '尚无候选'} · 候选次数 {unit.attempts}</small></span><span>{unit.runId ? '读取候选' : '待处理'}</span></button></li>)}</ul></details>}
-        <div className={layout.paging}><button type="button" className={shared.button} disabled={blocked || generating || pageTrail.length === 0} onClick={() => guardDrafts('放弃本页未采用的审阅修改，并读取上一页？', () => void readTask(task.id, pageTrail[pageTrail.length - 1], pageTrail.slice(0, -1)))}>上一页</button><button type="button" className={shared.button} disabled={blocked || generating || task.nextAfterOrdinal === null} onClick={() => guardDrafts('放弃本页未采用的审阅修改，并读取下一页？', () => void readTask(task.id, task.nextAfterOrdinal ?? undefined, [...pageTrail, pageAfter])))}>下一页</button></div>
+        <div className={layout.paging}><button type="button" className={shared.button} disabled={blocked || generating || pageTrail.length === 0} onClick={() => guardDrafts('放弃本页未采用的审阅修改，并读取上一页？', () => void readTask(task.id, pageTrail[pageTrail.length - 1], pageTrail.slice(0, -1)))}>上一页</button><button type="button" className={shared.button} disabled={blocked || generating || task.nextAfterOrdinal === null} onClick={() => guardDrafts('放弃本页未采用的审阅修改，并读取下一页？', () => void readTask(task.id, task.nextAfterOrdinal ?? undefined, [...pageTrail, pageAfter]))}>下一页</button></div>
       </section>}
       {run && task && <section className={styles.run} aria-label="本章候选"><div className={styles.heading}><h3>{run.chapterTitle} · {runLabels[run.state]}</h3><span>{canEditRun ? '当前章候选' : '只读候选'}</span></div>
         {run.error && <p className={shared.formError} role="alert">{run.error}</p>}
@@ -627,7 +627,7 @@ function AiMemoryTasksSession({ api, book, busy, error, pendingMessage, checking
           <button type="button" className={shared.button} disabled={blocked} onClick={() => { if (taskRef.current && runUnitRef.current) void readRun({ task: taskRef.current, unit: runUnitRef.current }) }}>只读刷新候选</button>
         </div>
         {run.state === 'running' && run.active === false && <p className={styles.note}>本地记录仍为生成中，但桌面进程没有对应活动请求。先只读核对，再明确标记中断；不会自动重发。</p>}
-        <AiMemoryReview run={run} drafts={drafts} disabled={blocked || archived || !canEditRun || staleRun} onChange={(value) => { setDrafts(value); markDraftDirty(true) }} onAdopt={() => void adoptMemory()} />
+        <AiMemoryReview api={api} run={run} drafts={drafts} disabled={blocked || archived || !canEditRun || staleRun} onChange={(value) => { setDrafts(value); markDraftDirty(true) }} onAdopt={() => void adoptMemory()} />
       </section>}
       {status.recentTasks.length > 0 && <details className={styles.history}><summary>最近 {Math.min(10, status.recentTasks.length)} 份任务记录</summary><ul>{status.recentTasks.slice(0, 10).map((item) => <li key={item.id}><button type="button" className={styles.historyItem} disabled={blocked || generating} aria-current={task?.id === item.id ? 'true' : undefined} onClick={() => openTask(item.id)}><span><strong>{kindLabels[item.kind]} · {item.scopeTitle}</strong><small>{item.selection === 'pending_review' ? '增量维护' : '全范围整理'} · 固定 {item.totalChapters} 章 · {item.reviewedChapters} 章已登记 · {item.skippedChapters} 章跳过</small></span><span>{taskLabels[item.state]}<small>{displayTime(item.updatedAt)}</small></span></button></li>)}</ul></details>}
       {archived && <p className={styles.note}>作品已归档，可读取任务与原输出；解除归档后可继续整理。</p>}

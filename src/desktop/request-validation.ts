@@ -1,4 +1,4 @@
-import { DomainError, isRecord, requiredId, requiredInteger, requiredText, optionalText, type ServiceRequest, type TextEncoding, type TextSplitMode } from '../contracts/api'
+import { DomainError, isRecord, requiredId, requiredInteger, requiredText, optionalText, parseCreateBookInput, type ServiceRequest, type TextEncoding, type TextSplitMode } from '../contracts/api'
 import { parseManuscript } from '../contracts/manuscript'
 import { MAX_DRAFT_FILE_BYTES, parseDraftFile } from '../contracts/draft'
 import { parseCreateKnowledgeItem, parseKnowledgeItemInput, parseKnowledgeStatusInput, parseListKnowledgeItems, parseUpdateKnowledgeItem, parseUpgradeKnowledgeInput } from '../contracts/knowledge'
@@ -15,6 +15,10 @@ import { parseAiContextSummaryInput } from '../contracts/ai-context-summary'
 import { parseAiContextRecommendationInput } from '../contracts/ai-context-recommendation'
 import { parseMemoryVectorFinishInput, parseMemoryVectorPrepareServiceInput, parseMemoryVectorProfileServiceInput, parseMemoryVectorReadInput, parseMemoryVectorStartInput, parseMemoryVectorVersionInput } from '../contracts/memory-vector'
 import { parseBookRecoveryExportServiceInput, parseBookRecoveryPrepareInput, parseBookRecoveryRestoreInput } from '../contracts/book-recovery'
+import { parseCopyInspirationInput, parseListInspirationInput, parseLogWritingSessionInput, parseSaveBriefInput, parseSaveInspirationInput, parseSaveReviewIssueInput, parseSaveSceneInput, parseSaveWritingGoalInput, parseWorkbenchBookInput } from '../contracts/workbench'
+import { parseApplyReviewIssueInput } from '../contracts/workbench'
+import { parseRevisionMergeInput } from '../contracts/revision-merge'
+import { parseBookExportPrepareInput, parseBookExportChapterInput, parseBookExportCommitServiceInput } from '../contracts/export'
 
 export function parseServiceRequest(value: unknown): ServiceRequest {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id.length > 64) {
@@ -29,6 +33,20 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
   }
   if (!isRecord(payload)) throw invalidRequest()
   switch (command) {
+    case 'revision.merge': return { id, command, payload: parseRevisionMergeInput(payload) }
+    case 'book.export.prepare': return { id, command, payload: parseBookExportPrepareInput(payload) }
+    case 'book.export.chapter': return { id, command, payload: parseBookExportChapterInput(payload) }
+    case 'book.export.commit': return { id, command, payload: parseBookExportCommitServiceInput(payload) }
+    case 'workbench.get': return { id, command, payload: parseWorkbenchBookInput(payload) }
+    case 'workbench.brief': return { id, command, payload: parseSaveBriefInput(payload) }
+    case 'workbench.scene': return { id, command, payload: parseSaveSceneInput(payload) }
+    case 'workbench.issue': return { id, command, payload: parseSaveReviewIssueInput(payload) }
+    case 'workbench.applyIssue': return { id, command, payload: parseApplyReviewIssueInput(payload) }
+    case 'workbench.goal': return { id, command, payload: parseSaveWritingGoalInput(payload) }
+    case 'workbench.session': return { id, command, payload: parseLogWritingSessionInput(payload) }
+    case 'inspiration.list': return { id, command, payload: parseListInspirationInput(payload) }
+    case 'inspiration.save': return { id, command, payload: parseSaveInspirationInput(payload) }
+    case 'inspiration.copy': return { id, command, payload: parseCopyInspirationInput(payload) }
     case 'recovery.export': return { id, command, payload: parseBookRecoveryExportServiceInput(payload) }
     case 'recovery.prepare': return { id, command, payload: parseBookRecoveryPrepareInput(payload) }
     case 'recovery.restore': return { id, command, payload: parseBookRecoveryRestoreInput(payload) }
@@ -93,7 +111,7 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'workspace.open':
       return { id, command, payload: { rootPath: requiredText(payload.rootPath, '书库目录', 32767) } }
     case 'book.create':
-      return { id, command, payload: { title: requiredText(payload.title, '作品名称', 120) } }
+      return { id, command, payload: parseCreateBookInput(payload) }
     case 'book.get':
       return { id, command, payload: { bookId: requiredId(payload.bookId) } }
     case 'chapter.create':

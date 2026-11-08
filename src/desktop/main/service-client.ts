@@ -92,6 +92,8 @@ export class ServiceClient {
   takeReceipts(): Map<string, CompletedRequest> { return new Map(this.receipts) }
 
   async close(): Promise<Result<null>> {
+    // 主进程已取得 renderer 的保稿确认；退出的服务不再持有数据库，无需向它索取关闭回执。
+    if (this.exited) return { ok: true, data: null }
     if (this.closedSuccessfully) {
       this.child.kill()
       return { ok: true, data: null }

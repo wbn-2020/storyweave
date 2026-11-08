@@ -8,14 +8,31 @@ import {
 export const STORY_KINDS = ['relation', 'event', 'foreshadow', 'cognition'] as const
 export const FORESHADOW_STAGES = ['planned', 'planted', 'advanced', 'revealed', 'resolved', 'abandoned'] as const
 export const COGNITION_ATTITUDES = ['knows', 'believes', 'misunderstands', 'suspects'] as const
+export const COGNITION_CHANGES = ['formed', 'revised', 'refuted', 'concealed', 'forgotten'] as const
 export type StoryKind = typeof STORY_KINDS[number]
 export type ForeshadowStage = typeof FORESHADOW_STAGES[number]
 export type CognitionAttitude = typeof COGNITION_ATTITUDES[number]
+export type CognitionChangeKind = typeof COGNITION_CHANGES[number]
 
 /** order 由作者明确填写；日期和相对时间标签不自动推导全序。 */
 export type StoryTime = { kind: 'unknown' } | { kind: 'date' | 'relative'; label: string; order: number | null }
 export type Disclosure = { state: 'unknown' | 'undisclosed' } | {
   state: 'located'; chapterId: string; revisionId: string; blockId: string
+}
+
+/** 计划不要求正文已经存在；旧版固定段落目标保持原样可读。 */
+export type PlannedPayoff = Disclosure
+  | { state: 'volume'; volumeId: string | null; label: string }
+  | { state: 'chapter'; chapterId: string | null; label: string }
+  | { state: 'scene'; sceneId: string | null; chapterId: string | null; label: string }
+  | { state: 'text'; label: string }
+
+export interface CognitionEvolution {
+  kind: CognitionChangeKind
+  previousId: string | null
+  /** 截止时点不包含在有效期内；后继状态可使本状态更早结束。 */
+  validUntil: StoryTime
+  knowledgeOrigin?: { itemId: string; revisionId: string }
 }
 
 interface StoryCommonFields {
@@ -73,7 +90,7 @@ export interface ForeshadowFields extends StoryCommonFields {
   entityIds: string[]
   eventIds: string[]
   milestones: ForeshadowMilestone[]
-  plannedPayoff: Disclosure
+  plannedPayoff: PlannedPayoff
   actualPayoff: Disclosure
 }
 
@@ -85,6 +102,8 @@ export interface CognitionFields extends StoryCommonFields {
   attitude: CognitionAttitude
   concealed: boolean
   acquisitionEventId: string | null
+  /** 每个状态独立保存；缺省表示旧记录，不给旧快照补写新字段。 */
+  evolution?: CognitionEvolution
 }
 
 export type StoryRecordFields = RelationFields | EventFields | ForeshadowFields | CognitionFields
@@ -155,6 +174,12 @@ export interface StoryRecordDetail extends StoryRecordSummary {
   labels: Record<string, string>
   /** 最近的修改记录；完整历史保留在书内数据库。 */
   revisions: StoryRevisionSummary[]
+  cognitionHistory?: CognitionState[]
+}
+export interface CognitionState {
+  id: string
+  fields: CognitionFields
+  effectiveUntil: StoryTime
 }
 export interface StoryRecordPage {
   bookId: string
@@ -170,6 +195,8 @@ export const MAX_STORY_SOURCES = 200
 export const MAX_STORY_HISTORY_PAGE = 50
 export const MAX_STORY_LINKS = 200
 export const MAX_FORESHADOW_MILESTONES = 200
+export const MAX_COGNITION_STATES = 200
+export const STORY_EVOLUTION_SCHEMA_VERSION = 13
 
 function invalid(message: string): never {
   throw new DomainError({ code: 'INVALID_INPUT', message })
@@ -212,6 +239,59 @@ export function parseDisclosure(value: unknown): Disclosure {
   const data = record(value, state === 'located' ? ['state', 'chapterId', 'revisionId', 'blockId'] : ['state'], '读者披露位置')
   if (state !== 'located') return { state }
   return { state, chapterId: id(data.chapterId), revisionId: id(data.revisionId), blockId: id(data.blockId) }
+}
+
+export function parsePlannedPayoff(value: unknown): PlannedPayoff {
+  if (!isRecord(value)) return invalid('计划回收目标格式无效。')
+  if (value.state === 'unknown' || value.state === 'undisclosed' || value.state === 'located') return parseDisclosure(value)
+  const state = choice(value.state, ['volume', 'chapter', 'scene', 'text'] as const, '计划回收范围')
+  const keys = state === 'volume' ? ['volumeId'] : state === 'chapter' ? ['chapterId'] : state === 'scene' ? ['sceneId', 'chapterId'] : []
+  const data = record(value, ['state', 'label', ...keys], '计划回收目标')
+  const label = requiredText(data.label, '计划回收范围说明', 500)
+  if (state === 'volume') return { state, label, volumeId: nullableId(data.volumeId) }
+  if (state === 'chapter') return { state, label, chapterId: nullableId(data.chapterId) }
+  if (state === 'scene') return { state, label, sceneId: nullableId(data.sceneId), chapterId: nullableId(data.chapterId) }
+  return { state, label }
+}
+
+export function plannedPayoffText(value: PlannedPayoff): string {
+  if ('label' in value) {
+    const labels = { volume: '卷', chapter: '章', scene: '场景', text: '文字范围' }
+    return `${labels[value.state]}：${value.label}`
+  }
+  // 旧目标沿用原记忆投影文字，避免同一历史修订重新投影时改变摘要指纹。
+  if (value.state !== 'located') return value.state === 'unknown' ? '未知' : '未披露'
+  return `章节 ${value.chapterId}；修订 ${value.revisionId}；段落 ${value.blockId}`
+}
+
+function parseCognitionEvolution(value: unknown, formedAt: StoryTime): CognitionEvolution {
+  const data = record(value, ['kind', 'previousId', 'validUntil', 'knowledgeOrigin'], '认知变迁')
+  const kind = choice(data.kind, COGNITION_CHANGES, '认知变化类型')
+  const previousId = nullableId(data.previousId)
+  if ((kind === 'formed') !== (previousId === null)) return invalid('形成认知不关联前态；修正、推翻、隐瞒和遗忘须选择前一认知状态。')
+  const validUntil = parseStoryTime(data.validUntil)
+  if (previousId !== null && (formedAt.kind === 'unknown' || formedAt.order === null)) return invalid('认知变化须填写明确的故事排序值。')
+  if (validUntil.kind !== 'unknown') {
+    if (validUntil.order === null || formedAt.kind === 'unknown' || formedAt.order === null || validUntil.order <= formedAt.order) {
+      return invalid('认知有效截止须有明确排序值，且严格晚于形成时间。')
+    }
+  }
+  let knowledgeOrigin: CognitionEvolution['knowledgeOrigin']
+  if (data.knowledgeOrigin !== undefined) {
+    const origin = record(data.knowledgeOrigin, ['itemId', 'revisionId'], '认知转换来源')
+    knowledgeOrigin = { itemId: id(origin.itemId), revisionId: id(origin.revisionId) }
+  }
+  return { kind, previousId, validUntil, ...(knowledgeOrigin ? { knowledgeOrigin } : {}) }
+}
+
+/** 编辑时间与故事时间分别保存；该函数只查询作者确认的状态区间。 */
+export function cognitionStateAt(history: readonly CognitionState[], storyOrder: number): CognitionState | null {
+  return history.find((state) => {
+    const start = state.fields.storyTime
+    const end = state.effectiveUntil
+    return start.kind !== 'unknown' && start.order !== null && start.order <= storyOrder &&
+      (end.kind === 'unknown' || end.order !== null && storyOrder < end.order)
+  }) ?? null
 }
 
 function stateChanges(value: unknown): StoryStateChange[] {
@@ -264,7 +344,7 @@ export function parseStoryFields(value: unknown, bookId: string): StoryRecordFie
     ? ['fromEntityId', 'toEntityId', 'relationType', 'direction', 'validFrom', 'validUntil', 'startEventId', 'endEventId']
     : kind === 'event' ? ['storyTime', 'participantIds', 'mentionedEntityIds', 'stateChanges']
       : kind === 'foreshadow' ? ['storyTime', 'stage', 'entityIds', 'eventIds', 'milestones', 'plannedPayoff', 'actualPayoff']
-        : ['storyTime', 'personId', 'attitude', 'concealed', 'acquisitionEventId']
+        : ['storyTime', 'personId', 'attitude', 'concealed', 'acquisitionEventId', 'evolution']
   const data = record(value, [...COMMON_KEYS, ...extraKeys], '故事记录')
   const common: StoryCommonFields = {
     title: requiredText(data.title, '记录名称', 120), description: optionalText(data.description, '记录说明', 20_000),
@@ -294,11 +374,13 @@ export function parseStoryFields(value: unknown, bookId: string): StoryRecordFie
       return invalid('伏笔当前阶段必须与最后一条里程碑一致；尚无里程碑时必须是计划阶段。')
     }
     return { ...common, kind, storyTime: parseStoryTime(data.storyTime), stage, entityIds: idList(data.entityIds, '伏笔关联实体'),
-      eventIds: idList(data.eventIds, '伏笔关联事件'), milestones: history, plannedPayoff: parseDisclosure(data.plannedPayoff), actualPayoff: parseDisclosure(data.actualPayoff) }
+      eventIds: idList(data.eventIds, '伏笔关联事件'), milestones: history, plannedPayoff: parsePlannedPayoff(data.plannedPayoff), actualPayoff: parseDisclosure(data.actualPayoff) }
   }
   if (typeof data.concealed !== 'boolean') return invalid('人物隐瞒标记必须是布尔值。')
-  return { ...common, kind, storyTime: parseStoryTime(data.storyTime), personId: id(data.personId),
-    attitude: choice(data.attitude, COGNITION_ATTITUDES, '人物认知态度'), concealed: data.concealed, acquisitionEventId: nullableId(data.acquisitionEventId) }
+  const storyTime = parseStoryTime(data.storyTime)
+  return { ...common, kind, storyTime, personId: id(data.personId),
+    attitude: choice(data.attitude, COGNITION_ATTITUDES, '人物认知态度'), concealed: data.concealed, acquisitionEventId: nullableId(data.acquisitionEventId),
+    ...(data.evolution === undefined ? {} : { evolution: parseCognitionEvolution(data.evolution, storyTime) }) }
 }
 
 export function parseStoryRecordInput(value: unknown): StoryRecordInput {

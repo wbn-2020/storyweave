@@ -4,10 +4,20 @@ export const MAX_RECOVERY_BYTES = 8 * 1024 * 1024 * 1024
 export const MAX_RECOVERY_FILES = 20_001
 export const MAX_RECOVERY_MANIFEST_BYTES = 8 * 1024 * 1024
 
+export interface RecoveryDraftListInput { scope: string; generationId?: string }
+export interface RecoveryDraftRotateInput { scope: string; expectedGenerationId: string }
+export interface RecoveryDraftGeneration { id: string; createdAt: string | null; active: boolean }
+export interface RecoveryDraftCapacity { generationId: string; files: number; bytes: number; maxFiles: number; maxBytes: number }
+export interface RecoveryDraftInventory {
+  capacity: RecoveryDraftCapacity
+  generations: RecoveryDraftGeneration[]
+  selectedGenerationId: string
+}
+
 export interface BookRecoveryExportInput { bookId: string; expectedBookRevision: number }
 export interface BookRecoveryExportServiceInput extends BookRecoveryExportInput { directoryPath: string }
 export interface BookRecoveryPrepareInput { packagePath: string }
-export interface BookRecoveryRestoreInput { token: string; packageId: string; manifestHash: string }
+export interface BookRecoveryRestoreInput { token: string; packageId: string; manifestHash: string; resume?: boolean }
 export interface BookRecoveryFile { path: string; bytes: number; sha256: string }
 export interface BookRecoveryManifest {
   format: 'storyweave-book-recovery'
@@ -34,6 +44,8 @@ export interface BookRecoveryPreview {
   packagePath: string
   targetRoot: string
   conflict: boolean
+  targetState: 'new' | 'resumable' | 'incomplete' | 'conflict'
+  targetMessage: string
 }
 export interface BookRecoveryExportReceipt {
   packageId: string
@@ -92,7 +104,7 @@ function book(value: unknown): BookSummary {
     createdAt: time(data.createdAt), updatedAt: time(data.updatedAt) }
 }
 function schema(value: unknown): number {
-  const version = requiredInteger(value, '作品格式版本', 12)
+  const version = requiredInteger(value, '作品格式版本', 13)
   if (version < 2) throw invalid()
   return version
 }
@@ -120,8 +132,9 @@ export function parseBookRecoveryPrepareInput(value: unknown): BookRecoveryPrepa
   return { packagePath: path(data.packagePath) }
 }
 export function parseBookRecoveryRestoreInput(value: unknown): BookRecoveryRestoreInput {
-  const data = record(value, ['token', 'packageId', 'manifestHash'])
-  return { token: id(data.token), packageId: id(data.packageId), manifestHash: digest(data.manifestHash) }
+  const data = record(value, ['token', 'packageId', 'manifestHash', 'resume'])
+  if (data.resume !== undefined && typeof data.resume !== 'boolean') throw invalid()
+  return { token: id(data.token), packageId: id(data.packageId), manifestHash: digest(data.manifestHash), ...(data.resume === undefined ? {} : { resume: data.resume }) }
 }
 
 export function parseBookRecoveryManifest(value: unknown): BookRecoveryManifest {
@@ -148,10 +161,12 @@ export function parseBookRecoveryManifest(value: unknown): BookRecoveryManifest 
 
 export function isBookRecoveryPreviewFor(value: unknown, targetRoot: string): value is BookRecoveryPreview {
   try {
-    const data = record(value, ['token', 'packageId', 'manifestHash', 'createdAt', 'book', 'schemaVersion', 'chapterCount', 'revisionCount', 'sourceCount', 'totalBytes', 'packagePath', 'targetRoot', 'conflict'])
+    const data = record(value, ['token', 'packageId', 'manifestHash', 'createdAt', 'book', 'schemaVersion', 'chapterCount', 'revisionCount', 'sourceCount', 'totalBytes', 'packagePath', 'targetRoot', 'conflict', 'targetState', 'targetMessage'])
     id(data.token); id(data.packageId); digest(data.manifestHash); time(data.createdAt); book(data.book); schema(data.schemaVersion); totals(data)
     path(data.packagePath); path(data.targetRoot)
-    return data.targetRoot === targetRoot && typeof data.conflict === 'boolean'
+    return data.targetRoot === targetRoot && typeof data.targetMessage === 'string' && data.targetMessage.length <= 2000 &&
+      ['new', 'resumable', 'incomplete', 'conflict'].includes(String(data.targetState)) &&
+      data.conflict === (data.targetState === 'incomplete' || data.targetState === 'conflict')
   } catch { return false }
 }
 export function isBookRecoveryExportReceiptFor(value: unknown, input: BookRecoveryExportInput): value is BookRecoveryExportReceipt {
