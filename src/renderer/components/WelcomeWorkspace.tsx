@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { BookSnapshot, StudioApi, WorkspaceSnapshot } from '../../contracts/api'
+import { STUDIO_THEMES, STUDIO_THEME_META, type StudioTheme } from '../display-preferences'
 import { displayTime, request, statusLabels } from '../request'
-import { StudioIcon, type StudioIconName } from './StudioIcon'
+import { StudioIcon } from './StudioIcon'
 import { BookCover } from './LibraryPanels'
 import styles from './WelcomeWorkspace.module.css'
-import { lastWritingBook, writingPosition } from '../writing-location'
+import { lastWritingBook } from '../writing-location'
 
-export type WorkspaceTool = 'knowledge' | 'galaxy' | 'timeline' | 'notes' | 'workbench'
+export type WorkspaceTool = 'knowledge' | 'galaxy' | 'timeline' | 'notes' | 'workbench' | 'calendar' | 'media'
 
 interface Props {
   api?: StudioApi
   workspace: WorkspaceSnapshot
   currentBook: BookSnapshot | null
   busy: boolean
+  studioTheme?: StudioTheme
+  onThemeChange?: (theme: StudioTheme) => void
   onOpenWorkspace: () => void
   onCreate: () => void
   onImport: () => void
@@ -21,6 +24,7 @@ interface Props {
   onPreferences: () => void
   onOpenBook: (bookId: string, chapterId?: string) => void
   onTool: (bookId: string, tool: WorkspaceTool) => void
+  onOpenInspiration?: () => void
 }
 
 type BookLoad = { key: string } & (
@@ -29,21 +33,30 @@ type BookLoad = { key: string } & (
   | { status: 'error'; message: string }
 )
 
-const tools: { id: WorkspaceTool; title: string; description: string; icon: StudioIconName; action: string }[] = [
-  { id: 'workbench', title: '规划与审稿', description: '场景、大纲、审稿与写作目标', icon: 'list', action: '打开创作规划' },
-  { id: 'knowledge', title: '故事设定', description: '人物、地点与世界规则', icon: 'read', action: '进入故事设定' },
-  { id: 'galaxy', title: '关系星海', description: '人物关系与故事线索', icon: 'galaxy', action: '打开关系星海' },
-  { id: 'timeline', title: '故事时间线', description: '事件顺序与前因后果', icon: 'timeline', action: '查看故事时间线' },
-  { id: 'notes', title: '素材与笔记', description: '随时记下新的灵感', icon: 'notes', action: '打开素材与笔记' },
+// 小狼 wolfan / Pagekin / StarWriter 8 大神级小说技能
+const GOD_TIER_SKILLS = [
+  { id: 'dethrone-ai', name: '朱雀去 AI 味', badge: '高频必用', desc: '清洗“仿佛/勾起弧度/眼中精芒”套话，转为动词白描与口语细节' },
+  { id: 'hook-opening', name: '黄金三章开篇', badge: '签约核心', desc: '强危机入局，立住主角执念与金手指预期，章末留强悬念钩子' },
+  { id: 'action-breakdown', name: '打斗动作分解', badge: '画面张力', desc: '起手预备、发力机制、受创物理反馈与环境破坏，招招到肉' },
+  { id: 'dialogue-subtext', name: '对白潜台词', badge: '人设不崩', desc: '话里有话，用称谓、停顿、小动作与言不由衷展现心理博弈' },
+  { id: 'escalation-tension', name: '情绪拉扯控温', badge: '爽点节奏', desc: '先抑后扬，设计三轮阻力升级与反转代价，拒绝平铺直叙' },
+  { id: 'foreshadow-chain', name: '伏笔账本核验', badge: '长篇防崩', desc: '对照已埋、待收与到期伏笔，让每次揭晓引发局势与认知震荡' },
+  { id: 'iceberg-world', name: '冰山世界白描', badge: '拒绝说明文', desc: '借衣食住行、货币物价、市井行话侧写世界观，只露冰山一角' },
+  { id: 'cliffhanger-hook', name: '断章卡点制造', badge: '追读神器', desc: '在秘密揭晓前半秒或致命危机降临一瞬截断，拉满读者追读欲' },
 ]
 
 function updatedTime(value: string) { return Date.parse(value) || 0 }
 function number(value: number) { return value.toLocaleString('zh-CN') }
 
-export function WelcomeWorkspace({ api, workspace, currentBook, busy, onOpenWorkspace, onCreate, onImport, onShelf, onRecover, onPreferences, onOpenBook, onTool }: Props) {
+export function WelcomeWorkspace({
+  api, workspace, currentBook, busy, studioTheme = 'mirroric', onThemeChange,
+  onOpenWorkspace, onCreate, onImport, onShelf, onRecover, onPreferences, onOpenBook, onTool, onOpenInspiration,
+}: Props) {
   const [load, setLoad] = useState<BookLoad | null>(null)
   const [attempt, setAttempt] = useState(0)
+  const [bookQuery, setBookQuery] = useState('')
   const hasWorkspace = Boolean(workspace.rootPath)
+  const coverScope = workspace.rootPath ? JSON.stringify([workspace.rootPath, workspace.recoveryScope ?? null]) : undefined
   const blocked = busy || !api
   const recentBooks = useMemo(() => workspace.rootPath
     ? [...workspace.books].sort((left, right) => updatedTime(right.updatedAt) - updatedTime(left.updatedAt))
@@ -51,7 +64,6 @@ export function WelcomeWorkspace({ api, workspace, currentBook, busy, onOpenWork
   const currentSummary = currentBook && recentBooks.find((item) => item.id === currentBook.book.id)
   const selectedBook = currentSummary || recentBooks.find((item) => item.id === lastWritingBook(workspace.rootPath)) || recentBooks.find((item) => !item.archivedAt) || recentBooks[0]
   const selectedId = selectedBook?.id
-  // 只有仍属于当前作品库、且不早于书架版本的快照可直接复用，避免回到首页后重复读取。
   const suppliedBook = currentBook && currentSummary && currentBook.book.revision >= currentSummary.revision ? currentBook : null
   const requestKey = JSON.stringify([workspace.rootPath, workspace.recoveryScope, selectedId, selectedBook?.revision, selectedBook?.updatedAt, attempt])
 
@@ -59,7 +71,6 @@ export function WelcomeWorkspace({ api, workspace, currentBook, busy, onOpenWork
     if (!api || !workspace.rootPath || !selectedId || suppliedBook || busy) return
     let active = true
     setLoad({ key: requestKey, status: 'loading' })
-    // 首页只取当前一本书的章节摘要。目录切换、版本变化或组件离开后，旧请求不能写回。
     void request(() => api.getBook({ bookId: selectedId })).then((result) => {
       if (!active) return
       if (!result.ok) {
@@ -73,7 +84,6 @@ export function WelcomeWorkspace({ api, workspace, currentBook, busy, onOpenWork
     return () => { active = false }
   }, [api, workspace.rootPath, selectedId, suppliedBook, requestKey, busy])
 
-  // key 在渲染时先隔离旧目录结果，不等待 effect 清理才隐藏旧统计。
   const currentLoad = load?.key === requestKey ? load : null
   const snapshot = suppliedBook || (api && currentLoad?.status === 'ready' ? currentLoad.snapshot : null)
   const featuredBook = snapshot?.book ?? selectedBook
@@ -83,22 +93,25 @@ export function WelcomeWorkspace({ api, workspace, currentBook, busy, onOpenWork
     : null
   const emptyLibrary = hasWorkspace && recentBooks.length === 0
   const recentChapters = useMemo(() => snapshot
-    ? [...snapshot.chapters].sort((left, right) => updatedTime(right.updatedAt) - updatedTime(left.updatedAt) || left.position - right.position).slice(0, 3)
+    ? [...snapshot.chapters].sort((left, right) => updatedTime(right.updatedAt) - updatedTime(left.updatedAt) || left.position - right.position).slice(0, 5)
     : [], [snapshot])
-  const writingCount = hasWorkspace ? recentBooks.filter((item) => !item.archivedAt).length : null
-  const chapterCount = snapshot ? snapshot.chapters.length : emptyLibrary ? 0 : null
-  const characterCount = snapshot ? snapshot.chapters.reduce((total, chapter) => total + chapter.characterCount, 0) : emptyLibrary ? 0 : null
-  const finalizedCount = snapshot ? snapshot.chapters.filter((chapter) => chapter.status === 'finalized').length : emptyLibrary ? 0 : null
-  const statistics = [
-    { label: '写作中作品', value: writingCount, hint: '当前作品库', icon: 'books' as const },
-    { label: '当前作品章节', value: chapterCount, hint: '按卷章目录统计', icon: 'list' as const },
-    { label: '正文总字符', value: characterCount, hint: '当前作品 · 已保存正文', icon: 'pen' as const },
-    { label: '已定稿章节', value: finalizedCount, hint: '当前作品 · 作者定稿', icon: 'check' as const },
-  ]
+  const writingCount = hasWorkspace ? recentBooks.filter((item) => !item.archivedAt).length : 0
+  const chapterCount = snapshot ? snapshot.chapters.length : emptyLibrary ? 0 : 0
+  const characterCount = snapshot ? snapshot.chapters.reduce((total, chapter) => total + chapter.characterCount, 0) : 0
+  const finalizedCount = snapshot ? snapshot.chapters.filter((chapter) => chapter.status === 'finalized').length : 0
+  const activeChapter = recentChapters[0]
+  const targetChars = activeChapter?.targetCharacters ?? 0
+  // 章节字数不代表今日产出；未设目标时也不能推算创作完成度。
+  const progressPercent = activeChapter && targetChars > 0 ? Math.min(100, Math.round(activeChapter.characterCount / targetChars * 100)) : null
+  const filteredBooks = useMemo(() => {
+    const q = bookQuery.trim().toLowerCase()
+    if (!q) return recentBooks
+    return recentBooks.filter((b) => `${b.title} ${b.genre} ${b.synopsis}`.toLowerCase().includes(q))
+  }, [recentBooks, bookQuery])
+
   const today = new Date()
-  const dateValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const workspaceName = workspace.rootPath?.split(/[\\/]/).filter(Boolean).pop() || '本地作品库'
-  const canOpenTools = Boolean(snapshot) || !selectedBook
+  const englishDate = today.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }).toUpperCase()
+  const workspaceName = workspace.rootPath?.split(/[\\/]/).filter(Boolean).pop() || '未选择作品库'
   const retry = () => setAttempt((value) => value + 1)
   const openFeatured = () => {
     if (!hasWorkspace) onOpenWorkspace()
@@ -108,109 +121,370 @@ export function WelcomeWorkspace({ api, workspace, currentBook, busy, onOpenWork
 
   return <section className={styles.welcome} aria-labelledby="workspace-home-title">
     <div className={styles.content}>
-      <header className={styles.heading}>
-        <div className={styles.headingText}>
-          <h2 id="workspace-home-title">今日工作台</h2>
-          <time dateTime={dateValue}>{today.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}</time>
+      {/* ============================== 1. StarWriter 同款顶部欢迎语 ============================== */}
+      <header className={styles.workspaceHeader}>
+        <div className={styles.bookTitleGroup}>
+          <span className={styles.dateEyebrow}>{englishDate} · STORYWEAVE AI STUDIO</span>
+          <div className={styles.titleRow}>
+            <h1 id="workspace-home-title">让故事继续生长。</h1>
+            <span className={styles.currentTag}>
+              {featuredBook ? `正在创作《${featuredBook.title}》` : '智能体全流程小说工作台'}
+            </span>
+          </div>
+          <p className={styles.subtitleText}>
+            这是你的创作空间，从想法箱、故事建筑师、角色卡、9大世界模型到朱雀去 AI 味评审，慢慢写，也一直向前。
+          </p>
         </div>
-        <div className={styles.headerActions}>
-          <button className={styles.secondaryButton} type="button" onClick={onImport} disabled={blocked}><StudioIcon name="folder" size={16} />导入文本</button>
-          <button className={featuredBook ? styles.secondaryButton : styles.primaryButton} type="button" onClick={onCreate} disabled={blocked}><StudioIcon name="pen" size={16} />新建作品</button>
+
+        <div className={styles.headerRightActions}>
+          <button className={styles.ghostBtn} type="button" onClick={onImport} disabled={blocked}>
+            <StudioIcon name="folder" size={14} />导入小说
+          </button>
+          <button className={styles.primaryBtn} type="button" onClick={onCreate} disabled={blocked}>
+            <StudioIcon name="pen" size={14} />+ 新建作品
+          </button>
         </div>
       </header>
+
       {!api && <p className={styles.connectionNotice} role="status">桌面连接暂不可用，作品操作将在连接恢复后开放。</p>}
 
-      <div className={styles.layout}>
-        <div className={styles.mainColumn}>
-          <section className={styles.hero} aria-label={featuredBook ? '当前作品' : '开始创作'}>
-            <div className={styles.heroCover} aria-hidden="true">{featuredBook ? <BookCover book={featuredBook} featured /> : <span className={styles.emptyCover}><StudioIcon name="pen" size={24} /><strong>你的故事<br />从此开始</strong><small>织章 · 创作手稿</small></span>}</div>
-            <div className={styles.heroContent}>
-              <span className={styles.heroLabel}><StudioIcon name={featuredBook?.archivedAt ? 'archive' : 'pen'} size={15} />{featuredBook ? featuredBook.archivedAt ? '作品回顾 · 已归档' : '继续创作' : '你的创作空间'}</span>
-              <h3 title={featuredBook?.title}>{featuredBook?.title || '开始一部新作品'}</h3>
-              <p className={styles.heroSynopsis}>{featuredBook?.synopsis || (featuredBook ? '每一段文字，都让故事更近一步。' : '给灵感一个位置，让文字慢慢长成故事。')}</p>
-              {featuredBook && recentChapters.length ? <p className={styles.heroChapter}><span>最近修改</span><strong title={recentChapters[0].title}>{recentChapters[0].title}</strong></p>
-                : <p>{featuredBook ? snapshot ? '从卷章目录开始，把下一幕写进故事。' : '打开作品目录，接着写下你的故事。' : '正文、设定与灵感，在这里一起展开。'}</p>}
-              <button className={styles.heroButton} type="button" onClick={openFeatured} disabled={blocked}>
-                {!hasWorkspace ? '选择作品库目录' : featuredBook ? featuredBook.archivedAt || !recentChapters.length ? '打开作品目录' : '继续写作' : '新建第一部作品'}<StudioIcon name="arrow" size={16} />
+      {/* ============================== 2. 第一行：StarWriter 经典「继续上次创作 (左2/3) + 今日目标与打卡 (右1/3)」 ============================== */}
+      <div className={styles.topHeroRow}>
+        <section className={styles.activeWritingCard} aria-label="继续上次创作">
+          <div className={styles.activeCoverBox}>
+            {featuredBook ? <BookCover book={featuredBook} featured api={api} workspaceScope={coverScope} /> : <StudioIcon name="pen" size={48} />}
+          </div>
+          <div className={styles.activeWritingBody}>
+            <div className={styles.activeTagRow}>
+              <span className={styles.activePill}><span className={styles.pulseDot} />{featuredBook ? '继续上次创作' : '开始新的故事'}</span>
+              <span className={styles.activeChapterMeta}>停在一个值得继续的地方</span>
+            </div>
+            <h2 className={styles.activeChapterTitle} title={featuredBook?.title ?? '开始你的第一部作品'}>
+              {featuredBook ? featuredBook.title : '开始你的第一部作品'}
+            </h2>
+            <p className={styles.activeSubMeta}>
+              {featuredBook
+                ? `${activeChapter ? `第 ${activeChapter.position + 1} 章〈${activeChapter.title}〉` : '待建立第一章'} · 累计 ${number(characterCount)} 字 · 共 ${chapterCount} 章`
+                : '支持从「想法箱 → 故事建筑师」一键生成书名、简介、世界观、人物卡与分卷大纲'}
+            </p>
+            <div className={styles.activeProgressRow}>
+              {progressPercent !== null && <div className={styles.progressBarWrapper}>
+                <div className={styles.progressBarTrack}>
+                  <div className={styles.progressBarFill} style={{ width: `${progressPercent}%` }} />
+                </div>
+              </div>}
+              <span className={styles.progressPercentText}>
+                {activeChapter ? progressPercent !== null ? `本章 ${number(activeChapter.characterCount)} / ${number(targetChars)} 字 (${progressPercent}%)` : '本章尚未设置目标字数' : '建立章节后可设置字数目标'}
+              </span>
+            </div>
+            <div className={styles.activeActionsRow}>
+              <button className={styles.primaryBtn} type="button" onClick={openFeatured} disabled={blocked}>
+                <StudioIcon name="pen" size={14} />
+                {!hasWorkspace ? '选择作品库目录' : featuredBook ? '继续写作' : '新建第一部作品'}
               </button>
+              {featuredBook && snapshot && (
+                <button className={styles.ghostBtn} type="button" onClick={() => onTool(featuredBook.id, 'workbench')} disabled={blocked}>
+                  <StudioIcon name="compass" size={14} />大纲与朱雀评审
+                </button>
+              )}
+              {featuredBook && snapshot && (
+                <button className={styles.subtleBtn} type="button" onClick={() => onTool(featuredBook.id, 'knowledge')} disabled={blocked}>
+                  <StudioIcon name="user" size={14} />角色卡 / 起名 / 世界模型
+                </button>
+              )}
             </div>
+          </div>
+        </section>
+
+        <div className={styles.goalStack}>
+          <section className={styles.goalCard} aria-label="本章字数与目标">
+            <div className={styles.goalCardHead}>
+              <span><StudioIcon name="compass" size={14} />本章字数与目标</span>
+              <button type="button" className={styles.miniLinkBtn} onClick={() => snapshot ? onTool(snapshot.book.id, 'calendar') : onCreate()} disabled={blocked}>日历打卡 →</button>
+            </div>
+            <div className={styles.goalValueRow}>
+              <strong>{number(activeChapter?.characterCount ?? 0)}</strong>
+              <span>{targetChars > 0 ? `/ ${number(targetChars)} 字` : '字 · 未设置目标'}</span>
+            </div>
+            {progressPercent !== null && <div className={styles.progressBarTrack}>
+              <div className={styles.progressBarFill} style={{ width: `${progressPercent}%` }} />
+            </div>}
           </section>
 
-          <dl className={styles.statistics} aria-label="作品与章节统计" aria-busy={loading}>
-            {statistics.map((item) => <div className={styles.statistic} key={item.label}>
-              <dt>{item.label}<StudioIcon name={item.icon} size={15} /></dt>
-              <dd>{item.value === null ? <span aria-label={!hasWorkspace ? '尚未选择作品库' : loading ? '读取中' : '暂不可用'}>—</span> : number(item.value)}<span className={styles.statHint}>{item.hint}</span></dd>
-            </div>)}
-          </dl>
-
-          <section className={styles.chaptersSection} aria-labelledby="workspace-chapters-title" aria-busy={loading}>
-            <div className={styles.sectionHeading}>
-              <h3 id="workspace-chapters-title">{selectedBook ? '最近章节' : '开始你的第一部作品'}</h3>
-              {selectedBook && <span>按最近修改排序</span>}
+          <section className={styles.goalCard} aria-label="创作沉淀统计">
+            <div className={styles.goalCardHead}>
+              <span><StudioIcon name="history" size={14} />创作沉淀</span>
+              <span className={styles.goalBadge}>本地实时保存</span>
             </div>
-            {loadError ? <div className={styles.loadError} role="alert"><div><strong>章节信息暂未读到</strong><p>{loadError}</p></div><button className={styles.secondaryButton} type="button" onClick={retry} disabled={blocked}>重新读取</button></div>
-              : loading ? <div className={styles.loadingChapters} role="status"><span>正在读取章节与字数…</span><div aria-hidden="true"><i /><i /><i /></div></div>
-                : snapshot ? recentChapters.length ? <ol className={styles.chapterList}>
-                  {recentChapters.map((chapter) => <li key={chapter.id}>
-                    <button className={styles.chapterRow} type="button" onClick={() => onOpenBook(snapshot.book.id, chapter.id)} disabled={blocked}>
-                      <span className={styles.chapterNumber}>{String(chapter.position + 1).padStart(2, '0')}</span>
-                      <span className={styles.chapterInfo}><strong title={chapter.title}>{chapter.title}</strong><span>{number(chapter.characterCount)} 字符<span className={styles.chapterStatus} data-status={chapter.status}>{statusLabels[chapter.status]}</span></span></span>
-                      <time dateTime={chapter.updatedAt}>{displayTime(chapter.updatedAt)}</time><StudioIcon name="chevron" size={15} />
-                    </button>
-                  </li>)}
-                </ol> : <div className={styles.noChapters}><StudioIcon name="pen" size={25} /><div><strong>故事还没有第一章</strong><p>{snapshot.book.archivedAt ? '这部归档作品暂时没有章节，可以打开目录查看作品。' : '进入作品目录新建章节，或先去故事设定整理人物与世界。'}</p></div><button className={styles.textButton} type="button" onClick={() => onOpenBook(snapshot.book.id)} disabled={blocked}>打开目录<StudioIcon name="arrow" size={14} /></button></div>
-                  : <ol className={styles.startSteps}>
-                    <li><span className={styles.stepNumber}>{hasWorkspace ? <StudioIcon name="check" size={16} /> : '01'}</span><div><strong>选择作品库</strong><p>{hasWorkspace ? '本地目录已准备好。' : '选一个文件夹，安放正文与资料。'}</p><button className={styles.textButton} type="button" onClick={onOpenWorkspace} disabled={blocked}>{hasWorkspace ? '更换目录' : '选择目录'}<StudioIcon name="arrow" size={13} /></button></div></li>
-                    <li><span className={styles.stepNumber}>02</span><div><strong>新建或导入作品</strong><p>从新故事开始，也可带入已有稿件。</p><button className={styles.textButton} type="button" onClick={onCreate} disabled={blocked}>新建作品<StudioIcon name="arrow" size={13} /></button></div></li>
-                    <li><span className={styles.stepNumber}>03</span><div><strong>正文与设定一起展开</strong><p>写第一章，补充人物、关系和故事事件。</p><span className={styles.stepHint}>作品建立后即可开始</span></div></li>
-                  </ol>}
-          </section>
-
-          <section className={styles.toolsSection} aria-labelledby="workspace-tools-title">
-            <div className={styles.sectionHeading}>
-              <h3 id="workspace-tools-title">故事工作台</h3>
-              <span title={featuredBook?.title}>{featuredBook ? `当前作品：${featuredBook.title}` : '先建立作品，再展开你的故事'}</span>
-            </div>
-            {snapshot && !snapshot.book.archivedAt && <p>
-              {snapshot.chapters.length === 0 ? '下一步：建立第一章，随时可以再补故事设定。'
-                : snapshot.chapters.some((item) => item.status === 'review') ? '下一步：把待审章节的问题记入审稿清单，修改后逐项复核。'
-                  : snapshot.chapters.some((item) => !item.goal) ? '下一步：为章节补上目标，或者直接接着写。'
-                    : '下一步：继续上次的章节，或用场景卡安排接下来的变化。'}
-              <button className={styles.textButton} type="button" disabled={blocked} onClick={() => snapshot.chapters.length ? onTool(snapshot.book.id, 'workbench') : onOpenBook(snapshot.book.id)}>{snapshot.chapters.length ? '查看规划与审稿' : '建立章节'}<StudioIcon name="arrow" size={13} /></button>
-              {writingPosition(workspace.rootPath, snapshot.book.id) && <button className={styles.textButton} type="button" disabled={blocked} onClick={() => onOpenBook(snapshot.book.id)}>回到上次写作位置<StudioIcon name="arrow" size={13} /></button>}
-            </p>}
-            <div className={styles.toolGrid}>
-              {tools.map((tool) => <button className={styles.toolCard} data-tool={tool.id} type="button" key={tool.id} disabled={blocked || !canOpenTools}
-                aria-label={`${tool.title}，${snapshot ? tool.action : selectedBook ? loading ? '正在读取作品' : '读取作品后进入' : '先建立作品'}`}
-                onClick={() => snapshot ? onTool(snapshot.book.id, tool.id) : onCreate()}>
-                <span className={styles.toolIcon} aria-hidden="true"><StudioIcon name={tool.icon} size={19} /></span>
-                <span className={styles.toolText}>
-                  <strong>{tool.title}</strong>
-                  <span className={styles.toolDescription}>{tool.description}</span>
-                </span>
-              </button>)}
+            <div className={styles.goalStatsGrid}>
+              <div><strong>{writingCount}</strong><small>连载作品</small></div>
+              <div><strong>{chapterCount}</strong><small>已建章节</small></div>
+              <div><strong>{finalizedCount}</strong><small>已定稿章</small></div>
             </div>
           </section>
         </div>
+      </div>
 
-        <aside className={styles.supportColumn} aria-label="作品与常用操作">
-          <section className={styles.recentPanel} aria-labelledby="workspace-recent-title">
-            <div className={styles.panelHeading}><h3 id="workspace-recent-title">最近作品</h3><button className={styles.textButton} type="button" onClick={onShelf} disabled={busy || !hasWorkspace}>全部<StudioIcon name="chevron" size={13} /></button></div>
-            {recentBooks.length ? <ul className={styles.recentList}>
-              {recentBooks.slice(0, 3).map((item) => <li key={item.id}><button className={styles.recentBook} type="button" onClick={() => onOpenBook(item.id)} disabled={blocked}>
-                <span className={styles.smallCover} aria-hidden="true"><BookCover book={item} /></span>
-                <span className={styles.recentBookInfo}><strong title={item.title}>{item.title}</strong><span className={styles.bookState} data-archived={Boolean(item.archivedAt)}>{item.archivedAt ? '已归档' : '写作中'}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)} 更新</time></span>
-                <StudioIcon name="chevron" size={14} />
-              </button></li>)}
-            </ul> : <div className={styles.emptyRecent}><StudioIcon name="books" size={28} /><strong>{hasWorkspace ? '书架已就绪' : '给故事留一个位置'}</strong><p>{hasWorkspace ? '新建第一部作品，最近更新的故事就会出现在这里。' : '选择本地作品库后，在这里找到你最近更新的故事。'}</p><button className={styles.textButton} type="button" onClick={hasWorkspace ? onCreate : onOpenWorkspace} disabled={blocked}>{hasWorkspace ? '新建第一部作品' : '选择作品库'}<StudioIcon name="arrow" size={14} /></button></div>}
+      {/* ============================== 3. 第二行：StarWriter 标志性「我的作品」横幅卡片画廊 ============================== */}
+      <section className={styles.myBooksSection} aria-labelledby="my-books-heading">
+        <div className={styles.sectionHeadingRow}>
+          <div>
+            <h3 id="my-books-heading">我的作品</h3>
+            <p className={styles.sectionSubtitle}>
+              {recentBooks.length ? `${recentBooks.length} 个故事正在等待你的下一句` : '每个故事一间独立书房，人物、世界观与伏笔账本自动沉淀'}
+            </p>
+          </div>
+          <div className={styles.booksToolbar}>
+            <label className={styles.inlineSearch}>
+              <StudioIcon name="search" size={14} />
+              <input
+                type="search"
+                placeholder="搜索作品…"
+                value={bookQuery}
+                onChange={(e) => setBookQuery(e.target.value)}
+              />
+            </label>
+            <button className={styles.ghostBtn} type="button" onClick={onImport} disabled={blocked}>导入小说</button>
+            <button className={styles.primaryBtn} type="button" onClick={onCreate} disabled={blocked}>+ 新建</button>
+          </div>
+        </div>
+
+        <div className={styles.landscapeBookGrid}>
+          {filteredBooks.slice(0, 5).map((item, idx) => (
+            <article key={item.id} className={styles.landscapeBookCard} data-Banner={idx % 4}>
+              <button type="button" className={styles.landscapeCardBtn} onClick={() => onOpenBook(item.id)} disabled={blocked}>
+                <div className={styles.landscapeBanner} data-tone={idx % 4}>
+                  <span className={styles.bannerStatusPill}>{item.archivedAt ? '已归档' : '创作中'}</span>
+                  <strong className={styles.bannerWatermark}>{item.title}</strong>
+                </div>
+                <div className={styles.landscapeCardBody}>
+                  <h4>{item.title}</h4>
+                  <p>{item.synopsis || '尚未填写简介，点击进入正文或补充故事设定…'}</p>
+                  <div className={styles.landscapeCardFoot}>
+                    <span>{item.genre || '长篇创作'} · {displayTime(item.updatedAt)}</span>
+                    <span className={styles.enterArrow}>↗</span>
+                  </div>
+                </div>
+              </button>
+            </article>
+          ))}
+
+          <button type="button" className={styles.newStorySlotCard} onClick={onCreate} disabled={blocked}>
+            <span className={styles.newSlotPlus}>+</span>
+            <strong>开始一个新故事</strong>
+            <small>从一句话种子、人物卡或导入 TXT 开始</small>
+          </button>
+        </div>
+      </section>
+
+      {/* ============================== 4. 第三行：双栏工作台（左：6大创作模块 + 8大神级Skill + 最近章节；右：AI Agent 流水线） ============================== */}
+      <div className={styles.workspaceGrid}>
+        <div className={styles.mainCanvas}>
+          {/* 创作空间四大核心入口 */}
+          <section className={styles.overviewStatsRow} aria-label="核心设定与检测入口">
+            <button className={styles.statCard} type="button" onClick={() => snapshot ? onTool(snapshot.book.id, 'knowledge') : onCreate()} disabled={blocked}>
+              <span className={styles.statBadge}>角色 & 属性</span>
+              <strong className={styles.statTitle}>人物角色卡 & 起名器</strong>
+              <small className={styles.statHint}>姓氏圆章 · 六维雷达 · 避开烂大街名字</small>
+            </button>
+            <button className={styles.statCard} type="button" onClick={() => snapshot ? onTool(snapshot.book.id, 'knowledge') : onCreate()} disabled={blocked}>
+              <span className={styles.statBadge}>9 大流派预设</span>
+              <strong className={styles.statTitle}>世界观卡片 & 势力</strong>
+              <small className={styles.statHint}>修仙/末日/高武/克苏鲁 9 套模型开箱即用</small>
+            </button>
+            <button className={styles.statCard} type="button" onClick={() => snapshot ? onTool(snapshot.book.id, 'workbench') : onCreate()} disabled={blocked}>
+              <span className={styles.statBadge}>过审护航</span>
+              <strong className={styles.statTitle}>朱雀去AI味 & 读者模拟</strong>
+              <small className={styles.statHint}>标出AI套话 + 小白/老书虫/编辑三重章评</small>
+            </button>
+            <button className={styles.statCard} type="button" onClick={() => snapshot ? onTool(snapshot.book.id, 'timeline') : onCreate()} disabled={blocked}>
+              <span className={styles.statBadge}>跨章防崩</span>
+              <strong className={styles.statTitle}>伏笔账本 & 双轨时间线</strong>
+              <small className={styles.statHint}>已埋 → 待收 → 已收，故事线与披露线分离</small>
+            </button>
           </section>
 
-          <section className={styles.storagePanel} aria-labelledby="workspace-storage-title">
-            <div className={styles.storageHeading}><StudioIcon name="folder" size={17} /><h3 id="workspace-storage-title">本地作品库</h3></div>
-            <strong className={styles.workspaceName} title={workspace.rootPath ?? undefined}>{hasWorkspace ? workspaceName : '尚未选择目录'}</strong>
-            <p>{hasWorkspace ? '正文与故事资料保存在这个作品库中。' : '作品库是电脑里的文件夹，已有作品可直接选择原目录。'}</p>
-            <button className={styles.textButton} type="button" onClick={onOpenWorkspace} disabled={blocked}>{hasWorkspace ? '切换作品库' : '选择目录'}<StudioIcon name="arrow" size={13} /></button>
-            <div className={styles.utilityActions}><button type="button" onClick={onRecover} disabled={blocked}><StudioIcon name="archive" size={16} /><span>备份与恢复</span><StudioIcon name="chevron" size={13} /></button><button type="button" onClick={onPreferences} disabled={busy}><StudioIcon name="settings" size={16} /><span>显示偏好</span><StudioIcon name="chevron" size={13} /></button></div>
+          {/* 神级小说 Skill 库 */}
+          <section className={styles.skillsSection} aria-labelledby="skills-heading">
+            <div className={styles.sectionHeadingRow}>
+              <div>
+                <h3 id="skills-heading">8 大神级网文 Skill 库</h3>
+                <p className={styles.sectionSubtitle}>专为长篇网文打磨的实战技法 · 写正文与拆书时一键勾选注入</p>
+              </div>
+              {onOpenInspiration && (
+                <button className={styles.textBtn} type="button" onClick={onOpenInspiration} disabled={blocked}>
+                  进入拆书与技能中心 <StudioIcon name="arrow" size={13} />
+                </button>
+              )}
+            </div>
+
+            <div className={styles.skillCardsGrid}>
+              {GOD_TIER_SKILLS.map((skill) => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  className={styles.skillCard}
+                  onClick={() => onOpenInspiration ? onOpenInspiration() : openFeatured()}
+                  title={`点击查看或调用【${skill.name}】`}
+                >
+                  <div className={styles.skillCardTop}>
+                    <span className={styles.skillPill}>{skill.name}</span>
+                    <small className={styles.skillBadge}>{skill.badge}</small>
+                  </div>
+                  <p className={styles.skillDesc}>{skill.desc}</p>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* 最近章节列表 */}
+          <section className={styles.recentChaptersSection} aria-labelledby="recent-heading">
+            <div className={styles.sectionHeadingRow}>
+              <div>
+                <h3 id="recent-heading">最近章节与草稿</h3>
+                <p className={styles.sectionSubtitle}>每章改稿自动留存历史快照，随时对比回退</p>
+              </div>
+              {snapshot && (
+                <button className={styles.textBtn} type="button" onClick={() => onOpenBook(snapshot.book.id)} disabled={blocked}>
+                  打开全部章节 <StudioIcon name="arrow" size={13} />
+                </button>
+              )}
+            </div>
+
+            {loadError ? (
+              <div className={styles.errorBox} role="alert">
+                <p>{loadError}</p>
+                <button className={styles.ghostBtn} type="button" onClick={retry} disabled={blocked}>重试</button>
+              </div>
+            ) : loading ? (
+              <div className={styles.loadingBox} role="status">正在同步章节数据…</div>
+            ) : recentChapters.length ? (
+              <div className={styles.chaptersTable}>
+                {recentChapters.map((ch) => (
+                  <button
+                    key={ch.id}
+                    className={styles.chapterItemRow}
+                    type="button"
+                    onClick={() => snapshot && onOpenBook(snapshot.book.id, ch.id)}
+                    disabled={blocked}
+                  >
+                    <span className={styles.chOrdinal}>第 {ch.position + 1} 章</span>
+                    <strong className={styles.chTitle} title={ch.title}>{ch.title}</strong>
+                    <span className={styles.chWords}>{number(ch.characterCount)} 字</span>
+                    <span className={styles.chStatus} data-status={ch.status}>{statusLabels[ch.status]}</span>
+                    <time className={styles.chTime} dateTime={ch.updatedAt}>{displayTime(ch.updatedAt)}</time>
+                    <StudioIcon name="arrow" size={12} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className={styles.emptyChaptersBox}>
+                <p>当前尚未建立正文章节。可先用「故事建筑师」生成大纲，或直接建立第一章开始落笔：</p>
+                <button className={styles.primaryBtn} type="button" onClick={openFeatured} disabled={blocked}>
+                  建立第一章正文
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* 右侧：AI Agent 任务流 + 13模块流水线说明 (Mirroric + 豆豆工作台) */}
+        <aside className={styles.agentAside} aria-label="星轨 AI 智能体任务流">
+          <section className={styles.agentPipelineCard}>
+            <div className={styles.agentCardHeader}>
+              <div className={styles.agentTitleGroup}>
+                <span className={styles.agentTag}>星轨 AI · 智能体</span>
+                <h3>AI Agent 创作流水线</h3>
+              </div>
+              <button
+                className={styles.newAgentBtn}
+                type="button"
+                onClick={() => snapshot ? onTool(snapshot.book.id, 'workbench') : openFeatured()}
+                disabled={blocked}
+              >
+                故事建筑师
+              </button>
+            </div>
+
+            <p className={styles.agentCardDesc}>不是 13 个孤岛，而是“把想法变成骨架，再把骨架变成正文”的流水线</p>
+
+            <ol className={styles.pipelineSteps}>
+              <li className={`${styles.stepItem} ${styles.stepDone}`} onClick={() => snapshot ? onTool(snapshot.book.id, 'notes') : openFeatured()}>
+                <span className={styles.stepMarker}>✓</span>
+                <div className={styles.stepInfo}>
+                  <strong>1. 想法箱 & 灵感泡泡</strong>
+                  <small>随手记脑洞与金句，勾选打包给故事建筑师</small>
+                </div>
+                <span className={styles.stepState}>已就绪</span>
+              </li>
+
+              <li className={`${styles.stepItem} ${styles.stepActive}`} onClick={() => snapshot ? onTool(snapshot.book.id, 'knowledge') : openFeatured()}>
+                <span className={styles.stepMarker}>2</span>
+                <div className={styles.stepInfo}>
+                  <strong>2. 角色卡 & 9大世界观模型</strong>
+                  <small>补全性格/口头禅/六维雷达与力量体系卡片</small>
+                </div>
+                <span className={styles.stepState}>点击进入</span>
+              </li>
+
+              <li className={styles.stepItem} onClick={() => snapshot ? onTool(snapshot.book.id, 'workbench') : openFeatured()}>
+                <span className={styles.stepMarker}>3</span>
+                <div className={styles.stepInfo}>
+                  <strong>3. 拆解卷章大纲 & 场景节拍</strong>
+                  <small>每章明确：发生什么、谁在场、结尾钩子停在哪</small>
+                </div>
+                <span className={styles.stepState}>待推进</span>
+              </li>
+
+              <li className={styles.stepItem} onClick={openFeatured}>
+                <span className={styles.stepMarker}>4</span>
+                <div className={styles.stepInfo}>
+                  <strong>4. 精准上下文融合写作</strong>
+                  <small>自动勾选世界观/在场人物/前置章 + 去AI味技能卡</small>
+                </div>
+                <span className={styles.stepState}>去写作</span>
+              </li>
+
+              <li className={styles.stepItem} onClick={() => snapshot ? onTool(snapshot.book.id, 'workbench') : openFeatured()}>
+                <span className={styles.stepMarker}>5</span>
+                <div className={styles.stepInfo}>
+                  <strong>5. 朱雀AI检测 & 三维读者模拟</strong>
+                  <small>扫描AI套话痕迹 + 小白/老书虫/编辑模拟章评</small>
+                </div>
+                <span className={styles.stepState}>去评测</span>
+              </li>
+            </ol>
+
+            <div className={styles.agentThinkingBox}>
+              <div className={styles.thinkingHeader}>
+                <span className={styles.pulseSpark}><StudioIcon name="spark" size={14} /></span>
+                <strong>精准上下文控制 · 绝不串戏</strong>
+              </div>
+              <p>续写第 21 章绝不会翻出未披露的未来设定；所有 AI 提议先进入对照区，经你确认后才写入正文。</p>
+            </div>
+
+            <button
+              className={styles.agentLaunchBtn}
+              type="button"
+              onClick={openFeatured}
+              disabled={blocked}
+            >
+              <StudioIcon name="spark" size={14} />
+              进入章节编辑器 & 呼出 AI 副驾驶
+            </button>
+          </section>
+
+          <section className={styles.libraryStatusCard}>
+            <div className={styles.libStatusRow}>
+              <span><StudioIcon name="folder" size={13} />本地作品库</span>
+              <strong title={workspace.rootPath ?? undefined}>{workspaceName}</strong>
+            </div>
+            <div className={styles.libActions}>
+              <button type="button" onClick={onOpenWorkspace} disabled={blocked}>切换目录</button>
+              <button type="button" onClick={onShelf} disabled={blocked || !hasWorkspace}>书柜管理</button>
+              <button type="button" onClick={onRecover} disabled={blocked}>备份恢复</button>
+              <button type="button" onClick={onPreferences} disabled={busy}>多主题换色</button>
+            </div>
           </section>
         </aside>
       </div>

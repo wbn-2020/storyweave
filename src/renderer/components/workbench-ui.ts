@@ -19,6 +19,7 @@ export function useToolSession({ api, disabled, onDirtyChange, onUnknown, isProt
   const [dirty, setDirtyState] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<PendingWrite | null>(null)
+  const [readFailure, setReadFailure] = useState<AppError | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const mounted = useRef(true)
@@ -26,6 +27,7 @@ export function useToolSession({ api, disabled, onDirtyChange, onUnknown, isProt
   const dirtyRef = useRef(false)
   const busyRef = useRef(false)
   const pendingRef = useRef<PendingWrite | null>(null)
+  const readFailureRef = useRef<AppError | null>(null)
   const callbacks = useRef({ disabled, onDirtyChange, onUnknown, isProtected })
   callbacks.current = { disabled, onDirtyChange, onUnknown, isProtected }
 
@@ -68,18 +70,53 @@ export function useToolSession({ api, disabled, onDirtyChange, onUnknown, isProt
     callbacks.current.onUnknown?.(failure)
   }
 
+  function rememberReadFailure(failure: AppError | null) {
+    // 后续“服务忙”或无编号错误不能抹掉原超时请求；只在确定读取成功或核对结束后释放。
+    if (failure && !failure.requestId && readFailureRef.current?.requestId) return
+    readFailureRef.current = failure
+    setReadFailure(failure)
+  }
+
   async function read<T>(operation: () => Promise<Result<T>>, receive: (value: T) => void): Promise<boolean> {
     const ticket = begin()
     if (ticket === null) return false
     const result = await request(operation)
     if (!current(ticket)) return false
     try {
-      if (!result.ok) { setError(result.error.message); return false }
+      if (!result.ok) {
+        if (result.error.requestId || result.error.code === 'REQUEST_TIMEOUT' || result.error.code === 'SERVICE_UNAVAILABLE') rememberReadFailure(result.error)
+        setError(result.error.message); return false
+      }
       receive(result.data)
+      rememberReadFailure(null)
       return true
     } catch {
       setError('读取的数据与当前对象不一致，请刷新后重试。')
       return false
+    } finally { end(ticket) }
+  }
+
+  async function checkReadReceipt(): Promise<boolean> {
+    const waiting = readFailureRef.current
+    if (!waiting?.requestId) return false
+    const ticket = begin()
+    if (ticket === null) return false
+    try {
+      const result = await request(() => api.getRequestStatus({ requestId: waiting.requestId! }))
+      if (!current(ticket) || readFailureRef.current !== waiting) return false
+      if (!result.ok) { setError(result.error.message); return false }
+      if (result.data.state !== 'completed') {
+        setError(result.data.state === 'pending' ? '原读取请求仍在处理，请稍后核对。' : '原读取回执已不可查询，请留存当前内容后进入恢复。')
+        return false
+      }
+      const completion = result.data.response.result
+      if (!completion.ok && (completion.error.code === 'REQUEST_TIMEOUT' || completion.error.code === 'SERVICE_UNAVAILABLE')) {
+        setError(completion.error.message); return false
+      }
+      // 只确认原操作已经结束；迟到数据不重新填入表单，模型控制也不会在此重发。
+      rememberReadFailure(null)
+      setNotice(completion.ok ? '原请求已结束，当前输入保留。请明确刷新资料或核对原提案状态。' : `原请求未成功：${completion.error.message}。当前输入保留。`)
+      return true
     } finally { end(ticket) }
   }
 
@@ -148,7 +185,7 @@ export function useToolSession({ api, disabled, onDirtyChange, onUnknown, isProt
     } finally { end(ticket) }
   }
 
-  return { dirty, busy, pending, error, notice, setDirty, setError, setNotice, read, write, checkReceipt,
+  return { dirty, busy, pending, readFailure, error, notice, setDirty, setError, setNotice, read, write, checkReceipt, checkReadReceipt,
     locked: disabled || busy || pending !== null,
     hasChanges: () => dirtyRef.current,
     hasPending: () => pendingRef.current !== null,

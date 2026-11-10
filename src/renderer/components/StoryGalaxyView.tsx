@@ -43,28 +43,45 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
   useEffect(() => { setView(INITIAL_VIEW); setHovered(null); drag.current = null }, [nodes, focusKey])
   useEffect(() => { if (disabled) { drag.current = null; setHovered(null) } }, [disabled])
 
-  const points = useMemo(() => {
-    const count = nodes.length - (focusKey && nodes.some((node) => galaxyKey(node) === focusKey) ? 1 : 0)
-    const radius = Math.min(width * .34, HEIGHT * .36) * view.zoom
-    let index = 0
-    // 坐标只用于稳定排布，不编码重要性、因果或时间；中心是作者明确选中的聚焦对象。
-    return nodes.map((node): Point => {
-      const key = galaxyKey(node)
-      if (key === focusKey) return { node, key, x: width / 2, y: HEIGHT / 2, z: 1.1, radius: 9 }
-      const vertical = 1 - 2 * (index + .5) / Math.max(1, count)
-      const angle = index++ * 2.399963229728653
-      const ring = Math.sqrt(Math.max(0, 1 - vertical * vertical))
-      const x = Math.cos(angle) * ring
-      const z = Math.sin(angle) * ring
-      const rotatedX = x * Math.cos(view.yaw) + z * Math.sin(view.yaw)
-      const rotatedZ = z * Math.cos(view.yaw) - x * Math.sin(view.yaw)
-      const rotatedY = vertical * Math.cos(view.pitch) - rotatedZ * Math.sin(view.pitch)
-      const depth = vertical * Math.sin(view.pitch) + rotatedZ * Math.cos(view.pitch)
-      const perspective = 1 + depth * .18
-      return { node, key, x: width / 2 + rotatedX * radius * perspective,
-        y: HEIGHT / 2 + rotatedY * radius * perspective, z: depth, radius: 5.5 + (depth + 1) * 1.2 }
+  const layout = useMemo(() => {
+    const sorted = [...nodes].sort((a, b) => galaxyKey(a).localeCompare(galaxyKey(b)))
+    const points = sorted.map((node, index) => {
+      const angle = index * 2.399963229728653, radius = 30 + Math.sqrt(index + 1) * 19
+      return { node, key: galaxyKey(node), x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
     })
-  }, [nodes, focusKey, width, view])
+    const byKey = new Map(points.map((point) => [point.key, point]))
+    // 对本页至多 41 个对象做有界静态松弛；没有持续动画或后台模拟。
+    // 连线弹簧只编码已登记的直接引用，聚焦中心固定，不推断关联强度或故事时间。
+    for (let step = 0; step < 120; step += 1) {
+      const forces = new Map(points.map((point) => [point.key, { x: -point.x * .012, y: -point.y * .012 }]))
+      for (let a = 0; a < points.length; a += 1) for (let b = a + 1; b < points.length; b += 1) {
+        const first = points[a]!, second = points[b]!, dx = first.x - second.x, dy = first.y - second.y
+        const distance = Math.max(8, Math.hypot(dx, dy)), force = 1050 / (distance * distance)
+        forces.get(first.key)!.x += dx / distance * force; forces.get(first.key)!.y += dy / distance * force
+        forces.get(second.key)!.x -= dx / distance * force; forces.get(second.key)!.y -= dy / distance * force
+      }
+      for (const edge of edges) {
+        const from = byKey.get(galaxyKey(edge.from)), to = byKey.get(galaxyKey(edge.to))
+        if (!from || !to || from === to) continue
+        const dx = to.x - from.x, dy = to.y - from.y, distance = Math.max(1, Math.hypot(dx, dy)), force = (distance - 66) * .025
+        forces.get(from.key)!.x += dx / distance * force; forces.get(from.key)!.y += dy / distance * force
+        forces.get(to.key)!.x -= dx / distance * force; forces.get(to.key)!.y -= dy / distance * force
+      }
+      for (const point of points) {
+        const force = forces.get(point.key)!
+        point.x = point.key === focusKey ? 0 : clamp(point.x + clamp(force.x, -5, 5), -230, 230)
+        point.y = point.key === focusKey ? 0 : clamp(point.y + clamp(force.y, -5, 5), -135, 135)
+      }
+    }
+    return points
+  }, [nodes, edges, focusKey])
+  const points = useMemo((): Point[] => layout.map((point) => {
+    const scale = Math.min(1, (width - 40) / 540) * view.zoom
+    const x = point.x * Math.cos(view.yaw) - point.y * Math.sin(view.yaw)
+    const y = point.x * Math.sin(view.yaw) + point.y * Math.cos(view.yaw)
+    return { ...point, x: width / 2 + x * scale, y: HEIGHT / 2 + y * scale * Math.cos(view.pitch),
+      z: point.key === focusKey ? 1 : 0, radius: point.key === focusKey ? 10 : 7 }
+  }), [layout, width, view, focusKey])
   const pointMap = useMemo(() => new Map(points.map((point) => [point.key, point])), [points])
   const frontToBack = useMemo(() => [...points].sort((a, b) => b.z - a.z), [points])
   const activeKey = hovered ?? selectedKey ?? focusKey
@@ -104,10 +121,12 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
     const y = (event.clientY - bounds.top) * HEIGHT / bounds.height
     // 先按绘制遮挡顺序命中可见形状，避免后景中心更近时穿过前景对象。
     for (const point of frontToBack) {
-      const dx = Math.abs(point.x - x), dy = Math.abs(point.y - y)
-      const inside = point.node.source === 'knowledge'
-        ? Math.hypot(dx, dy) <= point.radius
-        : dx + dy <= point.radius
+      const dx = Math.abs(point.x - x), dy = Math.abs(point.y - y), signedY = y - point.y
+      const r = point.radius, kind = point.node.kind
+      const inside = kind === 'person' || kind === 'event' ? Math.hypot(dx, dy) <= r
+        : kind === 'place' ? dx <= r && dy <= r
+          : kind === 'foreshadow' ? signedY >= -r * 1.3 && signedY <= r && dx <= (signedY + r * 1.3) / 2
+            : kind === 'organization' ? dy <= r && dx <= r - dy / 2 : dx + dy <= r * 1.2
       if (inside) return point
     }
     let nearest: Point | undefined
@@ -150,7 +169,7 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
   }
 
   return <div className={styles.graph} ref={container}>
-    <div className={styles.legend}><span><i className={styles.knowledgeMark} />知识条目</span><span><i className={styles.storyMark} />故事记录</span><span>只绘制本页登记引用</span></div>
+    <div className={styles.legend}><span>● 人物／事件</span><span>■ 地点</span><span>⬡ 势力</span><span>◆ 物品／其他</span><span>▲ 伏笔</span><span>只绘制本页登记引用</span></div>
     <svg ref={stage} className={styles.stage} viewBox={`0 0 ${width} ${HEIGHT}`} role="img"
       aria-label="本页故事对象的引用图。完整名称、类型与详情可在对象列表中选择。" data-disabled={disabled} data-hovered={Boolean(hovered)}
       onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}
@@ -165,10 +184,15 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
         })}
         {[...frontToBack].reverse().map((point) => {
           const active = point.key === selectedKey || point.key === focusKey || point.key === hovered
-          return <g key={point.key} transform={`translate(${point.x} ${point.y})`} className={point.node.source === 'knowledge' ? styles.knowledge : styles.story}
+          const r = point.radius, kind = point.node.kind
+          return <g key={point.key} transform={`translate(${point.x} ${point.y})`} className={styles.node} data-kind={kind}
             opacity={activeKey && !related.has(point.key) ? .55 : 1}>
+            <title>{point.node.title} · {point.node.excerpt || '点击查看登记来源与关联'}</title>
             {active && <circle r={point.radius + 5} className={styles.selection} />}
-            {point.node.source === 'knowledge' ? <circle r={point.radius} /> : <path d={`M 0 ${-point.radius} L ${point.radius} 0 L 0 ${point.radius} L ${-point.radius} 0 Z`} />}
+            {kind === 'person' || kind === 'event' ? <circle r={r} /> : kind === 'place' ? <rect x={-r} y={-r} width={r * 2} height={r * 2} />
+              : kind === 'foreshadow' ? <path d={`M 0 ${-r * 1.3} L ${r * 1.15} ${r} L ${-r * 1.15} ${r} Z`} />
+                : kind === 'organization' ? <path d={`M ${-r} 0 L ${-r / 2} ${-r} L ${r / 2} ${-r} L ${r} 0 L ${r / 2} ${r} L ${-r / 2} ${r} Z`} />
+                  : <path d={`M 0 ${-r * 1.2} L ${r * 1.2} 0 L 0 ${r * 1.2} L ${-r * 1.2} 0 Z`} />}
           </g>
         })}
         {labels.map((label) => <text key={label.key} x={label.x} y={label.y} className={label.key === activeKey ? styles.activeLabel : styles.label}>{label.text}</text>)}

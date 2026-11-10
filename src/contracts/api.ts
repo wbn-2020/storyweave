@@ -1,8 +1,12 @@
 import type { ManuscriptDocument } from './manuscript'
+import type { LivingApi, LivingSnapshot, LivingRunDetail, LivingPrepareInput, LivingRunInput, LivingAdoptInput, LivingAdoptReceipt, SaveOutlineInput, OutlineHistoryInput, OutlineHistoryPage, RestoreOutlineInput, MemoryArchiveInput, MemoryArchivePage } from './living'
+import type { ForgeApi, ForgeSnapshot, ForgeReadInput, ForgePrepareInput, ForgeRunInput, ForgeRunDetail, ForgeAdoptInput, ForgeAdoptReceipt } from './forge'
+import type { GenerationApi, StudioAiConnections, StudioAiConnection, StudioAiConnectionInput, KickstartDraftInput, KickstartSnapshot, GenerationReadInput, GenerationPrepareInput, GenerationRun, GenerationStartInput, GenerationVersionInput, GenerationCheckpointInput, GenerationFinishInput, GenerationSelectionInput, GenerationAdoptInput } from './generation'
 import type { CreateKnowledgeItemInput, KnowledgeItemDetail, KnowledgeItemInput, KnowledgeItemPage, KnowledgeStatus, ListKnowledgeItemsInput, UpdateKnowledgeItemInput, UpgradeKnowledgeInput } from './knowledge'
 import type { CreateStoryRecordInput, ListStoryRecordsInput, StoryRecordDetail, StoryRecordInput, StoryRecordPage, StoryRevision, StoryRevisionInput, UpdateStoryRecordInput } from './story'
 import type { StoryTimelineInput, StoryTimelinePage } from './story-timeline'
 import type { StoryGalaxyInput, StoryGalaxyPage } from './story-galaxy'
+import type { AppearanceMatrixInput, AppearanceMatrixPage, ForeshadowRadarInput, ForeshadowRadarPage } from './story-control'
 import type { CreateNoteInput, ListNotesInput, NoteDetail, NoteInput, NotePage, PromoteNoteInput, UpdateNoteInput } from './notes'
 import type { MemoryBookInput, MemoryControlInput, MemoryEvidence, MemoryEvidenceInput, MemorySearchInput, MemorySearchPage, MemoryStartInput, MemoryStatus, MemoryTaskInput, MemoryTaskReceipt } from './memory'
 import type { AiAdoptInput, AiAdoptReceipt, AiBookInput, AiCheckpointInput, AiConfigureInput, AiConnection, AiConnectionPage, AiConnectionSaveInput, AiFinishInput, AiListInput, AiMemoryAdoptInput, AiMemoryAdoptReceipt, AiPrepareInput, AiPrepareServiceInput, AiRun, AiRunInput, AiRunPage, AiStartInput, AiVersionInput } from './ai'
@@ -16,6 +20,11 @@ import type { BookRecoveryExportInput, BookRecoveryExportServiceInput, BookRecov
 import type { RecoveryDraftInventory, RecoveryDraftListInput, RecoveryDraftRotateInput } from './book-recovery'
 import type { CopyInspirationInput, InspirationItem, InspirationPage, ListInspirationInput, LogWritingSessionInput, SaveBriefInput, SaveInspirationInput, SaveReviewIssueInput, SaveSceneInput, SaveWritingGoalInput, WorkbenchSnapshot } from './workbench'
 import type { ApplyReviewIssueInput, ApplyReviewIssueReceipt } from './workbench'
+import type { ImportInspirationsInput, ImportInspirationsReceipt } from './workbench'
+import type { GetWritingCalendarInput, SaveCalendarEntryInput, CalendarSnapshot } from './writing-calendar'
+import type { StudyAdoptInput, StudyAdoptReceipt } from './study'
+import type { AiPresetsApi, AiPresetsSnapshot, GetAiPresetsInput, SaveAiPresetInput } from './ai-presets'
+import type { BookMediaApi, BookMediaImage, BookMediaSnapshot, GetBookMediaInput, ReadBookMediaInput, SaveBookMediaInput } from './book-media'
 import type { RevisionMergeInput, RevisionMergeOutput } from './revision-merge'
 import type { BookExportPrepareInput, BookExportPreview, BookExportChapterInput, BookExportChapterPreview, BookExportCommitInput, BookExportCommitServiceInput, BookExportReceipt } from './export'
 
@@ -53,6 +62,7 @@ export interface BookSummary {
   revision: number
   createdAt: string
   updatedAt: string
+  lifecycle?: 'kickstarting' | 'active' | 'finished'
 }
 
 export interface WorkspaceSnapshot {
@@ -192,6 +202,29 @@ export interface DraftImportPreview extends SaveDraftCopyInput {
 export interface CommitDraftImportInput extends DraftScopeInput { token: string; title: string }
 
 export interface CommandMap {
+  'living.get': { input: BookInput; output: LivingSnapshot }
+  'living.archive': { input: MemoryArchiveInput; output: MemoryArchivePage }
+  'living.save': { input: SaveOutlineInput; output: LivingSnapshot }
+  'living.history': { input: OutlineHistoryInput; output: OutlineHistoryPage }
+  'living.restore': { input: RestoreOutlineInput; output: LivingSnapshot }
+  'living.prepare': { input: LivingPrepareInput; output: LivingRunDetail }
+  'living.run': { input: LivingRunInput; output: LivingRunDetail }
+  'living.adopt': { input: LivingAdoptInput; output: LivingAdoptReceipt }
+  'forge.get': { input: ForgeReadInput; output: ForgeSnapshot }
+  'forge.prepare': { input: ForgePrepareInput; output: ForgeRunDetail }
+  'forge.run': { input: ForgeRunInput; output: ForgeRunDetail }
+  'forge.adopt': { input: ForgeAdoptInput; output: ForgeAdoptReceipt }
+  'generation.connections': { input: undefined; output: StudioAiConnections }
+  'generation.connection.save': { input: StudioAiConnectionInput; output: StudioAiConnection }
+  'generation.draft': { input: KickstartDraftInput; output: KickstartSnapshot }
+  'generation.get': { input: GenerationReadInput; output: KickstartSnapshot }
+  'generation.prepare': { input: GenerationPrepareInput; output: GenerationRun }
+  'generation.claim': { input: GenerationStartInput; output: GenerationRun }
+  'generation.checkpoint': { input: GenerationCheckpointInput; output: GenerationRun }
+  'generation.finish': { input: GenerationFinishInput; output: GenerationRun }
+  'generation.interrupt': { input: GenerationVersionInput; output: GenerationRun }
+  'generation.select': { input: GenerationSelectionInput; output: GenerationRun }
+  'generation.adopt': { input: GenerationAdoptInput; output: KickstartSnapshot }
   'revision.merge': { input: RevisionMergeInput; output: RevisionMergeOutput }
   'book.export.prepare': { input: BookExportPrepareInput; output: BookExportPreview }
   'book.export.chapter': { input: BookExportChapterInput; output: BookExportChapterPreview }
@@ -206,6 +239,15 @@ export interface CommandMap {
   'inspiration.list': { input: ListInspirationInput; output: InspirationPage }
   'inspiration.save': { input: SaveInspirationInput; output: InspirationItem }
   'inspiration.copy': { input: CopyInspirationInput; output: NoteDetail }
+  'inspiration.import': { input: ImportInspirationsInput; output: ImportInspirationsReceipt }
+  'calendar.get': { input: GetWritingCalendarInput; output: CalendarSnapshot }
+  'calendar.save': { input: SaveCalendarEntryInput; output: CalendarSnapshot }
+  'study.adopt': { input: StudyAdoptInput; output: StudyAdoptReceipt }
+  'ai.presets.get': { input: GetAiPresetsInput; output: AiPresetsSnapshot }
+  'ai.presets.save': { input: SaveAiPresetInput; output: AiPresetsSnapshot }
+  'book.media.get': { input: GetBookMediaInput; output: BookMediaSnapshot }
+  'book.media.read': { input: ReadBookMediaInput; output: BookMediaImage }
+  'book.media.save': { input: SaveBookMediaInput; output: BookMediaSnapshot }
   'workspace.get': { input: undefined; output: WorkspaceSnapshot }
   'workspace.open': { input: { rootPath: string }; output: WorkspaceSnapshot }
   'book.create': { input: CreateBookInput; output: BookSnapshot }
@@ -248,6 +290,8 @@ export interface CommandMap {
   'story.list': { input: ListStoryRecordsInput; output: StoryRecordPage }
   'story.timeline': { input: StoryTimelineInput; output: StoryTimelinePage }
   'story.galaxy': { input: StoryGalaxyInput; output: StoryGalaxyPage }
+  'story.matrix': { input: AppearanceMatrixInput; output: AppearanceMatrixPage }
+  'story.radar': { input: ForeshadowRadarInput; output: ForeshadowRadarPage }
   'story.get': { input: StoryRecordInput; output: StoryRecordDetail }
   'story.revision': { input: StoryRevisionInput; output: StoryRevision }
   'story.create': { input: CreateStoryRecordInput; output: StoryRecordDetail }
@@ -315,7 +359,7 @@ export type RequestStatus =
   | { state: 'completed'; response: CompletedRequest }
 
 // renderer 只能选择目录并调用领域命令，不能传入任意磁盘路径或 SQL。
-export interface StudioApi {
+export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, LivingApi, ForgeApi {
   mergeRevision(input: RevisionMergeInput): Promise<Result<RevisionMergeOutput>>
   prepareBookExport(input: BookExportPrepareInput): Promise<Result<BookExportPreview>>
   readBookExportChapter(input: BookExportChapterInput): Promise<Result<BookExportChapterPreview>>
@@ -330,6 +374,10 @@ export interface StudioApi {
   listInspirations(input: ListInspirationInput): Promise<Result<InspirationPage>>
   saveInspiration(input: SaveInspirationInput): Promise<Result<InspirationItem>>
   copyInspirationToNote(input: CopyInspirationInput): Promise<Result<NoteDetail>>
+  importInspirations(input: ImportInspirationsInput): Promise<Result<ImportInspirationsReceipt>>
+  getWritingCalendar(input: GetWritingCalendarInput): Promise<Result<CalendarSnapshot>>
+  saveCalendarEntry(input: SaveCalendarEntryInput): Promise<Result<CalendarSnapshot>>
+  adoptStudyResults(input: StudyAdoptInput): Promise<Result<StudyAdoptReceipt>>
   getWorkspace(): Promise<Result<WorkspaceSnapshot>>
   selectWorkspace(): Promise<Result<WorkspaceSnapshot | null>>
   createBook(input: CreateBookInput): Promise<Result<BookSnapshot>>
@@ -378,6 +426,8 @@ export interface StudioApi {
   listStoryRecords(input: ListStoryRecordsInput): Promise<Result<StoryRecordPage>>
   listStoryTimeline(input: StoryTimelineInput): Promise<Result<StoryTimelinePage>>
   listStoryGalaxy(input: StoryGalaxyInput): Promise<Result<StoryGalaxyPage>>
+  readAppearanceMatrix(input: AppearanceMatrixInput): Promise<Result<AppearanceMatrixPage>>
+  listForeshadowRadar(input: ForeshadowRadarInput): Promise<Result<ForeshadowRadarPage>>
   getStoryRecord(input: StoryRecordInput): Promise<Result<StoryRecordDetail>>
   readStoryRevision(input: StoryRevisionInput): Promise<Result<StoryRevision>>
   createStoryRecord(input: CreateStoryRecordInput): Promise<Result<StoryRecordDetail>>
@@ -426,12 +476,13 @@ export interface StudioApi {
   onCloseCancelled(handler: () => void): () => void
 }
 
-export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare'>
+export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare' | 'generation.connection.save' | 'generation.claim' | 'generation.checkpoint' | 'generation.finish' | 'generation.interrupt'>
   | 'workspace.select' | 'request.status' | 'import.select' | 'book.exportFile' | 'draft.copy' | 'service.restart'
   | 'recovery.exportFile' | 'recovery.select'
   | 'book.export.commitFile'
   | 'draft.checkpoint' | 'draft.list' | 'draft.rotate' | 'draft.select' | 'draft.preview' | 'draft.commit'
   | 'ai.configure' | 'ai.start' | 'ai.cancel'
+  | 'generation.configure' | 'generation.start' | 'generation.cancel'
   | 'memory.vector.start'
 
 export class DomainError extends Error {

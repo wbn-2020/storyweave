@@ -57,6 +57,7 @@ export function AiMemoryTargetPicker(props: Props) {
       const revision = item.revisions[0]!
       requiredId(revision.id)
       const fields = parseKnowledgeFields({ kind: item.kind, name: item.name, aliases: item.aliases, summary: item.summary,
+        ...(item.characterProfile === undefined ? {} : { characterProfile: item.characterProfile }),
         nature: item.nature, authorDecision: item.authorDecision, freshness: item.freshness, conflictState: item.conflictState })
       if (JSON.stringify(fields) !== JSON.stringify(parseKnowledgeFields(revision.fields))) throw new Error('Invalid revision')
       live.current.onSelect(item)

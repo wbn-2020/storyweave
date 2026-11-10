@@ -1,0 +1,79 @@
+/* 二维关系画布：嵌在宣纸中的深邃星盘卡片网络 */
+.canvas {
+  min-width: 0;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 2px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+.toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 14px 18px 0; }
+.toolbar > span { color: var(--color-muted); font-size: 11.5px; letter-spacing: 0.03em; }
+.help { color: var(--color-muted); font-size: 11.5px; line-height: 1.8; padding: 10px 18px; }
+.viewport {
+  max-height: 460px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-block: 1px solid var(--color-line);
+  background: var(--bg-subtle);
+}
+.stage { display: block; max-width: none; user-select: none; }
+.edge { stroke: var(--color-line-strong); stroke-width: 1.2; }
+.relationEdge { stroke: var(--color-accent); stroke-width: 1.8; }
+.edgeLabel {
+  fill: var(--color-accent);
+  font: 600 11px var(--font-serif);
+  paint-order: stroke;
+  stroke: var(--bg-subtle);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.node { cursor: grab; touch-action: none; }
+.node:active { cursor: grabbing; }
+.node rect {
+  fill: var(--bg-surface);
+  stroke: var(--color-line-strong);
+  stroke-width: 1.2;
+  rx: 3px;
+  ry: 3px;
+}
+.node[data-relation='true'] rect {
+  fill: var(--color-accent-soft);
+  stroke: var(--color-accent);
+  stroke-dasharray: 5 3;
+}
+.node:hover rect, .node[aria-pressed='true'] rect, .node[data-chosen='true'] rect {
+  stroke: var(--color-accent);
+  stroke-width: 2.2;
+}
+.node:focus { outline: none; }
+.node:focus-visible rect { stroke: var(--color-ink); stroke-width: 2.5; stroke-dasharray: none; }
+.node[aria-disabled='true'] { cursor: default; }
+.nodeTitle { fill: var(--color-ink); font: 600 13px var(--font-serif); pointer-events: none; }
+.nodeKind { fill: var(--color-ink-secondary); font: 11px var(--font-ui); pointer-events: none; }
+.node[data-rejected='true'] .nodeKind { fill: var(--color-danger); }
+.relations { padding: 16px 18px; background: var(--bg-surface); }
+.relations h4 { font: 600 14px/1.4 var(--font-serif); margin: 0; }
+.relations .help { padding: 8px 0; }
+.relations ul { list-style: none; padding: 0; margin: 0; }
+.relations li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding: 10px 0; border-top: 1px solid var(--color-line); overflow-wrap: anywhere; }
+.relations li > span { color: var(--color-muted); font-size: 12px; }
+.relationName { border: 0; padding: 4px 0; background: none; color: var(--color-accent); text-align: left; font: 600 13px var(--font-serif); overflow-wrap: anywhere; }
+.relationName:disabled { color: var(--color-muted); }
+@media (max-width: 600px) {
+  .toolbar { align-items: stretch; }
+  .toolbar > span { width: 100%; }
+  .toolbar button, .relationName { min-height: 44px; }
+  .viewport { max-height: 360px; }
+}
+.layerFilter { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-muted); }
+.layerFilter select { padding: 5px 8px; background: var(--color-surface); border: 1px solid var(--color-line); border-radius: 6px; color: var(--color-ink); }
+.node[data-layer='hidden'] > rect { stroke-dasharray: 6 3; }
+.timeControls { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 0 18px; }
+.timeControls label { display: flex; align-items: center; gap: 8px; color: var(--color-muted); font-size: 12px; }
+.timeControls input[type='number'] { width: 120px; padding: 6px; border: 1px solid var(--color-line); border-radius: 5px; color: var(--color-ink); background: var(--color-surface); }
+.timeControls input:is([type='range'], [type='checkbox']) { accent-color: var(--color-accent); }
+.relationEdge[data-state='active'] { stroke: var(--color-success); }
+.relationEdge[data-state='inactive'] { stroke: var(--color-muted); stroke-dasharray: 4 5; opacity: .45; }
+.relationEdge[data-state='unknown'] { stroke-dasharray: 2 4; }
+.node[data-state='inactive'] > rect { opacity: .48; }

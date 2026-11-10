@@ -109,7 +109,7 @@ async function packageWindows() {
       asar: true, asarUnpack: ['node_modules/better-sqlite3/**'],
       npmRebuild: true, nativeRebuilder: 'sequential', allowMissingDependencies: false,
       publish: null, artifactName: 'StoryWeave-${version}-windows-${arch}.${ext}',
-      win: { executableName: 'StoryWeave', requestedExecutionLevel: 'asInvoker', signExecutable: false },
+      win: { executableName: 'StoryWeave', icon: join(projectDir, 'resources/storyweave.ico'), requestedExecutionLevel: 'asInvoker', signExecutable: false },
       afterPack: async (context) => {
         if (!inside(artifactDir, context.appOutDir)) throw new Error('打包产物超出本次交付目录。')
         directory(context.appOutDir)

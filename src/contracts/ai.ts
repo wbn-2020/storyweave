@@ -1,9 +1,12 @@
 import { DomainError, isRecord, requiredId, requiredInteger, requiredText, optionalText, type ChapterSnapshot } from './api'
 import type { MemoryEvidence } from './memory'
-import { KNOWLEDGE_KINDS, parseKnowledgeFields, type KnowledgeItemFields, type KnowledgeKind, type KnowledgeStatus } from './knowledge'
+import { KNOWLEDGE_KINDS, parseKnowledgeFields, resolveKnowledgeFields, type KnowledgeItemFields, type KnowledgeKind, type KnowledgeStatus } from './knowledge'
 import type { AiSummaryContext } from './ai-summary'
 import { parseAiContextSummaryRefs, type AiContextSummaryRef, type AiContextSummarySnapshot } from './ai-context-summary'
 import { parseAiCharacterScope, type AiCharacterScope, type AiCharacterContext } from './ai-character-context'
+import { parseCreativeRefs, parseCreativeApplication, type CreativeResourceRef, type CreativeResources } from './creative-resources'
+import { LIVING_INSTRUCTION_LIMIT, type LivingWritingContext } from './living'
+import { FORGE_INSTRUCTION_LIMIT } from './forge'
 
 export const AI_PROMPT_VERSION = 1
 export const AI_MEMORY_PROMPT_VERSION = 2
@@ -35,7 +38,7 @@ export interface AiPrepareInput extends AiBookInput {
   connectionId: string
   kind: AiTaskKind
   /** 审稿沿用 plan 存储类型，独立固定语义，不能当成规划采用。 */
-  purpose?: 'review'
+  purpose?: 'review' | 'study' | 'living' | 'forge'
   instruction: string
   contextScope: 'chapter' | 'nearby'
   /** 缺省沿用作者视角。 */
@@ -44,6 +47,9 @@ export interface AiPrepareInput extends AiBookInput {
   selectedBlockIds: string[]
   memoryChunkIds: number[]
   summaryRefs?: AiContextSummaryRef[]
+  resourceRefs?: CreativeResourceRef[]
+  resourceApplication?: string
+  useLivingContext?: boolean
 }
 export interface AiPrepareServiceInput extends AiPrepareInput { connection: AiConnection }
 export interface AiContextBlock { blockId: string; startOffset: number; endOffset: number; text: string }
@@ -67,13 +73,14 @@ export interface AiContextPacket {
   chapterRevisionId: string
   chapterTitle: string
   kind: AiTaskKind
-  purpose?: 'review'
+  purpose?: 'review' | 'study' | 'living' | 'forge'
   instruction: string
   contextScope: 'chapter' | 'nearby'
   /** 旧上下文缺省沿用作者视角。 */
   perspective?: AiContextPerspective
   /** 人物身份与本次手选认知的固定快照，不代表完整时点心智。 */
   characterContext?: AiCharacterContext
+  creativeResources?: CreativeResources
   selectedBlockIds: string[]
   originalText: string
   chapterBlocks: AiContextBlock[]
@@ -91,6 +98,7 @@ export interface AiContextPacket {
   contextSummaries?: AiContextSummarySnapshot[]
   /** 独立版本的作者创作约定快照；旧候选缺省不附加，受限视角不发送。 */
   writingContext?: AiWritingContext
+  livingContext?: LivingWritingContext
 }
 export interface AiUsage { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }
 export interface AiRunSummary {
@@ -99,7 +107,7 @@ export interface AiRunSummary {
   chapterId: string
   chapterTitle: string
   kind: AiTaskKind
-  purpose?: 'review'
+  purpose?: 'review' | 'study' | 'living' | 'forge'
   state: AiRunState
   version: number
   connectionName: string
@@ -171,12 +179,14 @@ function adoptedRunMatches(input: AiVersionInput, source: AiRun, saved: AiRun): 
     saved.context.bookRevision === source.context.bookRevision && saved.context.knowledgeRevision === source.context.knowledgeRevision &&
     saved.context.chapterRevisionId === source.context.chapterRevisionId && saved.context.promptVersion === source.context.promptVersion &&
     saved.context.purpose === source.context.purpose && JSON.stringify(saved.context.writingContext) === JSON.stringify(source.context.writingContext) &&
+    JSON.stringify(saved.context.creativeResources) === JSON.stringify(source.context.creativeResources) &&
+    JSON.stringify(saved.context.livingContext) === JSON.stringify(source.context.livingContext) &&
     saved.context.contextHash === source.context.contextHash
 }
 
 export function isAiAdoptReceiptFor(input: AiAdoptInput, source: AiRun, receipt: AiAdoptReceipt): boolean {
   try {
-    return source.context.summary === undefined && source.context.purpose !== 'review' && !isAiMemoryTask(source.kind) && receipt.bookId === input.bookId && adoptedRunMatches(input, source, receipt.run) &&
+    return source.context.summary === undefined && source.context.purpose === undefined && !isAiMemoryTask(source.kind) && receipt.bookId === input.bookId && adoptedRunMatches(input, source, receipt.run) &&
       receipt.run.acceptedText === input.acceptedText && receipt.chapter.bookId === input.bookId && receipt.chapter.id === source.chapterId &&
       receipt.chapter.bookRevision === source.context.bookRevision + 1 && receipt.run.adoptedRevisionId === receipt.chapter.revisionId
   } catch { return false }
@@ -200,6 +210,7 @@ export function isAiMemoryAdoptReceiptFor(input: AiMemoryAdoptInput, source: AiR
       const saved = receipt.run.memoryAdoptions![index]!
       const original = proposal.items[entry.sourceIndex]
       const action = entry.action ?? 'create'
+      const expectedFields = action === 'ignore' ? entry.fields : resolveKnowledgeFields(entry.fields, saved.previousFields)
       if (saved.changed !== undefined && typeof saved.changed !== 'boolean') return false
       if ((saved.action ?? 'create') !== action || saved.targetItemId !== entry.targetItemId ||
         saved.expectedTargetRevisionId !== entry.expectedTargetRevisionId) return false
@@ -208,10 +219,10 @@ export function isAiMemoryAdoptReceiptFor(input: AiMemoryAdoptInput, source: AiR
       if ((action === 'link' || action === 'revise') && (typeof saved.changed !== 'boolean' || saved.itemId !== entry.targetItemId || !saved.previousFields || !saved.resultingRevisionId ||
         saved.previousFields.kind !== entry.fields.kind || saved.previousFields.nature !== entry.fields.nature ||
         requiredId(saved.resultingRevisionId) !== saved.resultingRevisionId ||
-        (saved.changed === false && (saved.resultingRevisionId !== entry.expectedTargetRevisionId || JSON.stringify(saved.previousFields) !== JSON.stringify(entry.fields))) ||
-        (action === 'link' && JSON.stringify(saved.previousFields) !== JSON.stringify(entry.fields)))) return false
+        (saved.changed === false && (saved.resultingRevisionId !== entry.expectedTargetRevisionId || JSON.stringify(saved.previousFields) !== JSON.stringify(expectedFields))) ||
+        (action === 'link' && JSON.stringify(saved.previousFields) !== JSON.stringify(expectedFields)))) return false
       return original !== undefined && saved.sourceIndex === entry.sourceIndex &&
-        JSON.stringify(saved.fields) === JSON.stringify(entry.fields) && JSON.stringify(saved.citations) === JSON.stringify(original.citations)
+        JSON.stringify(parseKnowledgeFields(saved.fields)) === JSON.stringify(parseKnowledgeFields(expectedFields)) && JSON.stringify(saved.citations) === JSON.stringify(original.citations)
     })
   } catch { return false }
 }
@@ -289,9 +300,11 @@ export function parseAiBookInput(value: unknown): AiBookInput {
   return { bookId: id(data.bookId) }
 }
 export function parseAiPrepareInput(value: unknown): AiPrepareInput {
-  const data = record(value, ['bookId', 'chapterId', 'expectedBookRevision', 'expectedKnowledgeRevision', 'expectedRevisionId', 'connectionId', 'kind', 'purpose', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs'])
+  const data = record(value, ['bookId', 'chapterId', 'expectedBookRevision', 'expectedKnowledgeRevision', 'expectedRevisionId', 'connectionId', 'kind', 'purpose', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs', 'resourceRefs', 'resourceApplication', 'useLivingContext'])
   if (!['plan', 'continue', 'rewrite', 'summarize', 'extract'].includes(String(data.kind))) invalid('不支持这个协作任务。')
-  if (data.purpose !== undefined && (data.purpose !== 'review' || data.kind !== 'plan')) invalid('审稿用途只能用于审阅任务。')
+  if (data.purpose !== undefined && (!['review', 'study', 'living', 'forge'].includes(String(data.purpose)) || data.kind !== 'plan')) invalid('专用工坊只能用于规划类任务。')
+  if (data.useLivingContext !== undefined && typeof data.useLivingContext !== 'boolean') invalid('有效章纲与记忆选项无效。')
+  if (data.useLivingContext === true && ((data.perspective !== undefined && data.perspective !== 'author') || data.kind === 'summarize' || data.kind === 'extract' || data.purpose !== undefined && data.purpose !== 'review')) invalid('有效章纲与记忆仅用于作者视角的创作和审稿。')
   if (data.contextScope !== 'chapter' && data.contextScope !== 'nearby') invalid('上下文范围无效。')
   if (data.perspective !== undefined && data.perspective !== 'author' && data.perspective !== 'reader' && data.perspective !== 'character') invalid('上下文视角无效。')
   if ((data.kind === 'summarize' || data.kind === 'extract') && data.perspective !== undefined && data.perspective !== 'author') invalid('章节整理仅支持作者视角。')
@@ -301,6 +314,15 @@ export function parseAiPrepareInput(value: unknown): AiPrepareInput {
   const selectedBlockIds = data.selectedBlockIds.map(id)
   const memoryChunkIds = data.memoryChunkIds.map((item) => positive(item, '资料片段编号', Number.MAX_SAFE_INTEGER))
   const summaryRefs = parseAiContextSummaryRefs(data.summaryRefs)
+  const resourceRefs = parseCreativeRefs(data.resourceRefs)
+  const resourceApplication = parseCreativeApplication(data.resourceApplication)
+  if ((resourceRefs.length || resourceApplication) && ((data.perspective !== undefined && data.perspective !== 'author') || data.kind === 'summarize' || data.kind === 'extract')) invalid('场景、方法和自由资料只用于作者创作，请移除后再切换受限视角或章节整理。')
+  if (resourceApplication && !resourceRefs.length) invalid('请先选择场景、方法或资料，再填写使用要求。')
+  if (data.purpose === 'study' && ((data.perspective !== undefined && data.perspective !== 'author') || !resourceRefs.length || resourceRefs.some((ref) => ref.source !== 'inspiration') || memoryChunkIds.length || summaryRefs.length)) invalid('拆书只分析明确选择的全局参考文本，请移除本书记忆和前文摘要，并选择全局参考资料。')
+  if (data.purpose === 'living' && ((data.perspective !== undefined && data.perspective !== 'author') || data.contextScope !== 'chapter' ||
+    memoryChunkIds.length || summaryRefs.length || resourceRefs.length || resourceApplication)) invalid('演进与定稿提案只使用沙盘固定的来源和完整参考章，请从沙盘重新准备。')
+  if (data.purpose === 'forge' && ((data.perspective !== undefined && data.perspective !== 'author') || data.contextScope !== 'chapter' ||
+    memoryChunkIds.length || summaryRefs.length || resourceRefs.length || resourceApplication || data.useLivingContext)) invalid('角色与世界工坊只使用本次明确选定的固定来源。')
   if (characterScope && summaryRefs.length) invalid('人物视角不能发送完整前文摘要，请先移除已选摘要。')
   if (new Set(selectedBlockIds).size !== selectedBlockIds.length || new Set(memoryChunkIds).size !== memoryChunkIds.length) invalid('所选段落或资料不能重复。')
   if ((data.kind === 'rewrite') !== (selectedBlockIds.length > 0)) invalid('改写必须选择连续段落；其他任务不选择改写目标。')
@@ -308,11 +330,13 @@ export function parseAiPrepareInput(value: unknown): AiPrepareInput {
   // 作者视角省略字段，保持旧请求与消息指纹的兼容性。
   return { bookId: id(data.bookId), chapterId: id(data.chapterId), expectedBookRevision: requiredInteger(data.expectedBookRevision, '作品版本'),
     expectedKnowledgeRevision: requiredInteger(data.expectedKnowledgeRevision, '知识版本'), expectedRevisionId: id(data.expectedRevisionId), connectionId: id(data.connectionId),
-    kind: data.kind as AiTaskKind, instruction: requiredText(data.instruction, '协作要求', 6000), contextScope: data.contextScope,
-    ...(data.purpose === 'review' ? { purpose: 'review' as const } : {}),
+    kind: data.kind as AiTaskKind, instruction: requiredText(data.instruction, '协作要求', data.purpose === 'forge' ? FORGE_INSTRUCTION_LIMIT : data.purpose === 'living' ? LIVING_INSTRUCTION_LIMIT : 6000), contextScope: data.contextScope,
+    ...(data.purpose === 'review' || data.purpose === 'study' || data.purpose === 'living' || data.purpose === 'forge' ? { purpose: data.purpose } : {}),
     selectedBlockIds, memoryChunkIds, ...(data.perspective === 'reader' ? { perspective: 'reader' as const } : {}),
     ...(characterScope ? { perspective: 'character' as const, characterScope } : {}),
-    ...(summaryRefs.length ? { summaryRefs } : {}) }
+    ...(summaryRefs.length ? { summaryRefs } : {}),
+    ...(resourceRefs.length ? { resourceRefs, resourceApplication } : {}),
+    ...(data.useLivingContext === true ? { useLivingContext: true } : {}) }
 }
 export function parseAiListInput(value: unknown): AiListInput {
   const data = record(value, ['bookId', 'before'])

@@ -115,6 +115,7 @@ function limitedText(text: string, maximum: number): string {
 }
 
 export class AiSessions {
+  constructor(private readonly workspaceKey?: (root: string, connection: AiConnection) => string | undefined) {}
   private readonly keys = new Map<string, SessionKey>()
   private readonly uncertainWrites = new Map<string, UncertainRequest>()
   private readonly pendingConfigurations = new Map<string, PendingConfiguration>()
@@ -149,6 +150,7 @@ export class AiSessions {
         for (const entry of this.pendingResults.load(root)) {
           if ('warning' in entry) { warnings += 1; firstError ??= failure('STORAGE_ERROR', entry.warning); continue }
           const file = entry.file
+          if (file.payload.command === 'generation.finish') { warnings += 1; firstError ??= failure('STORAGE_ERROR', '原模型留存目录出现开书记录，请保留原文件并核对。'); continue }
           const unresolvedFile = unresolved?.journal
           if (unresolvedFile && file.root === unresolvedFile.root && file.id === unresolvedFile.id &&
             file.hash === unresolvedFile.hash && file.volume.id === unresolvedFile.volume.id && file.volume.hash === unresolvedFile.volume.hash) continue
@@ -534,7 +536,7 @@ export class AiSessions {
       }
       this.reconcileConfigurations(root, page.data, service)
       const key = this.keys.get(keyScope(root, input.bookId, connection.id))
-      const apiKey = key?.baseUrl === connection.baseUrl ? key.value : ''
+      const apiKey = key?.baseUrl === connection.baseUrl ? key.value : this.workspaceKey?.(root, connection) ?? ''
       if (!localEndpoint(connection.baseUrl) && !apiKey) return failure('FORBIDDEN', '这个远端连接尚无本次应用会话的密钥，请在连接设置中输入后再开始。')
       if (active.controller.signal.aborted) return failure('FORBIDDEN', '向量开始操作已取消，尚未向模型发送请求。')
       // 在 claim 前确认日志可写与磁盘余量；预检失败时仍保持 prepared，不消耗模型请求。
@@ -666,7 +668,7 @@ export class AiSessions {
       const scope = keyScope(root, page.bookId, connection.id)
       const key = this.keys.get(scope)
       if (key && key.baseUrl !== connection.baseUrl) this.keys.delete(scope)
-      return key !== undefined && key.baseUrl === connection.baseUrl && key.value.length > 0
+      return (key !== undefined && key.baseUrl === connection.baseUrl && key.value.length > 0) || Boolean(this.workspaceKey?.(root, connection))
     }).map((connection) => connection.id) }
   }
 
@@ -748,7 +750,7 @@ export class AiSessions {
       }
       this.reconcileConfigurations(root, page.data, service)
       const key = this.keys.get(keyScope(root, input.bookId, connection.id))
-      const apiKey = key?.baseUrl === connection.baseUrl ? key.value : ''
+      const apiKey = key?.baseUrl === connection.baseUrl ? key.value : this.workspaceKey?.(root, connection) ?? ''
       if (!localEndpoint(connection.baseUrl) && !apiKey) return failure('FORBIDDEN', '这个远端连接尚无本次应用会话的密钥，请在连接设置中输入后再开始。')
       if (active.controller.signal.aborted) return failure('FORBIDDEN', '开始操作已取消，尚未向模型发送请求。')
       // 先确认终态留存能力，再将候选置为 running；不把日志容量问题留到模型返回后。

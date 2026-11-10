@@ -1,24 +1,64 @@
-.graph { min-width: 0; overflow: hidden; border: 1px solid var(--color-line); border-radius: 5px; background: var(--color-bg); }
-.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 14px 16px 0; color: var(--color-muted); font-size: 11px; }
+/* 星图与主工作区共享主题；形状和文字共同标注类型，不只依赖颜色。 */
+
+.graph {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 2px;
+  background: var(--bg-subtle);
+  color: var(--color-ink);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 14px 18px 0;
+  color: var(--color-ink-secondary);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
 .legend span { display: inline-flex; align-items: center; gap: 7px; }
 .legend span:last-child { margin-left: auto; }
-.knowledgeMark, .storyMark { display: inline-block; width: 7px; height: 7px; flex-shrink: 0; }
-.knowledgeMark { border-radius: 50%; background: var(--color-success); }
-.storyMark { background: var(--color-accent); transform: rotate(45deg); }
-.stage { display: block; width: 100%; height: 350px; touch-action: pan-y; cursor: grab; user-select: none; }
+.stage { display: block; width: 100%; height: 410px; touch-action: pan-y; cursor: grab; user-select: none; }
 .stage:active { cursor: grabbing; }
 .stage[data-hovered='true'] { cursor: pointer; }
 .stage[data-disabled='true'] { cursor: default; }
-.edge { stroke: #62798b; stroke-width: 1; opacity: .38; }
-.activeEdge { stroke: var(--color-accent); stroke-width: 1.5; opacity: .85; }
-.knowledge { fill: var(--color-success); }
-.story { fill: var(--color-accent); }
-.selection { fill: none; stroke: var(--color-ink); stroke-width: 1.5; }
-.label, .activeLabel { fill: var(--color-muted); font: 12px var(--font-ui); paint-order: stroke; stroke: var(--color-bg); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
-.activeLabel { fill: var(--color-ink); }
-.controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 12px; }
-.controls button { min-height: 36px; padding: 6px 10px; font-size: 11px; transition: none; }
-.help { color: var(--color-muted); font-size: 11px; line-height: 1.85; padding: 12px 16px 15px; }
+.edge { stroke: var(--color-line-strong); stroke-width: 1.1; }
+.activeEdge { stroke: var(--color-accent); stroke-width: 1.8; }
+.node { fill: var(--galaxy-other); }
+.node[data-kind='person'] { fill: var(--galaxy-person); }
+.node[data-kind='event'] { fill: var(--color-ink-secondary); }
+.node[data-kind='place'] { fill: var(--galaxy-place); }
+.node[data-kind='organization'] { fill: var(--galaxy-organization); }
+.node[data-kind='object'] { fill: var(--galaxy-object); }
+.node[data-kind='foreshadow'] { fill: var(--color-danger); }
+.selection { fill: none; stroke: var(--color-ink); stroke-width: 2; }
+.label, .activeLabel {
+  fill: var(--color-ink-secondary);
+  font: 500 12px var(--font-serif);
+  paint-order: stroke;
+  stroke: var(--bg-subtle);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.activeLabel { fill: var(--color-ink); font-weight: 700; }
+.controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 6px 14px; }
+.controls button {
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 11px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 2px;
+  background: var(--bg-surface);
+  color: var(--color-ink);
+}
+.controls button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.help { color: var(--color-ink-secondary); font-size: 12px; line-height: 1.8; padding: 10px 18px 14px; }
 
 @media (max-width: 600px) {
   .legend { gap: 6px 14px; }

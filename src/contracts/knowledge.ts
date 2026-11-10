@@ -1,4 +1,5 @@
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText, type BookInput } from './api'
+import { parseCharacterProfile, type CharacterProfile } from './character-profile'
 
 export const KNOWLEDGE_KINDS = ['person', 'place', 'organization', 'object', 'rule', 'theme', 'other'] as const
 export const KNOWLEDGE_NATURES = ['author_setting', 'future_plan', 'narrative_claim', 'character_belief', 'ai_derived', 'ai_inference', 'external_reference'] as const
@@ -22,6 +23,8 @@ export interface KnowledgeItemFields {
   authorDecision: AuthorDecision
   freshness: KnowledgeFreshness
   conflictState: ConflictState
+  /** 可选人物档案；更新时省略表示保留，显式空对象表示清空。 */
+  characterProfile?: CharacterProfile
 }
 
 export type KnowledgeSourceInput = {
@@ -140,16 +143,29 @@ export function parseUpgradeKnowledgeInput(value: unknown): UpgradeKnowledgeInpu
 }
 
 export function parseKnowledgeFields(value: unknown): KnowledgeItemFields {
-  const data = record(value, ['kind', 'name', 'aliases', 'summary', 'nature', 'authorDecision', 'freshness', 'conflictState'], '知识条目')
+  const data = record(value, ['kind', 'name', 'aliases', 'summary', 'nature', 'authorDecision', 'freshness', 'conflictState', 'characterProfile'], '知识条目')
   if (!Array.isArray(data.aliases) || data.aliases.length > 50) return invalid('别名最多 50 个。')
   const aliases = Array.from(data.aliases, (alias: unknown) => requiredText(alias, '别名', 120))
   if (new Set(aliases).size !== aliases.length) return invalid('别名不能重复。')
+  const kind = choice(data.kind, KNOWLEDGE_KINDS, '知识类型')
+  const characterProfile = data.characterProfile === undefined ? undefined : parseCharacterProfile(data.characterProfile)
+  if (kind !== 'person' && characterProfile && Object.keys(characterProfile).length > 0) return invalid('只有人物条目可以填写人物档案。')
   return {
-    kind: choice(data.kind, KNOWLEDGE_KINDS, '知识类型'), name: requiredText(data.name, '条目名称', 120), aliases,
+    kind, name: requiredText(data.name, '条目名称', 120), aliases,
     summary: optionalText(data.summary, '条目说明', 20_000), nature: choice(data.nature, KNOWLEDGE_NATURES, '知识性质'),
     authorDecision: choice(data.authorDecision, AUTHOR_DECISIONS, '作者决定'),
     freshness: choice(data.freshness, KNOWLEDGE_FRESHNESS, '新鲜度'), conflictState: choice(data.conflictState, CONFLICT_STATES, '冲突状态'),
+    ...(characterProfile === undefined ? {} : { characterProfile }),
   }
+}
+
+/** 省略档案保留已有值；显式空档案清空。写入和回执核对共用同一规则。 */
+export function resolveKnowledgeFields(fields: KnowledgeItemFields, previous?: KnowledgeItemFields): KnowledgeItemFields {
+  const resolved = { ...fields }
+  const profile = fields.characterProfile ?? previous?.characterProfile
+  if (profile && Object.keys(profile).length > 0) resolved.characterProfile = profile
+  else delete resolved.characterProfile
+  return resolved
 }
 
 export function parseKnowledgeSource(value: unknown, bookId: string): KnowledgeSourceInput {

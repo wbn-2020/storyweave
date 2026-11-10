@@ -1,0 +1,18 @@
+.palette { margin: min(15vh, 120px) auto auto; width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); padding: 0; background: var(--bg-surface); color: var(--color-ink); border: 1px solid var(--color-line-strong); border-radius: 12px; overflow: hidden; }
+.palette::backdrop { background: var(--overlay-backdrop); }
+.heading { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 0; gap: 16px; }
+.heading h2 { margin: 0; font-size: 16px; }
+.heading button { min-width: 40px; min-height: 36px; border: 1px solid var(--color-line); color: var(--color-ink-secondary); background: var(--bg-subtle); border-radius: 5px; cursor: pointer; }
+.search { margin: 16px 20px; padding: 10px 12px; width: calc(100% - 40px); min-height: 44px; color: var(--color-ink); background: var(--bg-subtle); border: 1px solid var(--color-line-strong); border-radius: 6px; font: inherit; }
+.search::placeholder { color: var(--color-ink-secondary); }
+.search:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.results { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; max-height: min(52vh, 430px); overscroll-behavior: contain; }
+.results button { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 56px; border: 0; border-radius: 6px; background: transparent; color: var(--color-ink); padding: 10px 12px; text-align: left; cursor: pointer; }
+.results span { min-width: 0; }
+.results strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.results small { display: block; margin-top: 4px; font-size: 12px; color: var(--color-ink-secondary); }
+.results [aria-selected='true'] button { background: var(--color-accent-soft); }
+.results button:disabled { cursor: default; opacity: .6; }
+.results kbd { flex-shrink: 0; font-size: 12px; font-family: inherit; color: var(--color-ink-secondary); }
+.empty { padding: 12px 20px; color: var(--color-ink-secondary); font-size: 14px; }
+.footer { padding: 12px 20px; border-top: 1px solid var(--color-line); color: var(--color-ink-secondary); font-size: 12px; line-height: 1.7; }

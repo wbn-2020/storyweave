@@ -38,7 +38,8 @@ const RECORD_COLUMNS = 'id, book_id, kind, title, description, fields_json, stor
 const LIST_FILTER = `book_id = @bookId AND (@kind IS NULL OR kind = @kind)
   AND (@search = '' OR instr(title, @search) > 0 OR instr(description, @search) > 0)
   AND (@entityId IS NULL OR EXISTS (SELECT 1 FROM story_entity_refs ref
-    WHERE ref.record_id = story_records.id AND ref.book_id = @bookId AND ref.entity_id = @entityId))`
+    WHERE ref.record_id = story_records.id AND ref.book_id = @bookId AND ref.entity_id = @entityId)
+    OR kind = 'event' AND EXISTS (SELECT 1 FROM json_each(fields_json, '$.appearanceCheck.absentEntityIds') a WHERE a.value = @entityId))`
 
 function storageFailure(): DomainError {
   return new DomainError({ code: 'STORAGE_ERROR', message: '故事资料读写失败，请保留当前编辑并检查作品文件。' })
@@ -205,6 +206,12 @@ export class StoryRepository {
     return perform(() => this.writeRecord(parseCreateStoryRecord(input)))
   }
 
+  createRecordWithSources(input: CreateStoryRecordInput, sources: readonly KnowledgeSourceInput[]): StoryRecordDetail {
+    const data = parseCreateStoryRecord(input)
+    if (data.source || !sources.length || sources.length > MAX_STORY_SOURCES) invalid('请提供数量受限的明确来源集合。')
+    return perform(() => this.writeRecord(data, undefined, sources.map((source) => parseKnowledgeSource(source, data.bookId))))
+  }
+
   updateRecord(input: UpdateStoryRecordInput): StoryRecordDetail {
     return perform(() => {
       const data = parseUpdateStoryRecord(input)
@@ -212,8 +219,12 @@ export class StoryRepository {
     })
   }
 
-  private writeRecord(data: CreateStoryRecordInput, existingId?: string): StoryRecordDetail {
+  private writeRecord(data: CreateStoryRecordInput, existingId?: string, additionalSources: readonly KnowledgeSourceInput[] = []): StoryRecordDetail {
     const { db } = this.studio.getStoryDatabase(data.bookId)
+    if ((data.fields.kind === 'relation' && data.fields.layer !== undefined || data.fields.kind === 'event' && data.fields.appearanceCheck ||
+        data.fields.kind === 'foreshadow' && 'targetNumber' in data.fields.plannedPayoff) && (db.pragma('user_version', { simple: true }) as number) < 17) {
+      throw new DomainError({ code: 'FORBIDDEN', message: '请先备份并升级作品至 v17，再保存关系层次、整章出场核对或未建卷章序号。' })
+    }
     const extended = data.fields.kind === 'cognition' && data.fields.evolution !== undefined ||
       data.fields.kind === 'foreshadow' && 'label' in data.fields.plannedPayoff
     if (extended && (db.pragma('user_version', { simple: true }) as number) < STORY_EVOLUTION_SCHEMA_VERSION) {
@@ -236,12 +247,22 @@ export class StoryRepository {
       const references = links(data.fields)
       this.requireLinks(db, data.bookId, references)
       this.requireDisclosures(db, disclosures(data.fields))
+      if (data.fields.kind === 'event' && data.fields.appearanceCheck) {
+        const check = data.fields.appearanceCheck
+        const before = previous?.fields.kind === 'event' ? previous.fields.appearanceCheck : undefined
+        const revision = db.prepare(`SELECT c.current_revision_id FROM chapters c JOIN chapter_revisions r
+          ON r.chapter_id = c.id WHERE c.id = ? AND r.id = ?`).get(check.chapterId, check.revisionId) as { current_revision_id: string } | undefined
+        if (!revision) invalid('出场核对必须指向本书已保存的固定章节版本。')
+        // 原样保留旧核对；新建或重做核对时必须以当前正文为准，不能替旧稿确认当前缺席。
+        if (JSON.stringify(before) !== JSON.stringify(check) && revision.current_revision_id !== check.revisionId) invalid('整章核对的正文已改变，请重新读取本章后核对。')
+        this.requireLinks(db, data.bookId, { entities: check.absentEntityIds.map((entityId) => ({ id: entityId, role: 'mentioned' as const })), events: [] })
+      }
       if (data.fields.kind === 'foreshadow') {
         this.requirePlannedPayoff(db, data.fields.plannedPayoff)
         if (data.fields.stage === 'resolved' && data.fields.actualPayoff.state !== 'located') invalid('标记已回收前，请选择实际回收的固定正文版本与段落。')
       }
       if (data.fields.kind === 'cognition') this.requireCognitionState(db, data.bookId, data.fields, existingId)
-      const candidates = [...(data.source ? [data.source] : []), ...(data.fields.kind === 'foreshadow'
+      const candidates = [...(data.source ? [data.source] : []), ...additionalSources, ...(data.fields.kind === 'foreshadow'
         ? data.fields.milestones.flatMap((item) => item.source ? [item.source] : []) : [])]
       const unique = [...new Map(candidates.map((source) => [JSON.stringify(source), source])).values()]
       const additions = unique.filter((source) => !this.hasSource(db, id, source))
@@ -249,6 +270,17 @@ export class StoryRepository {
       if (sourceCount + additions.length > MAX_STORY_SOURCES) invalid(`每条故事记录最多保留 ${MAX_STORY_SOURCES} 个来源。`)
       const sourceStates = this.studio.readKnowledgeSources(additions)
       if (sourceStates.some((source) => source.validity !== 'valid')) invalid('正文来源无法核对，请选择已保存的版本、段落和该段连续原文。')
+      if (data.fields.kind === 'foreshadow' && data.fields.stage === 'resolved' && data.fields.actualPayoff.state === 'located') {
+        const actual = data.fields.actualPayoff
+        const before = previous?.fields.kind === 'foreshadow' ? previous.fields : null
+        if (!before || before.stage !== 'resolved' || JSON.stringify(before.actualPayoff) !== JSON.stringify(actual)) {
+          const quote = unique.find((source) => source.sourceType === 'chapter_text' && source.chapterId === actual.chapterId &&
+            source.revisionId === actual.revisionId && source.blockId === actual.blockId)
+          const stored = db.prepare(`SELECT id FROM story_sources WHERE record_id = ? AND source_type = 'chapter_text'
+            AND chapter_id = ? AND revision_id = ? AND block_id = ? AND length(quote) > 0 LIMIT 1`).get(id, actual.chapterId, actual.revisionId, actual.blockId)
+          if (!quote && !stored) invalid('确认实际回收前，请在回收里程碑或追加来源中保存同一固定段落的逐字引文。')
+        }
+      }
       const fieldsJson = JSON.stringify(data.fields)
       if (previous && JSON.stringify(previous.fields) === fieldsJson && additions.length === 0) return this.readDetail(db, data.bookId, id)
       const now = new Date().toISOString()
@@ -284,7 +316,7 @@ export class StoryRepository {
         VALUES (?, ?, ?, ?, ?, ?)`).run(randomUUID(), id, revisionId, bookRevision, knowledgeRevision, now)
       return this.readDetail(db, data.bookId, id)
     }).immediate()
-    this.studio.refreshKnowledgeCatalog(data.bookId)
+    if (!db.inTransaction) this.studio.refreshKnowledgeCatalog(data.bookId)
     return detail
   }
 
@@ -388,7 +420,7 @@ export class StoryRepository {
     while (state) {
       if (seen.has(state.id) || seen.size >= MAX_COGNITION_STATES || state.fields.personId !== personId) throw storageFailure()
       seen.add(state.id)
-      const children = successors.get(state.id) ?? []
+      const children: string[] = successors.get(state.id) ?? []
       if (children.length > 1) throw storageFailure()
       const child: CognitionState | null = children[0] ? read(children[0]) : null
       if (child) {
@@ -444,7 +476,7 @@ export class StoryRepository {
     const entity = db.prepare('SELECT name FROM knowledge_items WHERE id = ? AND book_id = ?')
     const event = db.prepare("SELECT title FROM story_records WHERE id = ? AND book_id = ? AND kind = 'event'")
     // 名称是当前实体的显示信息，旧关联身份仍取自不可变快照；不为标签读取整条来源和历史。
-    for (const id of new Set(references.entities.map((ref) => ref.id))) {
+    for (const id of new Set([...references.entities.map((ref) => ref.id), ...(fields.kind === 'event' ? fields.appearanceCheck?.absentEntityIds ?? [] : [])])) {
       const row = entity.get(id, bookId) as { name: string } | undefined
       if (row) labels[id] = row.name
     }

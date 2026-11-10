@@ -63,3 +63,10 @@ export const KNOWLEDGE_SCHEMA = `
   ) STRICT;
   CREATE INDEX knowledge_outbox_pending ON knowledge_outbox(state, created_at, id);
 `
+
+// 新建作品与旧书备份升级均由 storage 在 book v14 统一追加，基础知识表保留原有版本结构。
+export const CHARACTER_PROFILE_SCHEMA = `
+  ALTER TABLE knowledge_items ADD COLUMN character_profile_json TEXT
+    CHECK (character_profile_json IS NULL OR
+      (kind = 'person' AND json_valid(character_profile_json) AND json_type(character_profile_json) = 'object'));
+`

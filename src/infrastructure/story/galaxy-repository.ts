@@ -3,7 +3,7 @@ import { DomainError, requiredId, requiredText } from '../../contracts/api'
 import {
   AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES, MAX_KNOWLEDGE_ITEMS,
 } from '../../contracts/knowledge'
-import { MAX_STORY_RECORDS, STORY_KINDS } from '../../contracts/story'
+import { MAX_STORY_RECORDS, STORY_KINDS, parseStoryTime } from '../../contracts/story'
 import {
   GALAXY_PAGE_SIZE, GALAXY_ROLES, MAX_GALAXY_EDGES, galaxyKey, parseStoryGalaxyInput,
   type GalaxyEdge, type GalaxyNode, type GalaxyRole, type GalaxyTarget, type StoryGalaxyInput, type StoryGalaxyPage,
@@ -15,6 +15,7 @@ interface TargetRow { source: unknown; id: unknown }
 interface NodeRow extends TargetRow {
   book_id: unknown; kind: unknown; title: unknown; excerpt: unknown; metadata_valid: unknown
   nature: unknown; author_decision: unknown; freshness: unknown; conflict_state: unknown
+  relation_layer: unknown; relation_from_json: unknown; relation_until_json: unknown
 }
 interface EdgeRow { from_id: unknown; to_source: unknown; to_id: unknown; role: unknown }
 
@@ -96,12 +97,17 @@ function storedNode(row: NodeRow, bookId: string): GalaxyNode {
   try {
     const target = storedTarget(row)
     if (row.book_id !== bookId || row.metadata_valid !== 1 || typeof row.excerpt !== 'string' ||
-        Array.from(row.excerpt).length > 240) throw storageFailure()
+        Array.from(row.excerpt).length > 240 || row.relation_layer != null && (target.source !== 'story' || row.kind !== 'relation')) throw storageFailure()
     return { ...target, bookId,
       kind: target.source === 'knowledge' ? storedChoice(row.kind, KNOWLEDGE_KINDS) : storedChoice(row.kind, STORY_KINDS),
       title: requiredText(row.title, '星海对象名称', 120), excerpt: row.excerpt,
       nature: storedChoice(row.nature, KNOWLEDGE_NATURES), authorDecision: storedChoice(row.author_decision, AUTHOR_DECISIONS),
-      freshness: storedChoice(row.freshness, KNOWLEDGE_FRESHNESS), conflictState: storedChoice(row.conflict_state, CONFLICT_STATES) }
+      freshness: storedChoice(row.freshness, KNOWLEDGE_FRESHNESS), conflictState: storedChoice(row.conflict_state, CONFLICT_STATES),
+      ...(row.relation_layer == null ? {} : { relationLayer: storedChoice(row.relation_layer, ['surface', 'hidden'] as const) }),
+      ...(target.source === 'story' && row.kind === 'relation' ? { relationTime: {
+        from: parseStoryTime(JSON.parse(requiredText(row.relation_from_json, '关系开始时间', 1000))),
+        until: parseStoryTime(JSON.parse(requiredText(row.relation_until_json, '关系结束时间', 1000))),
+      } } : {}) }
   } catch {
     // 存储行复用契约校验时，格式错误属于存储损坏，不能冒充调用方输入错误。
     throw storageFailure()
@@ -115,6 +121,7 @@ function readNodes(db: Database.Database, bookId: string, targets: GalaxyTarget[
   const rows = db.prepare(`WITH ${PAGE_TARGETS}
     SELECT p.position, 'knowledge' AS source, k.id, k.book_id, k.kind, k.name AS title,
       substr(k.summary, 1, 240) AS excerpt, k.nature, k.author_decision, k.freshness, k.conflict_state,
+      NULL AS relation_layer, NULL AS relation_from_json, NULL AS relation_until_json,
       CASE WHEN json_type(k.aliases_json) = 'array' AND json_array_length(k.aliases_json) <= 50
         AND NOT EXISTS (SELECT 1 FROM json_each(k.aliases_json) a WHERE a.type <> 'text')
         THEN 1 ELSE 0 END AS metadata_valid
@@ -126,6 +133,9 @@ function readNodes(db: Database.Database, bookId: string, targets: GalaxyTarget[
       json_extract(s.fields_json, '$.authorDecision') AS author_decision,
       json_extract(s.fields_json, '$.freshness') AS freshness,
       json_extract(s.fields_json, '$.conflictState') AS conflict_state,
+      json_extract(s.fields_json, '$.layer') AS relation_layer,
+      json_extract(s.fields_json, '$.validFrom') AS relation_from_json,
+      json_extract(s.fields_json, '$.validUntil') AS relation_until_json,
       CASE WHEN json_type(s.fields_json) = 'object'
         AND json_type(s.fields_json, '$.kind') = 'text' AND json_extract(s.fields_json, '$.kind') = s.kind
         AND json_type(s.fields_json, '$.title') = 'text' AND json_extract(s.fields_json, '$.title') = s.title

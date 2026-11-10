@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { DomainError, requiredId, requiredText } from '../../contracts/api'
 import { MAX_KNOWLEDGE_SOURCES, parseKnowledgeFields } from '../../contracts/knowledge'
+import { CHARACTER_ABILITIES, CHARACTER_ABILITY_LABELS, CHARACTER_PROFILE_FIELDS, CHARACTER_PROFILE_LABELS } from '../../contracts/character-profile'
 import { countCharacters, documentToText, parseManuscript } from '../../contracts/manuscript'
 import {
   MEMORY_CHUNK_OVERLAP, MEMORY_CHUNK_SIZE, MEMORY_SOURCE_KINDS, MEMORY_STEP_CHUNKS,
@@ -74,6 +75,12 @@ function storyText(fields: StoryRecordFields): { text: string; entityIds: string
     lines.push(`故事时间：${timeText(fields.storyTime)}`)
     if (fields.participantIds.length) lines.push(`显式参与实体：${fields.participantIds.join('、')}`)
     if (fields.mentionedEntityIds.length) lines.push(`仅被提及实体：${fields.mentionedEntityIds.join('、')}`)
+    if (fields.appearanceCheck) {
+      const check = fields.appearanceCheck
+      entityIds.push(...check.absentEntityIds)
+      lines.push(`作者整章核对（仅适用于固定稿）：章节 ${check.chapterId}；修订 ${check.revisionId}`,
+        `明确缺席实体：${check.absentEntityIds.join('、')}`, check.note)
+    }
     for (const change of fields.stateChanges) {
       lines.push(`状态变化记录：实体 ${change.entityId}；属性 ${change.attribute}`, `变化前：${change.before}`, `变化后：${change.after}`)
     }
@@ -161,7 +168,9 @@ export function readMemoryProjection(db: Database.Database, bookId: string, iden
       if (fields.name !== source.title) throw storageFailure()
       // 知识条目的类型允许后续修改，历史投影始终以该修订内的类型为准。
       const text = [fields.name, `知识类型：${KNOWLEDGE_LABELS[fields.kind]}`,
-        ...(fields.aliases.length ? [`别名：${fields.aliases.join('、')}`] : []), fields.summary]
+        ...(fields.aliases.length ? [`别名：${fields.aliases.join('、')}`] : []), fields.summary,
+        ...CHARACTER_PROFILE_FIELDS.flatMap((key) => fields.characterProfile?.[key] ? [`${CHARACTER_PROFILE_LABELS[key]}：${fields.characterProfile[key]}`] : []),
+        ...CHARACTER_ABILITIES.flatMap((key) => fields.characterProfile?.abilities?.[key] === undefined ? [] : [`作者设定能力·${CHARACTER_ABILITY_LABELS[key]}：${fields.characterProfile.abilities[key]}/100`])]
         .filter((line) => line !== '').join('\n')
       // 一个合成块使 blockId=null 的偏移也能唯一回查；索引状态不回写作者的新鲜度。
       return { ...source, nature: fields.nature, authorDecision: fields.authorDecision, freshness: fields.freshness,

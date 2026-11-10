@@ -10,6 +10,7 @@ import { parseDraftCopy, saveDraftCopy } from './draft-copy'
 import { DraftRecovery } from './draft-recovery'
 import { DraftImports, parseDraftTarget } from './draft-imports'
 import { AiSessions } from './ai-sessions'
+import { GenerationSessions } from './generation-sessions'
 import { parseBookRecoveryExportInput, parseBookRecoveryRestoreInput } from '../../contracts/book-recovery'
 import { bookExportExtension, parseBookExportCommitInput } from '../../contracts/export'
 
@@ -33,12 +34,21 @@ let closeResponse: { id: string; resolve: (value: boolean) => void } | null = nu
 let lastAiRecoveryNotice: string | null = null
 const draftRecovery = new DraftRecovery()
 const draftImports = new DraftImports()
-const aiSessions = new AiSessions()
+const generationSessions = new GenerationSessions()
+const aiSessions = new AiSessions((root, connection) => generationSessions.sessionKey(root, connection))
 
 const rendererCommands = new Set<RendererCommand>([
+  'living.get', 'living.archive', 'living.save', 'living.history', 'living.restore', 'living.prepare', 'living.run', 'living.adopt',
+  'forge.get', 'forge.prepare', 'forge.run', 'forge.adopt',
+  'generation.connections', 'generation.configure', 'generation.draft', 'generation.get', 'generation.prepare',
+  'generation.start', 'generation.cancel', 'generation.select', 'generation.adopt',
   'workspace.get', 'workspace.select', 'book.create', 'book.get',
   'workbench.get', 'workbench.brief', 'workbench.scene', 'workbench.issue', 'workbench.applyIssue', 'workbench.goal', 'workbench.session',
-  'inspiration.list', 'inspiration.save', 'inspiration.copy',
+  'inspiration.list', 'inspiration.save', 'inspiration.copy', 'inspiration.import',
+  'calendar.get', 'calendar.save',
+  'study.adopt',
+  'ai.presets.get', 'ai.presets.save',
+  'book.media.get', 'book.media.read', 'book.media.save',
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
@@ -48,7 +58,7 @@ const rendererCommands = new Set<RendererCommand>([
   'draft.checkpoint', 'draft.list', 'draft.rotate', 'draft.select', 'draft.preview', 'draft.commit',
   'knowledge.status', 'knowledge.upgrade', 'knowledge.list', 'knowledge.get', 'knowledge.create', 'knowledge.update',
   'notes.list', 'notes.get', 'notes.create', 'notes.update', 'notes.promote',
-  'story.list', 'story.timeline', 'story.galaxy', 'story.get', 'story.revision', 'story.create', 'story.update',
+  'story.list', 'story.timeline', 'story.galaxy', 'story.matrix', 'story.radar', 'story.get', 'story.revision', 'story.create', 'story.update',
   'memory.status', 'memory.start', 'memory.step', 'memory.control', 'memory.search', 'memory.evidence',
   'memory.vector.status', 'memory.vector.get', 'memory.vector.prepare', 'memory.vector.start', 'memory.vector.cancel', 'memory.vector.interrupt',
   'ai.connection.list', 'ai.configure', 'ai.list', 'ai.get', 'ai.prepare', 'ai.start', 'ai.cancel', 'ai.interrupt', 'ai.reject', 'ai.adopt',
@@ -74,7 +84,8 @@ function workspaceResult<T extends WorkspaceSnapshot | null>(result: Result<T>):
 
 async function completeWorkspaceRead<T extends WorkspaceSnapshot | null>(client: ServiceClient, result: Result<T>): Promise<Result<T>> {
   if (result.ok && result.data?.rootPath && !closing && !draining) {
-    const settled = await aiSessions.restorePending(client)
+    const generationSettled = await generationSessions.restorePending(client)
+    const settled = generationSettled.ok ? await aiSessions.restorePending(client) : generationSettled
     if (settled.ok) lastAiRecoveryNotice = null
     else {
       const notice = `${result.data.rootPath}:${settled.error.message}`
@@ -174,7 +185,7 @@ function setupIpc(): void {
       if (command === 'service.restart') {
         if (payload !== undefined) return failure('INVALID_INPUT', '恢复服务不接受路径或重放请求。')
         // 已接收的模型结果保留在主进程，允许恢复已退出的服务后核对并补存。
-        if (pendingAiCommands > 0 || aiSessions.hasActive(false)) return failure('WORKSPACE_BUSY', '请先处理 AI 请求并核对结束状态，再恢复本地服务。')
+        if (pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false)) return failure('WORKSPACE_BUSY', '请先处理 AI 请求并核对结束状态，再恢复本地服务。')
         if (closing || draining || choosingFile || restarting) return failure('WORKSPACE_BUSY', '请先完成当前操作，再恢复本地服务。')
         if (!service?.hasExited() && service !== recoveryService && service !== recoveredInstance) return failure('WORKSPACE_BUSY', '原服务尚未确认退出。不能重启或向活动服务重放未知操作。')
         restarting = true
@@ -232,14 +243,21 @@ function setupIpc(): void {
       if (closing && !['chapter.save', 'chapter.read', 'workspace.get'].includes(command)) {
         return failure('SERVICE_UNAVAILABLE', '正在保存并关闭，请等待当前操作完成。')
       }
+      if (command.startsWith('generation.')) {
+        if (['generation.start', 'generation.configure'].includes(command) && aiSessions.hasActive()) return failure('WORKSPACE_BUSY', '其他模型任务尚未结束，请先核对。')
+        pendingAiCommands += 1
+        try { return await generationSessions.handle(command, payload, service) }
+        finally { pendingAiCommands -= 1 }
+      }
       if (command.startsWith('ai.') || command.startsWith('memory.vector.')) {
+        if (['ai.start', 'ai.configure', 'memory.vector.start'].includes(command) && generationSessions.hasActive()) return failure('WORKSPACE_BUSY', '开书任务或待存结果尚未处理，请先返回开书房核对。')
         // 多次 await 的上下文预览也固定书库，不能在读取配置后被切到另一作品库。
         pendingAiCommands += 1
         try { return await aiSessions.handle(command, payload, service) }
         finally { pendingAiCommands -= 1 }
       }
       if (command === 'workspace.select') {
-        if (pendingAiCommands > 0 || aiSessions.hasActive()) return failure('WORKSPACE_BUSY', 'AI 请求仍在进行，请先处理并核对结束状态，再切换作品库。')
+        if (pendingAiCommands > 0 || aiSessions.hasActive() || generationSessions.hasActive()) return failure('WORKSPACE_BUSY', 'AI 请求仍在进行，请先处理并核对结束状态，再切换作品库。')
         if (payload !== undefined) return failure('INVALID_INPUT', '请选择本地书库目录。')
         if (choosingFile) return failure('WORKSPACE_BUSY', '已有一个文件选择窗口，请先完成该操作。')
         const target = mainWindow
@@ -260,7 +278,7 @@ function setupIpc(): void {
         } finally { choosingFile = false }
       }
       if (command === 'recovery.exportFile' || command === 'recovery.select' || command === 'recovery.restore') {
-        if (pendingAiCommands > 0 || aiSessions.hasActive()) return failure('WORKSPACE_BUSY', '请先处理并核对正在进行的模型请求，再备份或恢复作品。')
+        if (pendingAiCommands > 0 || aiSessions.hasActive() || generationSessions.hasActive()) return failure('WORKSPACE_BUSY', '请先处理并核对正在进行的模型请求，再备份或恢复作品。')
         if (!service.getWorkspaceRoot()) return failure('WORKSPACE_REQUIRED', '请先选择用于保存作品的本地书库。')
         const exporting = command === 'recovery.exportFile' ? parseBookRecoveryExportInput(payload) : null
         const restoring = command === 'recovery.restore' ? parseBookRecoveryRestoreInput(payload) : null
@@ -338,7 +356,7 @@ function setupIpc(): void {
           const selection = await dialog.showSaveDialog(target, {
             title: '按已确认预览导出（仅新建文件）', buttonLabel: '创建导出文件和清单',
             defaultPath: `作品导出-${Date.now()}.${extension}`,
-            filters: [{ name: input.format === 'epub' ? 'EPUB 电子书' : input.format === 'markdown' ? 'Markdown 文本' : '纯文本', extensions: [extension] }],
+            filters: [{ name: input.format === 'docx' ? 'Word 文档' : input.format === 'epub' ? 'EPUB 电子书' : input.format === 'markdown' ? 'Markdown 文本' : '纯文本', extensions: [extension] }],
           })
           if (selection.canceled || !selection.filePath) return { ok: true, data: null }
           if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未创建导出文件。')
@@ -417,7 +435,7 @@ function askRendererToSave(window: BrowserWindow): Promise<boolean> {
 }
 
 async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> {
-  if (!aiSessions.hasActive()) return true
+  if (!aiSessions.hasActive() && !generationSessions.hasActive()) return true
   choosingFile = true
   try {
     const decision = await dialog.showMessageBox(window, {
@@ -431,7 +449,7 @@ async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> 
       defaultPath: `模型结果留存-${Date.now()}.json`, filters: [{ name: '模型结果 JSON', extensions: ['json'] }],
     })
     if (selection.canceled || !selection.filePath) return false
-    const copied = aiSessions.savePendingResult(selection.filePath)
+    const copied = generationSessions.hasActive() ? generationSessions.savePendingResult(selection.filePath) : aiSessions.savePendingResult(selection.filePath)
     await dialog.showMessageBox(window, {
       type: 'info', title: copied ? '模型结果已留存' : '原保存请求已确认',
       message: copied ? '已保存结果副本，请返回工作室核对原请求。' : '模型结果的原保存回执已确认，无需另存副本。请返回工作室读取原记录。',
@@ -450,7 +468,7 @@ async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> 
 async function requestClose(): Promise<void> {
   const window = mainWindow
   if (!window || window.isDestroyed() || closing) return
-  if (choosingFile || restarting || pendingAiCommands > 0 || aiSessions.hasActive(false)) {
+  if (choosingFile || restarting || pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false)) {
     try { window.webContents.send(CLOSE_CANCELLED_CHANNEL) } catch { /* 保留当前窗口和未完成操作。 */ }
     return
   }
@@ -501,7 +519,8 @@ function createWindow(): void {
   expectedRendererUrl = rendererUrl()
   const window = new BrowserWindow({
     width: 1440, height: 960, minWidth: 960, minHeight: 640,
-    title: '织章 · StoryWeave', backgroundColor: '#131920', show: false,
+    title: '织章 · StoryWeave', backgroundColor: '#F1EBE1', show: false,
+    icon: join(__dirname, '../../resources/storyweave.ico'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true, sandbox: true, nodeIntegration: false,
@@ -526,7 +545,7 @@ function createWindow(): void {
     event.preventDefault()
     void requestClose()
   })
-  window.on('closed', () => { aiSessions.abortAll(); mainWindow = null })
+  window.on('closed', () => { aiSessions.abortAll(); generationSessions.abortAll(); mainWindow = null })
   window.once('ready-to-show', () => window.show())
   void window.loadURL(expectedRendererUrl).then(() => { rendererSessionStarted = true }).catch(() => {
     initialRendererLoadFailed = true

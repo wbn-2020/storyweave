@@ -12,11 +12,24 @@ import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
 import { AiMemoryReview, aiMemoryReviewEntries, createAiMemoryDrafts, type AiMemoryDraft } from './AiMemoryReview'
 import { AiTextDiff } from './AiTextDiff'
+import { CreativeResourcePicker } from './CreativeResourcePicker'
+import { StudyResults } from './StudyResults'
+import { ReviewResults } from './ReviewResults'
+import { REVIEW_PROMPT_VERSION } from '../../contracts/review'
+import { AiPresetsPanel } from './AiPresetsPanel'
+import { aiPresetComposerTask, isAiPresetsSnapshot, type AiPreset, type AiPresetKind, type AiPresetsSnapshot } from '../../contracts/ai-presets'
+import { MAX_CREATIVE_RESOURCES, creativeRef, parseCreativeResources, type CreativeResourceRef, type CreativeSelection } from '../../contracts/creative-resources'
+import { ForeshadowDueNotice } from './StoryControlPanel'
+import { LIVING_SCHEMA_VERSION, parseLivingWritingContext } from '../../contracts/living'
 import shared from '../App.module.css'
 import layout from './KnowledgePanel.module.css'
 import styles from './AiPanel.module.css'
 
 interface Props {
+  initialInstruction?: string
+  initialPurpose?: 'review' | 'study'
+  initialLivingContext?: boolean
+  initialResources?: CreativeResourceRef[]
   api: StudioApi
   book: BookSnapshot
   chapter: ChapterSnapshot
@@ -28,6 +41,7 @@ interface Props {
   onRecover: () => void
   onClose: () => void
   onDirtyChange: (dirty: boolean) => void
+  onBookChange: (book: BookSnapshot) => void
   onUpgrade: (accept: (status: KnowledgeStatus) => void) => Promise<void>
   onAdopt: (input: AiAdoptInput, source: AiRun, accept: (receipt: AiAdoptReceipt) => boolean) => Promise<void>
   onAdoptMemory: (input: AiMemoryAdoptInput, source: AiRun, accept: (receipt: AiMemoryAdoptReceipt) => boolean) => Promise<void>
@@ -52,6 +66,7 @@ interface RecommendationResult {
 type SelectedMemoryHit = MemorySearchHit & { characterScope?: AiCharacterScope }
 const PERSON_PAGE_SIZE = 20
 const taskLabels: Record<AiTaskKind, string> = { plan: '章节规划', continue: '接着写', rewrite: '改写段落', summarize: '章节摘要', extract: '提取知识建议' }
+function taskName(kind: AiTaskKind, purpose?: 'review' | 'study' | 'living' | 'forge'): string { return purpose === 'forge' ? '角色与世界工坊' : purpose === 'living' ? '演进与定稿整理' : purpose === 'study' ? '拆书' : purpose === 'review' ? '审稿' : taskLabels[kind] }
 const stateLabels: Record<AiRunState, string> = { prepared: '等待发送', running: '生成中', succeeded: '待作者审阅', failed: '生成失败', cancelled: '已取消', interrupted: '已中断', rejected: '作者已拒绝', adopted: '作者已采用' }
 const natureLabels: Record<KnowledgeNature, string> = { author_setting: '作者设定', future_plan: '未来计划', narrative_claim: '正文陈述', character_belief: '人物认知', ai_derived: 'AI 整理', ai_inference: 'AI 推断', external_reference: '外部参考' }
 const sourceLabels = { chapter: '正文', knowledge: '知识条目', story: '故事记录' }
@@ -70,7 +85,7 @@ function scopeFromContext(context: AiContextPacket): AiCharacterScope | undefine
     if (context.characterContext !== undefined) throw new Error('Unexpected character context')
     return undefined
   }
-  if (!isAiCharacterContextPromptVersion(context.promptVersion) || isAiMemoryTask(context.kind) || context.summary !== undefined || context.contextSummaries?.length) throw new Error('Invalid character context')
+  if ((!isAiCharacterContextPromptVersion(context.promptVersion) && !(context.purpose === 'review' && context.promptVersion === REVIEW_PROMPT_VERSION)) || isAiMemoryTask(context.kind) || context.summary !== undefined || context.contextSummaries?.length) throw new Error('Invalid character context')
   const fixed = parseAiCharacterContext(context.characterContext)
   const scope = characterScopeOf(fixed)
   if (fixed.cognitions.length !== context.evidence.length || new Set(context.evidence.map((item) => item.chunkId)).size !== context.evidence.length) throw new Error('Invalid cognition identities')
@@ -126,7 +141,18 @@ function ContextPreview({ context }: { context: AiContextPacket }) {
   const character: AiCharacterContext | undefined = context.perspective === 'character' ? context.characterContext : undefined
   return <section className={styles.preview} aria-label="实际发送预览">
     <div className={styles.heading}><h3>实际发送内容</h3><span>固定预览 · 提示版本 {context.promptVersion}</span></div>
+    {context.creativeResources && <details className={styles.sources} open><summary>选定场景、资料与方法 · {context.creativeResources.items.length} 项</summary>
+      {context.creativeResources.items.map((item) => <section key={`${item.source}:${item.id}`}><h4>{item.title} · v{item.revision}</h4><p className={styles.note}>{item.role === 'plan' ? '场景计划' : item.role === 'method' ? '写作方法' : '参考资料'}</p><pre className={layout.body}>{item.text}</pre></section>)}
+      {context.creativeResources.application && <p>使用要求：{context.creativeResources.application}</p>}
+    </details>}
     {context.purpose === 'review' && <p className={styles.note}><strong>用途：审稿。</strong>输出为待核对的问题建议，作者逐项确认后登记为持久审稿问题。</p>}
+    {context.purpose === 'study' && <p className={styles.note}><strong>用途：拆书。</strong>仅分析选定参考文本，逐项确认后保存为全局资料与方法。</p>}
+    {context.purpose === 'living' && <p className={styles.note}>这是演进沙盘中的固定提案，请在“大纲与演进”或“定稿记忆”中审阅和采纳。</p>}
+    {context.purpose === 'forge' && <p className={styles.note}>这是工坊中的固定任务，请在“角色与世界工坊”中审阅卡片、试戏和采用结果。</p>}
+    {context.livingContext && <details className={styles.sources} open><summary>本次有效章纲与前文记忆 · {context.livingContext.outlines.length} 份大纲，{context.livingContext.memories.length} 个批次</summary>
+      {context.livingContext.outlines.map((outline) => <section key={outline.id}><h4>{outline.fields.title} · 大纲 v{outline.version}</h4><pre>{JSON.stringify(outline.fields, null, 2)}</pre></section>)}
+      {context.livingContext.memories.map((memory) => <section key={memory.id}><h4>{memory.chapterTitle} · 记忆批次 {memory.id}</h4><p>{memory.proposal.summary.text}</p><pre>{JSON.stringify({ events: memory.proposal.events, states: memory.proposal.states }, null, 2)}</pre></section>)}
+      <p className={styles.note}>只包含最近三个前文章节范围内已有的有效批次；缺失记忆没有被自动补全。</p></details>}
     <dl className={styles.facts}><div><dt>接口</dt><dd>{context.connection.baseUrl}/chat/completions</dd></div><div><dt>模型</dt><dd>{context.connection.model}</dd></div><div><dt>输入估算</dt><dd>{context.estimatedInputTokens.toLocaleString()} tokens</dd></div><div><dt>输出预算</dt><dd>{context.reservedOutputTokens.toLocaleString()} / 窗口 {context.connection.contextWindow.toLocaleString()}</dd></div></dl>
     <p className={styles.note}><strong>附加资料范围：{context.perspective === 'character' ? '人物视角资料' : context.perspective === 'reader' ? '读者已披露资料' : '作者资料'}</strong>{context.perspective === 'reader' && '。仅限制附加资料；当前章、要求、章节目标和备注仍为作者输入，整次发送不保证防剧透，人物知情未知。'}</p>
     {context.writingContext ? <details className={styles.sources} open><summary>本次作品创作约定 · {context.writingContext.settingsRevision === null ? '作品资料' : `约定版本 ${context.writingContext.settingsRevision}`}</summary>
@@ -152,9 +178,9 @@ function ContextPreview({ context }: { context: AiContextPacket }) {
 }
 
 function OutputReview({ run, text, disabled, onChange }: { run: AiRun; text: string; disabled: boolean; onChange: (text: string) => void }) {
-  const editable = run.state === 'succeeded' && run.context.purpose !== 'review'
+  const editable = run.state === 'succeeded' && run.context.purpose === undefined
   return <section className={styles.output} aria-label="提议与改稿">
-    <div className={styles.heading}><h3>{run.context.purpose === 'review' ? '审稿问题建议' : run.kind === 'plan' ? '规划提议' : '正文提议'}</h3><span>{text.length.toLocaleString()} 字符</span></div>
+    <div className={styles.heading}><h3>{run.context.purpose === 'study' ? '拆书原始输出' : run.context.purpose === 'review' ? '审稿问题建议' : run.kind === 'plan' ? '规划提议' : '正文提议'}</h3><span>{text.length.toLocaleString()} 字符</span></div>
     {editable && (run.kind === 'rewrite' || run.kind === 'continue') && <>
       <AiTextDiff key={run.id} originalText={run.kind === 'rewrite' ? run.context.originalText : ''}
         suggestedText={run.outputText} disabled={disabled} onAcceptText={onChange} />
@@ -174,7 +200,7 @@ export function AiPanel(props: Props) {
   return <AiPanelSession key={`${props.book.book.id}:${props.chapter.id}`} {...props} />
 }
 
-function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onAdopt, onAdoptMemory, onRegisterReview }: Props) {
+function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialPurpose, initialLivingContext, initialResources, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onBookChange, onUpgrade, onAdopt, onAdoptMemory, onRegisterReview }: Props) {
   const [connections, setConnections] = useState<AiConnectionPage | null>(null)
   const [knowledge, setKnowledge] = useState<KnowledgeStatus | null>(null)
   const [history, setHistory] = useState<AiRunPage | null>(null)
@@ -183,10 +209,15 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   const [config, setConfig] = useState<AiConnectionConfig>(freshConnection)
   const [configDirty, setConfigDirty] = useState(false)
   const [apiKey, setApiKey] = useState('')
-  const [kind, setKind] = useState<AiTaskKind>('continue')
-  const [purpose, setPurpose] = useState<'review' | undefined>()
-  const [instruction, setInstruction] = useState('')
+  const [kind, setKind] = useState<AiTaskKind>(initialPurpose ? 'plan' : 'continue')
+  const [purpose, setPurpose] = useState<'review' | 'study' | undefined>(initialPurpose)
+  const [studyDirty, setStudyDirty] = useState(false)
+  const [presetsDirty, setPresetsDirty] = useState(false)
+  const [reviewDirty, setReviewDirty] = useState(false)
+  const [toolRecoveryRequested, setToolRecoveryRequested] = useState(false)
+  const [instruction, setInstruction] = useState(initialInstruction ?? '')
   const [contextScope, setContextScope] = useState<'chapter' | 'nearby'>('chapter')
+  const [useLivingContext, setUseLivingContext] = useState(initialLivingContext ?? false)
   const [perspective, setPerspective] = useState<AiContextPerspective>('author')
   const [character, setCharacter] = useState<CharacterDraft>(emptyCharacterDraft)
   const [personQuery, setPersonQuery] = useState('')
@@ -194,7 +225,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   const perspectiveHintId = useId()
   const [firstBlock, setFirstBlock] = useState('')
   const [lastBlock, setLastBlock] = useState('')
-  const [composeDirty, setComposeDirty] = useState(false)
+  const [composeDirty, setComposeDirty] = useState(Boolean(initialResources?.length))
   const [memoryQuery, setMemoryQuery] = useState('')
   const [memoryPage, setMemoryPage] = useState<MemorySearchPage | null>(null)
   const [memoryPageScope, setMemoryPageScope] = useState<string | null>(null)
@@ -204,6 +235,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   const [selectedMemory, setSelectedMemory] = useState<SelectedMemoryHit[]>([])
   const [summaryPage, setSummaryPage] = useState<AiContextSummaryPage | null>(null)
   const [selectedSummaries, setSelectedSummaries] = useState<AiContextSummarySnapshot[]>([])
+  const [creativeSelection, setCreativeSelection] = useState<CreativeSelection>({ refs: initialResources ?? [], application: '' })
   const [acceptedText, setAcceptedText] = useState('')
   const [memoryDrafts, setMemoryDrafts] = useState<AiMemoryDraft[]>([])
   const [outputDirty, setOutputDirty] = useState(false)
@@ -239,7 +271,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   scopeRef.current = scope
   const archived = Boolean(book.book.archivedAt)
   const generating = run?.state === 'running'
-  const blocked = busy || loading || reading || Boolean(operation || pending || pendingMessage)
+  const blocked = busy || loading || reading || studyDirty || reviewDirty || presetsDirty || Boolean(operation || pending || pendingMessage)
   const ready = knowledge !== null && knowledge.schemaVersion >= 6 && connections !== null && !connections.requiresUpgrade && history !== null && !history.requiresUpgrade
   const memoryTask = isAiMemoryTask(kind)
   const characterMode = perspective === 'character'
@@ -257,10 +289,10 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   const edited = configDirty || composeDirty || outputDirty
   const dirty = blocked || generating || edited
   const selectedConnection = connections?.connections.find((item) => item.id === config.id)
-  const prepareForm = useMemo(() => ({ kind, purpose, instruction, contextScope, perspective, character, firstBlock, lastBlock,
-    selectedMemory, selectedSummaries, config, configDirty, selectedConnection, knowledge, book, chapter, acceptedText }),
-   [kind, purpose, instruction, contextScope, perspective, character, firstBlock, lastBlock, selectedMemory, selectedSummaries,
-    config, configDirty, selectedConnection, knowledge, book, chapter, acceptedText])
+  const prepareForm = useMemo(() => ({ kind, purpose, instruction, useLivingContext, contextScope, perspective, character, firstBlock, lastBlock,
+    selectedMemory, selectedSummaries, creativeSelection, config, configDirty, selectedConnection, knowledge, book, chapter, acceptedText }),
+   [kind, purpose, instruction, useLivingContext, contextScope, perspective, character, firstBlock, lastBlock, selectedMemory, selectedSummaries,
+    creativeSelection, config, configDirty, selectedConnection, knowledge, book, chapter, acceptedText])
   const prepareFormRef = useRef(prepareForm)
   prepareFormRef.current = prepareForm
   const localUnknown = Boolean(pending)
@@ -337,6 +369,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
     if (current?.id === value.id && value.version < current.version) return false
     try {
       scopeFromContext(value.context)
+      if (value.context.creativeResources) parseCreativeResources(value.context.creativeResources)
       if (value.context.perspective === 'character' && value.context.kind !== value.kind) throw new Error('Character task mismatch')
       // 同一提议的固定人物快照不能随生成进度或迟到回执切换。
       if (current?.id === value.id && (current.context.perspective === 'character' || value.context.perspective === 'character') &&
@@ -351,7 +384,9 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
       const nextScope = perspectiveKey(nextPerspective, nextCharacter)
       if (current?.id !== value.id || nextScope !== perspectiveRef.current) clearSearchPages()
       perspectiveRef.current = nextScope; setPerspective(nextPerspective); setCharacter(nextCharacter)
-      if (current?.id !== value.id) { setKind(value.kind); setPurpose(value.context.purpose) }
+      setUseLivingContext(Boolean(value.context.livingContext))
+      setCreativeSelection({ refs: value.context.creativeResources?.items.map(creativeRef) ?? [], application: value.context.creativeResources?.application ?? '' })
+      if (current?.id !== value.id) { setKind(value.kind); setPurpose(value.context.purpose === 'living' || value.context.purpose === 'forge' ? undefined : value.context.purpose) }
       if (nextPerspective === 'character') {
         setKind(value.kind); setContextScope(value.context.contextScope); setInstruction(value.context.instruction)
         setFirstBlock(value.context.selectedBlockIds[0] ?? ''); setLastBlock(value.context.selectedBlockIds[value.context.selectedBlockIds.length - 1] ?? '')
@@ -380,7 +415,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   }
   function clearLocalEdits() {
     setConfigDirty(false); configDirtyRef.current = false; setApiKey(''); setComposeDirty(false); composeDirtyRef.current = false; setOutputDirty(false)
-    setInstruction(''); setPurpose(undefined); setPerspective('author'); setSelectedMemory([]); setSelectedSummaries([]); setFirstBlock(''); setLastBlock(''); setMemoryDrafts([])
+    setInstruction(''); setPurpose(undefined); setUseLivingContext(false); setPerspective('author'); setSelectedMemory([]); setSelectedSummaries([]); setFirstBlock(''); setLastBlock(''); setMemoryDrafts([])
     setCharacter(emptyCharacterDraft()); setPersonQuery(''); perspectiveRef.current = perspectiveKey('author', emptyCharacterDraft()); clearSearchPages()
   }
   function close() {
@@ -401,7 +436,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
     return () => { mounted.current = false; epoch.current += 1; ticket.current += 1; callback.current(false) }
   }, [api, book.book.id, chapter.id])
   useEffect(() => { callback.current(dirty) }, [dirty])
-  useEffect(() => { setRecoveryConfirmed(false) }, [pending, pendingMessage, edited, acceptedText, memoryDrafts, instruction, kind, purpose, contextScope, perspective, character, firstBlock, lastBlock, selectedMemory, selectedSummaries])
+  useEffect(() => { setRecoveryConfirmed(false) }, [pending, pendingMessage, edited, acceptedText, memoryDrafts, instruction, kind, purpose, useLivingContext, contextScope, perspective, character, firstBlock, lastBlock, selectedMemory, selectedSummaries, creativeSelection])
 
   async function initialize() {
     const at = epoch.current; const identity = scope; const currentTicket = ++ticket.current
@@ -530,7 +565,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
     try {
       await onUpgrade((value) => {
         if (!active(at)) return
-        if (value.bookId !== book.book.id || value.schemaVersion < 11) { setMessage('升级回执尚未确认 v11 可用，请核对状态。'); setPending({ label: '核对升级', receive: () => false }); return }
+        if (value.bookId !== book.book.id || value.schemaVersion < LIVING_SCHEMA_VERSION) { setMessage('升级回执尚未确认当前作品格式可用，请核对状态。'); setPending({ label: '核对升级', receive: () => false }); return }
         setBackupPath(value.backupPath ?? null); setUpgradeConfirmed(false); setRefreshRequested(true)
       })
     } catch { if (active(at)) { setMessage('升级结果尚未确认，请保留窗口并进入恢复核对。'); setPending({ label: '核对升级', receive: () => false }) } }
@@ -732,10 +767,11 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
       if (characterMode && (characterTaskBlocked || characterRequiresUpgrade || !characterSelection.scope || characterMemoryBlocked)) throw new DomainError({ code: 'INVALID_INPUT', message: '请核对人物、故事时点、任务和已选资料，移除不符合当前范围的选择后再准备。' })
       input = parseAiPrepareInput({ bookId: book.book.id, chapterId: chapter.id, expectedBookRevision: knowledge.bookRevision,
         expectedKnowledgeRevision: knowledge.knowledgeRevision, expectedRevisionId: chapter.revisionId, connectionId: config.id, kind, purpose, instruction,
-        contextScope: memoryTask ? 'chapter' : contextScope, ...(perspective !== 'author' ? { perspective } : {}),
+        contextScope: memoryTask || purpose === 'review' ? 'chapter' : contextScope, ...(perspective !== 'author' ? { perspective } : {}),
         ...(characterMode ? { characterScope: characterSelection.scope } : {}),
         selectedBlockIds: selection.ids, memoryChunkIds: memoryTask ? [] : selectedMemory.map((item) => item.chunkId),
-        summaryRefs: memoryTask ? [] : selectedSummaries.map(contextSummaryRef) })
+        summaryRefs: memoryTask ? [] : selectedSummaries.map(contextSummaryRef), resourceRefs: creativeSelection.refs, resourceApplication: creativeSelection.application,
+        ...(useLivingContext ? { useLivingContext: true } : {}) })
     } catch (cause) { setMessage(cause instanceof DomainError ? cause.detail.message : '创作要求或资料选择无效，请核对后重新预览。'); return }
     const selected = memoryTask ? [] : selectedSummaries
     const connection = selectedConnection
@@ -751,6 +787,9 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
           requestedScope !== perspectiveRef.current || !matchesPerspective(context, input.perspective ?? 'author', input.characterScope) ||
           JSON.stringify(context.connection) !== JSON.stringify(connection) || JSON.stringify(context.selectedBlockIds) !== JSON.stringify(input.selectedBlockIds) ||
           JSON.stringify(context.evidence.map((item) => item.chunkId)) !== JSON.stringify(input.memoryChunkIds) || JSON.stringify(summaries) !== JSON.stringify(selected) ||
+          JSON.stringify(context.creativeResources?.items.map(creativeRef) ?? []) !== JSON.stringify(input.resourceRefs ?? []) ||
+          (context.creativeResources?.application ?? '') !== (input.resourceApplication ?? '') ||
+          Boolean(context.livingContext) !== Boolean(input.useLivingContext) || (context.livingContext && JSON.stringify(parseLivingWritingContext(context.livingContext)) !== JSON.stringify(context.livingContext)) ||
           (input.perspective === 'character' && context.evidence.some((item, index) => item.sourceId !== selectedMemory[index]?.sourceId || item.revisionId !== selectedMemory[index]?.revisionId)) ||
           !acceptRun(value)) return false
         setComposeDirty(false); composeDirtyRef.current = false; setOutputDirty(false); setPollStopped(false); setRefreshRequested(true); return true
@@ -825,7 +864,7 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
   }
   async function adopt() {
     const current = runRef.current
-    if (!current || current.context.summary !== undefined || current.context.purpose === 'review' || isAiMemoryTask(current.kind) || current.state !== 'succeeded' || current.chapterId !== chapter.id || !acceptedText.trim() || archived) return
+    if (!current || current.context.summary !== undefined || current.context.purpose !== undefined || isAiMemoryTask(current.kind) || current.state !== 'succeeded' || current.chapterId !== chapter.id || !acceptedText.trim() || archived) return
     const input: AiAdoptInput = { bookId: book.book.id, runId: current.id, expectedVersion: current.version, acceptedText }
     const at = begin('采用作者审阅后的内容')
     if (at === null) return
@@ -885,27 +924,101 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
     if (checkingLocal || checkingReceipt || operation || (edited && !recoveryConfirmed)) return
     setApiKey(''); callback.current(false); onRecover()
   }
+  function recoverTool() {
+    // 子工具已确认留存自身表单；父层协作要求和改稿仍需独立留存。
+    if (edited) { setToolRecoveryRequested(true); setRecoveryConfirmed(false) }
+    else recover()
+  }
+  function applyPreset(preset: AiPreset) {
+    if (blocked || generating || archived || lock.current) return
+    const connection = preset.connectionId ? connections?.connections.find((item) => item.id === preset.connectionId) : undefined
+    if (preset.connectionId && !connection) { setMessage('预设绑定的连接已不可用，请刷新连接后再应用。'); return }
+    const apply = () => {
+      const task = aiPresetComposerTask(preset.kind)
+      invalidateRecommendations(); setKind(task.kind); setPurpose(task.purpose); setInstruction(preset.instruction)
+      if (connection) { setConfig(connectionConfig(connection)); setConfigDirty(false); configDirtyRef.current = false; setApiKey('') }
+      setComposeDirty(true); composeDirtyRef.current = true; setMessage('预设已填入。请核对资料范围，保存预览后再发送。')
+    }
+    if (composeDirty || (connection && configDirty)) {
+      setDiscard({ label: `用“${preset.title}”替换当前任务、协作要求${connection ? '和连接选择' : ''}？所选资料保持保留，请重新核对发送预览。`, proceed: apply })
+    } else apply()
+  }
+  async function routeDefaultPreset() {
+    if (blocked || generating || archived || lock.current || memoryTask || !knowledge) return
+    const targetKind = (purpose ?? kind) as AiPresetKind
+    const at = epoch.current
+    lock.current = true; setReading(true); setMessage(null)
+    try {
+      const result = await request(() => api.getAiPresets({ bookId: book.book.id }))
+      if (!active(at)) return
+      if (!result.ok) {
+        setMessage(result.error.message)
+        if (result.error.code === 'REQUEST_TIMEOUT' || result.error.code === 'SERVICE_UNAVAILABLE') setPending({ requestId: result.error.requestId, label: '读取任务默认预设', receive: (response) => {
+          if (response.command !== 'ai.presets.get') return false
+          if (response.result.ok && !isAiPresetsSnapshot(response.result.data, book.book.id)) return false
+          setMessage(response.result.ok ? '原预设读取已确认。当前输入保留，请重新明确载入默认预设。' : response.result.error.message)
+          return true
+        } })
+        return
+      }
+      if (!isAiPresetsSnapshot(result.data, book.book.id) || result.data.bookRevision !== knowledge.bookRevision) { setMessage('预设或作品版本已变化，请先刷新作品状态。'); return }
+      const preset = result.data.presets.find((item) => item.kind === targetKind && item.defaultForTask && !item.archived)
+      if (!preset) { setMessage('当前任务没有默认预设，可在“任务预设与累计用量”中设置。'); return }
+      const connection = preset.connectionId ? connections?.connections.find((item) => item.id === preset.connectionId) : undefined
+      if (preset.connectionId && !connection) { setMessage('默认预设绑定的连接不可用，请先编辑预设。'); return }
+      const apply = () => {
+        setInstruction(preset.instruction); invalidateRecommendations()
+        if (connection) { setConfig(connectionConfig(connection)); setConfigDirty(false); configDirtyRef.current = false; setApiKey('') }
+        setComposeDirty(true); composeDirtyRef.current = true; setMessage(`已载入“${preset.title}”及其模型选择，请核对固定预览后发送。`)
+      }
+      if (instruction.trim() || configDirty) setDiscard({ label: `载入默认预设“${preset.title}”，替换当前要求${connection ? '与连接' : ''}？`, proceed: apply })
+      else apply()
+    } finally { if (active(at)) { lock.current = false; setReading(false) } }
+  }
+  async function syncPresetBook(snapshot: Pick<AiPresetsSnapshot, 'bookId' | 'bookRevision'>) {
+    const at = epoch.current
+    // 读取超时时服务会建立请求门禁，先确认这一份结果再发下一次读取，保留唯一待核对编号。
+    const status = await request(() => api.getKnowledgeStatus({ bookId: book.book.id }))
+    if (!active(at)) throw new Error('Preset panel changed')
+    if (!status.ok) throw new DomainError(status.error)
+    const currentBook = await request(() => api.getBook({ bookId: book.book.id }))
+    if (!active(at)) throw new Error('Preset panel changed')
+    if (!currentBook.ok) throw new DomainError(currentBook.error)
+    if (status.data.bookId !== book.book.id ||
+      currentBook.data.book.id !== book.book.id || status.data.bookRevision < snapshot.bookRevision ||
+      currentBook.data.book.revision < snapshot.bookRevision) throw new Error('Preset book sync failed')
+    setKnowledge(status.data); onBookChange(currentBook.data)
+  }
 
   const recoveryText = JSON.stringify({ bookId: book.book.id, chapterId: chapter.id, runId: run?.id ?? null,
-    composition: composeDirty ? { kind, purpose, instruction, connectionId: config.id, contextScope, ...(perspective !== 'author' ? { perspective } : {}),
+    composition: composeDirty ? { kind, purpose, instruction, useLivingContext, connectionId: config.id, contextScope, ...(perspective !== 'author' ? { perspective } : {}),
       ...(characterMode ? { characterScope: characterSelection.scope } : {}),
-      ...(character.person || character.storyOrder || character.readerLimited ? { characterDraft: character } : {}), firstBlock, lastBlock, selectedMemory, selectedSummaries } : undefined,
+      ...(character.person || character.storyOrder || character.readerLimited ? { characterDraft: character } : {}), firstBlock, lastBlock, selectedMemory, selectedSummaries, creativeSelection } : undefined,
     characterContext: run?.context.characterContext,
     acceptedText: outputDirty ? acceptedText : undefined,
     memoryReview: outputDirty && run && isAiMemoryTask(run.kind) ? memoryDrafts : undefined,
     connection: configDirty ? config : undefined }, null, 2)
   const taskCurrent = run?.chapterId === chapter.id
-  const runScopeMatches = !run || matchesPerspective(run.context, perspective, characterMode ? characterSelection.scope : undefined)
+  const runScopeMatches = !run || (matchesPerspective(run.context, perspective, characterMode ? characterSelection.scope : undefined)
+    && Boolean(run.context.livingContext) === useLivingContext
+    && JSON.stringify(run.context.creativeResources?.items.map(creativeRef) ?? []) === JSON.stringify(creativeSelection.refs)
+    && (run.context.creativeResources?.application ?? '') === creativeSelection.application)
   return <Dialog title="AI 创作协作" wide busy={blocked} onClose={close} error={panelError}>
     <div className={layout.intro}><p>《{book.book.title}》 · {chapter.title}</p><span>预览 → 明确发送 → 作者审阅 → 采用</span></div>
     <p className={styles.note}>你决定章节方向与定稿。规划存入章节备注，续写追加到章尾，改写替换选中的连续段落。章节摘要与知识建议需逐条审阅、核对引文后，另行选择入库。</p>
     {operation && <p className={styles.note} role="status">{operation}…</p>}
+    {toolRecoveryRequested && edited && <section className={layout.pending} role="alert"><h3>留存本页协作内容</h3><p>子工具的内容已确认留存。本页还含有创作要求、连接修改或改稿，请一并留存后进入恢复。</p><textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} aria-label="本页协作内容副本" /><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已留存本页内容</label><button className={shared.button} type="button" disabled={!recoveryConfirmed || checkingLocal || checkingReceipt || Boolean(operation)} onClick={recover}>进入草稿与恢复</button></section>}
     {(localUnknown || pendingMessage) && <section className={layout.pending} role="alert"><h3>本次操作结果未确认</h3><p>{pendingMessage ?? `${pending?.label}尚未收到确定结果。新的写入已暂停，请查询原请求。`}</p><p>不会自动重发生成、密钥或采用请求。恢复后请先核对提议记录与磁盘正文。</p>{edited && <><label>需要留存的本页内容<textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} onFocus={(event) => event.target.select()} /></label><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已留存需要的创作要求与改稿，允许进入恢复</label></>}<div className={styles.actions}><button className={shared.button} type="button" disabled={checkingLocal || checkingReceipt} onClick={pendingMessage ? onCheckReceipt : () => void checkLocalReceipt()}>{checkingLocal || checkingReceipt ? '正在核对…' : '查询原回执'}</button><button className={shared.button} type="button" disabled={checkingLocal || checkingReceipt || (edited && !recoveryConfirmed)} onClick={recover}>进入草稿与恢复</button></div></section>}
     {loading && <p className={styles.note} role="status">正在读取连接、版本与提议记录…</p>}
     {!loading && (!connections || !knowledge || !history) && <button className={shared.button} type="button" disabled={blocked} onClick={() => setRefreshRequested(true)}>重新读取状态</button>}
-    {!loading && knowledge && (knowledge.schemaVersion < 9 || connections?.requiresUpgrade || history?.requiresUpgrade) && <section className={layout.upgrade}><h3>{knowledge.schemaVersion >= 7 ? '为本书启用前文摘要' : knowledge.schemaVersion >= 6 ? '为本书启用章节整理与前文摘要' : '为本书启用 AI 协作与章节整理'}</h3><p>当前作品格式 v{knowledge.schemaVersion}。先建立独立数据库备份，再升级到当前作品格式。连接、固定预览、原输出与采用记录保存在本书；已有 v6 创作协作可继续使用。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意创建本书数据库备份并升级</label><button className={shared.primaryButton} type="button" disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
+    {!loading && knowledge && (knowledge.schemaVersion < LIVING_SCHEMA_VERSION || connections?.requiresUpgrade || history?.requiresUpgrade) && <section className={layout.upgrade}><h3>为本书启用完整创作工具</h3><p>当前作品格式 v{knowledge.schemaVersion}。先建立独立数据库备份，再升级到 v{LIVING_SCHEMA_VERSION}，启用演进大纲、定稿记忆及已有创作工具。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意创建本书数据库备份并升级</label><button className={shared.primaryButton} type="button" disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
     {backupPath && <p className={layout.backupPath}>升级前数据库副本：{backupPath}</p>}
     {ready && <>
+      <details className={styles.connection}><summary>任务预设与累计用量</summary><AiPresetsPanel api={api} bookId={book.book.id} bookRevision={knowledge.bookRevision}
+        disabled={busy || loading || reading || studyDirty || reviewDirty || generating || archived || Boolean(operation || pending || pendingMessage)} onDirtyChange={setPresetsDirty}
+        connections={connections.connections} initialTitle={`${taskName(kind, purpose)}预设`} initialKind={purpose ?? (memoryTask ? 'continue' : kind as 'plan' | 'continue' | 'rewrite')}
+        initialInstruction={instruction} initialConnectionId={selectedConnection?.id ?? null} onApply={applyPreset} onChanged={syncPresetBook}
+        onUnknown={(failure) => setMessage(failure.message)} onRecover={recoverTool} /></details>
       <details className={styles.connection} open={!selectedConnection || configDirty}><summary>模型连接 · {selectedConnection?.name ?? '请先配置'}</summary><form className={layout.editorForm} onSubmit={(event) => void saveConnection(event)}>
         <div className={styles.connectionChoice}><label>已保存连接<select value={selectedConnection?.id ?? ''} disabled={blocked || generating || configDirty} onChange={(event) => resetConfig(event.target.value)}><option value="" disabled>选择连接</option>{connections?.connections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><button className={shared.button} type="button" disabled={blocked || generating || configDirty || archived} onClick={() => { setConfig(freshConnection()); setConfigDirty(true); configDirtyRef.current = true; setApiKey('') }}>新建连接</button></div>
         <div className={layout.twoColumns}><label>连接名称<input value={config.name} required maxLength={80} disabled={blocked || generating || archived} onChange={(event) => editConfig({ name: event.target.value })} /></label><label>模型名称<input value={config.model} required maxLength={200} disabled={blocked || generating || archived} placeholder="填写接口支持的模型名" onChange={(event) => editConfig({ model: event.target.value })} /></label></div>
@@ -915,7 +1028,13 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
         <p className={styles.note}>使用兼容 Chat Completions 的接口。密钥不回显、不写入作品文件；退出桌面进程后需重新填写。本机无鉴权接口可留空。修改配置后须先保存。</p>
         <div className={styles.actions}><button className={shared.primaryButton} type="submit" disabled={blocked || generating || archived}>保存连接</button>{configDirty && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => resetConfig()}>放弃连接修改</button>}</div>
       </form></details>
-      <section className={styles.composer} aria-label="创作要求"><div className={styles.heading}><h3>准备一次创作协作</h3><span>先在本地保存预览</span></div><div className={layout.twoColumns}><label>任务<select value={purpose === 'review' ? 'review' : kind} disabled={blocked || generating || archived} onChange={(event) => { invalidateRecommendations(); const review = event.target.value === 'review'; setKind(review ? 'plan' : event.target.value as AiTaskKind); setPurpose(review ? 'review' : undefined); if (review && !instruction.trim()) setInstruction('审阅本章的结构、因果、人物知情、伏笔、语言与对白。逐项提供固定段落引文、理由、反证与修改建议；证据不足时明确说明。'); setComposeDirty(true) }}>{Object.entries(taskLabels).map(([value, label]) => <option key={value} value={value} disabled={perspective !== 'author' && (value === 'summarize' || value === 'extract')}>{label}</option>)}<option value="review">审稿 · 核对问题与证据</option></select></label><label>正文上下文<select value={memoryTask ? 'chapter' : contextScope} disabled={blocked || generating || archived || memoryTask} onChange={(event) => { invalidateRecommendations(); setContextScope(event.target.value as 'chapter' | 'nearby'); setComposeDirty(true) }}><option value="chapter">当前整章</option><option value="nearby">相关段落附近</option></select></label></div>
+      <section className={styles.composer} aria-label="创作要求"><div className={styles.heading}><h3>准备一次创作协作</h3><span>先在本地保存预览</span></div><div className={layout.twoColumns}><label>任务<select value={purpose ?? kind} disabled={blocked || generating || archived} onChange={(event) => {
+        invalidateRecommendations(); const next = event.target.value; const usage = next === 'review' || next === 'study' ? next : undefined
+        setKind(usage ? 'plan' : next as AiTaskKind); setPurpose(usage)
+        if (!instruction.trim() && usage) setInstruction(usage === 'review' ? '审阅本章的结构、因果、人物知情、伏笔、语言与对白。逐项提供固定段落引文、理由、反证与修改建议；证据不足时明确说明。' : '拆解选定参考文本的场景结构、人物动机、冲突与表达手法，给出逐字证据，提炼可迁移的写作方法。只分析实际选定的文本。')
+        setComposeDirty(true)
+      }}>{Object.entries(taskLabels).map(([value, label]) => <option key={value} value={value} disabled={perspective !== 'author' && (value === 'summarize' || value === 'extract')}>{label}</option>)}<option value="review">审稿 · 核对问题与证据</option><option value="study" disabled={perspective !== 'author'}>拆书 · 提炼可复用方法</option></select></label><label>正文上下文<select value={memoryTask || purpose === 'review' ? 'chapter' : contextScope} disabled={blocked || generating || archived || memoryTask || purpose === 'study' || purpose === 'review'} onChange={(event) => { invalidateRecommendations(); setContextScope(event.target.value as 'chapter' | 'nearby'); setComposeDirty(true) }}><option value="chapter">当前整章</option><option value="nearby">相关段落附近</option></select></label></div>
+        {purpose === 'study' && <p className={styles.note}>在下方选择“全局灵感与拆书”中的参考文本。拆书不发送当前章正文、简介和设定；先移除本书记忆与摘要。结果经逐项确认后存为全局方法，可在下一次写作中直接选用。</p>}
         <div className={styles.perspective}><label>附加资料范围<select value={perspective} aria-describedby={perspectiveHintId} disabled={blocked || generating || archived} onChange={(event) => { const value = event.target.value; if (value === 'author' || value === 'reader' || value === 'character') changePerspective(value) }}><option value="author">作者资料（默认）</option><option value="reader" disabled={memoryTask}>读者已披露资料</option><option value="character" disabled={!knowledge || knowledge.schemaVersion < 4}>人物视角资料</option></select></label>
           <p id={perspectiveHintId} className={styles.note}>{characterMode ? '只附加所选人物在指定故事时点之前形成的认知片段；态度与隐瞒标记独立保留。人物身份仅含名称与固定标识。原文和要求仍需作者核对，不保证逐句防剧透。' : memoryTask ? '章节摘要和知识提取仅支持作者资料范围。' : perspective === 'reader' ? '附加资料仅限披露章严格早于本章、且披露锚点仍在当前原稿中的故事片段；准备预览时核对。当前章、要求、章节目标和备注仍为作者输入，整次发送不保证防剧透；人物知情未知。' : '按现有采纳与来源规则选择附加资料，可选入完整前文摘要。读者披露与人物知情互不推导。'}</p>
         </div>
@@ -940,6 +1059,8 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
           {characterSelection.error && <p className={styles.note}>{characterSelection.error}</p>}
           <p className={styles.note}>人物模式的创作输入只使用原文与本次要求，不发送章节目标、视角备注或章节备注；固定预览会展示实际发送内容。</p>
         </section>}
+        <label><span><input type="checkbox" checked={useLivingContext} disabled={blocked || generating || archived || (!useLivingContext && (!knowledge || knowledge.schemaVersion < LIVING_SCHEMA_VERSION || perspective !== 'author' || memoryTask || purpose !== undefined && purpose !== 'review'))} onChange={(event) => { setUseLivingContext(event.target.checked); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null) }} /> 携带本章有效章纲与最近三个前文章节内的有效记忆</span><small className={styles.note}>用于作者视角的创作与审稿。审稿缺失项可引用固定章纲要求；读者试读时建议仅发送正文，并核对实际预览。</small></label>
+        {!memoryTask && <button className={shared.button} type="button" disabled={blocked || generating || archived || configDirty} onClick={() => void routeDefaultPreset()}>载入此任务的默认要求与模型</button>}
         <label>你的要求<textarea value={instruction} required maxLength={6000} rows={4} disabled={blocked || generating || archived} placeholder="写下场景目标、希望推进的变化，以及需要保持的边界。" onChange={(event) => { invalidateRecommendations(); setInstruction(event.target.value); setComposeDirty(true) }} /></label>
         {kind === 'rewrite' && <div className={styles.selection}><div className={layout.twoColumns}><label>改写首段<select value={firstBlock} disabled={blocked || generating || archived} onChange={(event) => { invalidateRecommendations(); setFirstBlock(event.target.value); if (!lastBlock) setLastBlock(event.target.value); setComposeDirty(true) }}><option value="">选择首段</option>{blocks.map((block) => <option key={block.id} value={block.id}>{block.label}</option>)}</select></label><label>改写末段<select value={lastBlock} disabled={blocked || generating || archived} onChange={(event) => { invalidateRecommendations(); setLastBlock(event.target.value); setComposeDirty(true) }}><option value="">选择末段</option>{blocks.map((block) => <option key={block.id} value={block.id}>{block.label}</option>)}</select></label></div><p className={styles.note}>{selection.error ?? `已选择 ${selection.ids.length} 个连续段落；范围不能跨过分场线。`}</p></div>}
         {!memoryTask && <details className={styles.memory}>
@@ -1008,22 +1129,32 @@ function AiPanelSession({ api, book, chapter, busy, error, pendingMessage, check
         {summaryBlocked && <p className={shared.formError} role="alert">已选 {selectedSummaries.length} 份完整前文摘要，请先在摘要选择中移除全部摘要，才能准备{characterMode ? '人物' : '读者已披露资料'}预览。</p>}
         {characterTaskBlocked && <p className={shared.formError} role="alert">人物模式不支持当前的“{taskLabels[kind]}”任务。已保留任务和资料选择，请明确更换为规划、续写或改写，或切回作者资料范围。</p>}
         {characterMemoryBlocked && <p className={shared.formError} role="alert">已选片段包含不符合当前人物范围的选择。请展开“选择本书资料”逐一移除，再按当前人物和时点重新检索选择。</p>}
+        {!purpose && !memoryTask && perspective === 'author' && <ForeshadowDueNotice api={api} book={book} chapterId={chapter.id} disabled={blocked || generating || archived} onUse={(ref) => {
+          if (blocked || generating || archived) return
+          if (creativeSelection.refs.some((item) => item.source === ref.source && item.id === ref.id)) { setMessage('这条伏笔已在本次上下文选择中。'); return }
+          if (creativeSelection.refs.length >= MAX_CREATIVE_RESOURCES) { setMessage(`最多附加 ${MAX_CREATIVE_RESOURCES} 项创作资料，请先移除一项。`); return }
+          setCreativeSelection({ ...creativeSelection, refs: [...creativeSelection.refs, ref] }); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null)
+        }} />}
+        <CreativeResourcePicker api={api} bookId={book.book.id} chapterId={chapter.id} bookRevision={knowledge.bookRevision} disabled={blocked || generating || archived} limited={perspective !== 'author' || memoryTask} studyOnly={purpose === 'study'} value={creativeSelection} onChange={(value) => { setCreativeSelection(value); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null) }} />
         <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || generating || archived || configDirty || !selectedConnection || !instruction.trim() || Boolean(selection.error) || memoryRequiresUpgrade || summaryBlocked || characterTaskBlocked || characterMemoryBlocked || (characterMode && (!characterSelection.scope || characterRequiresUpgrade))} onClick={() => void prepare()}>保存并预览发送内容</button><span className={styles.note}>这一步只在本地保存，不发起模型调用。</span></div>
       </section>
-      {run && <section className={styles.run} aria-label="当前提议"><div className={styles.heading}><h3>{run.context.purpose === 'review' ? '审稿' : taskLabels[run.kind]} · {stateLabels[run.state]}</h3><span>{run.chapterTitle} · {displayTime(run.updatedAt)}</span></div>{!taskCurrent && <p className={styles.note}>这是其他章节的记录。回到对应章节后才能发送或采用。</p>}{run.error && <p className={shared.formError}>{run.error}</p>}<ContextPreview context={run.context} />
+      {run && <section className={styles.run} aria-label="当前提议"><div className={styles.heading}><h3>{taskName(run.kind, run.context.purpose)} · {stateLabels[run.state]}</h3><span>{run.chapterTitle} · {displayTime(run.updatedAt)}</span></div>{!taskCurrent && <p className={styles.note}>这是其他章节的记录。回到对应章节后才能发送或采用。</p>}{run.error && <p className={shared.formError}>{run.error}</p>}<ContextPreview context={run.context} />
         {run.state === 'prepared' && <><p className={styles.note}>{composeDirty || configDirty || !runScopeMatches ? '要求、人物范围或配置已有修改，请保存新的预览后再发送。' : '确认上面的接口、模型与实际内容后，再发送这份固定预览。'}</p><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || composeDirty || configDirty || !runScopeMatches || characterRequiresUpgrade || characterTaskBlocked || summaryBlocked || characterMemoryBlocked} onClick={() => void sendRun()}>确认发送并开始生成</button></>}
         {run.state !== 'prepared' && (isAiMemoryTask(run.kind)
           ? <AiMemoryReview api={api} run={run} drafts={memoryDrafts} disabled={blocked || archived || !taskCurrent} onChange={(value) => { setMemoryDrafts(value); setOutputDirty(true) }} onAdopt={() => void adoptMemory()} />
           : <OutputReview run={run} text={acceptedText} disabled={blocked || archived} onChange={(value) => { setAcceptedText(value); setOutputDirty(value !== (run.acceptedText ?? run.outputText)) }} />)}
         {run.state === 'running' && <div className={styles.actions}>{run.active === false ? <><p className={styles.note}>本次记录仍显示生成中，但桌面进程已无活动请求。已停止自动查询；不会重发。核对后可明确标记中断并保留输出。</p><button className={shared.button} type="button" disabled={blocked} onClick={() => void interruptRun()}>标记中断并保留输出</button></> : <button className={shared.button} type="button" disabled={blocked} onClick={() => void stopRun()}>取消生成并保留输出</button>}{pollStopped && <button className={shared.button} type="button" disabled={blocked} onClick={() => setRequestedRunId(run.id)}>重新读取生成状态</button>}</div>}
-        {run.state === 'succeeded' && run.context.purpose === 'review' && <><p className={styles.note}>请在审稿问题中逐项确认理由、引文和建议，并关联这次候选及固定原稿。候选编号：{run.id}</p>{onRegisterReview && <button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || edited} onClick={() => onRegisterReview(run)}>登记审稿问题</button>}</>}
-        {run.state === 'succeeded' && run.context.purpose !== 'review' && !isAiMemoryTask(run.kind) && <><p className={styles.note}>{run.kind === 'plan' ? '采用后将规划追加至本章备注。' : run.kind === 'continue' ? '采用后将新稿追加至本章末尾，并保留原稿历史。' : '采用后将替换预览中选定的连续段落，并保留原稿历史。'}{outputDirty ? ' 当前改稿尚未保存；采用时会一并记录。' : ''}</p><div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || !acceptedText.trim()} onClick={() => void adopt()}>{run.kind === 'plan' ? '采用为章节备注' : run.kind === 'continue' ? '采用并追加至章尾' : '采用并替换所选段落'}</button>{outputDirty && <button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard({ label: '放弃尚未采用的输出修改，恢复模型原提议？', proceed: () => { setAcceptedText(run.outputText); setOutputDirty(false) } })}>放弃改稿</button>}</div></>}
+        {run.state === 'succeeded' && run.context.purpose === 'review' && run.context.promptVersion === REVIEW_PROMPT_VERSION && <ReviewResults key={run.id} api={api} run={run} bookRevision={knowledge.bookRevision}
+          disabled={busy || loading || reading || studyDirty || presetsDirty || generating || archived || Boolean(operation || pending || pendingMessage)} onDirtyChange={setReviewDirty} onChanged={syncPresetBook} onRecover={recoverTool} />}
+        {run.state === 'succeeded' && run.context.purpose === 'review' && run.context.promptVersion !== REVIEW_PROMPT_VERSION && <><p className={styles.note}>这份历史候选可保留原文，在审稿清单中手工登记并核对固定段落。</p>{onRegisterReview && <button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || edited} onClick={() => onRegisterReview(run)}>登记审稿问题</button>}</>}
+        {run.state === 'succeeded' && run.context.purpose === 'study' && <StudyResults key={run.id} api={api} run={run} disabled={busy || loading || reading || generating || archived || reviewDirty || presetsDirty || Boolean(operation || pending || pendingMessage)} onDirtyChange={setStudyDirty} onUnknown={(failure) => setMessage(failure.message)} onRecover={recoverTool} />}
+        {run.state === 'succeeded' && run.context.purpose === undefined && !isAiMemoryTask(run.kind) && <><p className={styles.note}>{run.kind === 'plan' ? '采用后将规划追加至本章备注。' : run.kind === 'continue' ? '采用后将新稿追加至本章末尾，并保留原稿历史。' : '采用后将替换预览中选定的连续段落，并保留原稿历史。'}{outputDirty ? ' 当前改稿尚未保存；采用时会一并记录。' : ''}</p><div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || !acceptedText.trim()} onClick={() => void adopt()}>{run.kind === 'plan' ? '采用为章节备注' : run.kind === 'continue' ? '采用并追加至章尾' : '采用并替换所选段落'}</button>{outputDirty && <button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard({ label: '放弃尚未采用的输出修改，恢复模型原提议？', proceed: () => { setAcceptedText(run.outputText); setOutputDirty(false) } })}>放弃改稿</button>}</div></>}
         {!['running', 'adopted', 'rejected'].includes(run.state) && <button className={`${shared.textButton} ${styles.reject}`} type="button" disabled={blocked || archived} onClick={() => {
           const target = { bookId: run.bookId, runId: run.id, expectedVersion: run.version }
           setDiscard({ label: '拒绝这次提议并放弃尚未采用的输出修改？输入、原输出和拒绝记录都会保留。', proceed: () => void rejectRun(target) })
         }}>作者拒绝这次提议</button>}
       </section>}
-      <details className={styles.history}><summary>本书提议记录 · 每页最多 30 条</summary><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage()}>最新记录</button>{history?.nextBefore && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage(history.nextBefore!)}>更早记录</button>}{before && <span className={styles.note}>正在查看历史分页</span>}</div>{history?.runs.length ? <ul>{history.runs.map((item) => <li key={item.id}><button className={styles.historyItem} type="button" disabled={blocked || generating} aria-current={run?.id === item.id ? 'true' : undefined} onClick={() => openHistory(item)}><span><strong>{item.chapterTitle} · {item.purpose === 'review' ? '审稿' : taskLabels[item.kind]}</strong><small>{item.connectionName} · {item.model} · {displayTime(item.createdAt)}</small></span><span>{stateLabels[item.state]}<small>{item.outputCharacters.toLocaleString()} 字符</small></span></button></li>)}</ul> : <p className={styles.note}>保存一次发送预览后，这里会留下输入、输出和作者决定。</p>}</details>
+      <details className={styles.history}><summary>本书提议记录 · 每页最多 30 条</summary><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage()}>最新记录</button>{history?.nextBefore && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage(history.nextBefore!)}>更早记录</button>}{before && <span className={styles.note}>正在查看历史分页</span>}</div>{history?.runs.length ? <ul>{history.runs.map((item) => <li key={item.id}><button className={styles.historyItem} type="button" disabled={blocked || generating} aria-current={run?.id === item.id ? 'true' : undefined} onClick={() => openHistory(item)}><span><strong>{item.chapterTitle} · {taskName(item.kind, item.purpose)}</strong><small>{item.connectionName} · {item.model} · {displayTime(item.createdAt)}</small></span><span>{stateLabels[item.state]}<small>{item.outputCharacters.toLocaleString()} 字符</small></span></button></li>)}</ul> : <p className={styles.note}>保存一次发送预览后，这里会留下输入、输出和作者决定。</p>}</details>
       {archived && <p className={styles.note}>作品已归档，可查看已有记录；解除归档后再配置、生成或采用。</p>}
     </>}
     {discard && <section className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard(null)}>继续保留</button><button className={shared.button} type="button" disabled={blocked} onClick={() => { const action = discard.proceed; setDiscard(null); action() }}>确认放弃并继续</button></div></section>}

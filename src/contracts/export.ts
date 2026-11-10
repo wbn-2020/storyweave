@@ -4,10 +4,17 @@ import type { ManuscriptDocument } from './manuscript'
 export const MAX_EXPORT_CHAPTERS = 20_000
 export const MAX_EXPORT_BYTES = 2 * 1024 * 1024 * 1024
 export const BOOK_EXPORT_PREVIEW_TTL = 30 * 60 * 1000
+export const MAX_EXPORT_NOTE_LENGTH = 20_000
 
-export type BookExportFormat = 'txt' | 'markdown' | 'epub'
+export type BookExportFormat = 'txt' | 'markdown' | 'epub' | 'docx'
 export type BookExportScope = 'working' | 'finalized'
 export type BookExportChapterState = 'included' | 'not_selected' | 'not_finalized' | 'unavailable'
+
+export interface BookExportDocxOptions {
+  submissionLayout: boolean
+  preface: string
+  afterword: string
+}
 
 export interface BookExportOptions {
   format: BookExportFormat
@@ -16,6 +23,7 @@ export interface BookExportOptions {
   chapterIds: string[]
   author: string
   language: string
+  docx?: BookExportDocxOptions
 }
 
 export interface BookExportPrepareInput extends BookExportOptions {
@@ -54,6 +62,7 @@ export interface BookExportManifest {
   includeChapterTitles: boolean
   author: string
   language: string
+  docx?: BookExportDocxOptions
   chapters: BookExportChapterEntry[]
 }
 
@@ -128,8 +137,8 @@ function reference(data: Record<string, unknown>): BookExportReference {
 }
 
 export function parseBookExportPrepareInput(value: unknown): BookExportPrepareInput {
-  const data = record(value, ['bookId', 'expectedBookRevision', 'format', 'scope', 'includeChapterTitles', 'chapterIds', 'author', 'language'])
-  if ((data.format !== 'txt' && data.format !== 'markdown' && data.format !== 'epub') ||
+  const data = record(value, ['bookId', 'expectedBookRevision', 'format', 'scope', 'includeChapterTitles', 'chapterIds', 'author', 'language', 'docx'])
+  if ((data.format !== 'txt' && data.format !== 'markdown' && data.format !== 'epub' && data.format !== 'docx') ||
       (data.scope !== 'working' && data.scope !== 'finalized') || typeof data.includeChapterTitles !== 'boolean') return invalid()
   if (!Array.isArray(data.chapterIds) || data.chapterIds.length === 0 || data.chapterIds.length > MAX_EXPORT_CHAPTERS) {
     return invalid(`请明确选择 1 至 ${MAX_EXPORT_CHAPTERS.toLocaleString()} 个章节。`)
@@ -140,10 +149,20 @@ export function parseBookExportPrepareInput(value: unknown): BookExportPrepareIn
   if (typeof data.language !== 'string' || data.language.length > 64 || !data.language.trim()) return invalid('请填写正文语言，例如 zh-CN 或 en。')
   let language: string
   try { language = new Intl.Locale(data.language.trim()).baseName } catch { return invalid('正文语言无效，请使用 zh-CN、en 等语言标签。') }
+  let docx: BookExportDocxOptions | undefined
+  if (data.docx !== undefined) {
+    if (data.format !== 'docx') return invalid('投稿排版与前言后记仅用于 DOCX，请重新选择导出格式。')
+    const options = record(data.docx, ['submissionLayout', 'preface', 'afterword'])
+    if (typeof options.submissionLayout !== 'boolean' || typeof options.preface !== 'string' || typeof options.afterword !== 'string' ||
+        options.preface.length > MAX_EXPORT_NOTE_LENGTH || options.afterword.length > MAX_EXPORT_NOTE_LENGTH) {
+      return invalid(`DOCX 排版选项无效，前言与后记各不能超过 ${MAX_EXPORT_NOTE_LENGTH.toLocaleString()} 个字符。`)
+    }
+    docx = { submissionLayout: options.submissionLayout, preface: options.preface, afterword: options.afterword }
+  }
   return {
     bookId: requiredId(data.bookId).toLowerCase(), expectedBookRevision: requiredInteger(data.expectedBookRevision, '作品版本'),
     format: data.format, scope: data.scope, includeChapterTitles: data.includeChapterTitles, chapterIds,
-    author: data.author.trim(), language,
+    author: data.author.trim(), language, ...(docx ? { docx } : {}),
   }
 }
 
@@ -154,7 +173,7 @@ export function parseBookExportChapterInput(value: unknown): BookExportChapterIn
 
 export function parseBookExportCommitInput(value: unknown): BookExportCommitInput {
   const data = record(value, [...referenceKeys, 'format', 'acknowledgeOmissions'])
-  if ((data.format !== 'txt' && data.format !== 'markdown' && data.format !== 'epub') || typeof data.acknowledgeOmissions !== 'boolean') return invalid()
+  if ((data.format !== 'txt' && data.format !== 'markdown' && data.format !== 'epub' && data.format !== 'docx') || typeof data.acknowledgeOmissions !== 'boolean') return invalid()
   return { ...reference(data), format: data.format, acknowledgeOmissions: data.acknowledgeOmissions }
 }
 

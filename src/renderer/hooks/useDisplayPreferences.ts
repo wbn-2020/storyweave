@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { DEFAULT_DISPLAY_PREFERENCES, parseDisplayPreferences, type DisplayPreferences } from '../display-preferences'
 
 const STORAGE_KEY = 'storyweave.display-preferences.v1'
@@ -24,10 +24,14 @@ export function useDisplayPreferences() {
   const [state, setState] = useState<PreferenceState>(readPreferences)
   const current = useRef(state.preferences)
 
+  // 将工作室主题同步到根元素 data-studio-theme，保证主画布与所有浮层/对话框共享同一套色彩体系。
+  useLayoutEffect(() => {
+    document.documentElement.dataset.studioTheme = state.preferences.studioTheme
+  }, [state.preferences.studioTheme])
+
   const save = useCallback((preferences: DisplayPreferences) => {
     let warning: string | null = null
     try {
-      // 仅由作者调整或重试时写入；初始化失败不能自动覆盖原有记录。
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, preferences }))
     } catch {
       warning = '显示已在当前窗口生效，但未能保存到本机。下次打开可能还原，请重新保存当前偏好。'

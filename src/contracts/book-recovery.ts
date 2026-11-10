@@ -96,15 +96,17 @@ function path(value: unknown): string {
   return result
 }
 function book(value: unknown): BookSummary {
-  const data = record(value, ['id', 'title', 'genre', 'synopsis', 'archivedAt', 'revision', 'createdAt', 'updatedAt'])
+  const data = record(value, ['id', 'title', 'genre', 'synopsis', 'archivedAt', 'revision', 'createdAt', 'updatedAt', 'lifecycle'])
   const title = requiredText(data.title, '作品名', 120)
   if (title !== data.title || typeof data.genre !== 'string' || data.genre.length > 120 || typeof data.synopsis !== 'string' || data.synopsis.length > 20_000) throw invalid()
+  if (data.lifecycle !== undefined && !['kickstarting', 'active', 'finished'].includes(String(data.lifecycle))) throw invalid()
   return { id: id(data.id), title, genre: data.genre, synopsis: data.synopsis,
     archivedAt: data.archivedAt === null ? null : time(data.archivedAt), revision: requiredInteger(data.revision, '作品版本'),
-    createdAt: time(data.createdAt), updatedAt: time(data.updatedAt) }
+    createdAt: time(data.createdAt), updatedAt: time(data.updatedAt),
+    ...(data.lifecycle === undefined ? {} : { lifecycle: data.lifecycle as BookSummary['lifecycle'] }) }
 }
 function schema(value: unknown): number {
-  const version = requiredInteger(value, '作品格式版本', 13)
+  const version = requiredInteger(value, '作品格式版本', 17)
   if (version < 2) throw invalid()
   return version
 }

@@ -1,0 +1,88 @@
+.panel {
+  min-width: 0;
+  padding: 16px 18px;
+  color: var(--color-ink);
+  background: var(--bg-subtle);
+  border: 1px solid var(--color-line);
+  border-radius: 14px;
+  font: 13.5px/1.6 var(--font-ui);
+  overflow-wrap: anywhere;
+  container-type: inline-size;
+}
+.panel h3 { margin: 0; font: 650 16px/1.4 var(--font-manuscript); color: var(--color-ink); }
+.panel h4 { margin: 0 0 10px; font-size: 14.5px; font-weight: 600; color: var(--color-ink); }
+.panel p { margin: 6px 0; max-width: 75ch; }
+.panel label { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12.5px; font-weight: 500; }
+.panel fieldset { display: grid; gap: 12px; min-width: 0; margin: 0 0 16px; padding: 0; border: 0; }
+.panel :is(input:not([type='checkbox']), textarea, select) {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 9px;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  font: inherit;
+  font-weight: 400;
+}
+.panel textarea { resize: vertical; line-height: 1.7; }
+.panel input[type='checkbox'] { width: 16px; height: 16px; flex: 0 0 auto; margin: 3px 0 0; accent-color: var(--color-accent); }
+.panel :is(input, textarea, select):disabled { background: var(--bg-subtle); color: var(--color-muted); opacity: .75; }
+.panel :is(button, input, textarea, select, summary, [tabindex]):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.panel button:disabled { cursor: not-allowed; opacity: .55; }
+.heading, .rowHeading, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.heading, .rowHeading { justify-content: space-between; }
+.heading { margin-bottom: 14px; }
+.heading > div { min-width: 0; flex: 1 1 260px; }
+.rowHeading > div:first-child { min-width: 0; flex: 1 1 180px; }
+.rowHeading strong { font-weight: 600; }
+.button, .primaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.primaryButton { color: var(--color-accent-ink); background: var(--color-accent); border-color: var(--color-accent); font-weight: 600; }
+.button:hover:not(:disabled) { background: var(--color-raised); }
+.primaryButton:hover:not(:disabled) { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.muted { color: var(--color-muted); font-size: 12.5px; font-weight: 400; }
+.error, .warning, .notice { padding: 10px 13px; border-radius: 9px; font-size: 12.5px; }
+.panel .error { margin-block: 12px; background: var(--color-danger-soft); color: var(--color-danger); }
+.panel .warning { margin-block: 12px; background: var(--color-warning-soft); color: var(--color-warning); }
+.panel .notice { margin-block: 12px; background: var(--color-success-soft); color: var(--color-success); }
+.usage { margin: 16px 0; padding: 14px 0; border-block: 1px solid var(--color-line); }
+.usage dl { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 0 0 10px; }
+.usage dl > div { min-width: 100px; }
+.usage dt { color: var(--color-muted); font-size: 11.5px; }
+.usage dd { margin: 3px 0 0; font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.list { margin: 14px 0; padding: 0; list-style: none; }
+.list > li { padding: 14px 0; border-bottom: 1px solid var(--color-line); }
+.tag { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: var(--color-accent-soft); color: var(--color-accent); font-size: 11.5px; font-weight: 600; vertical-align: middle; }
+.details { margin-top: 10px; min-width: 0; }
+.details summary { padding-block: 4px; cursor: pointer; color: var(--color-accent); font-size: 12.5px; }
+.details textarea { margin-top: 8px; }
+.instruction { white-space: pre-wrap; }
+.panel .empty { margin-block: 20px; color: var(--color-muted); font-size: 12.5px; }
+.editor { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--color-line); min-width: 0; }
+.fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
+.panel .check { flex-direction: row; align-items: flex-start; gap: 8px; font-weight: 400; }
+.comparison { margin-block: 14px; padding: 14px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-surface); }
+.comparison textarea { margin-block: 8px 12px; }
+@container (max-width: 420px) {
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .rowHeading { align-items: flex-start; }
+  .usage dl { gap: 12px 18px; }
+}

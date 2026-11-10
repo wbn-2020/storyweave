@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { DomainError, isRecord, requiredId } from '../../contracts/api'
 import { parseAiFinishInput, type AiFinishInput } from '../../contracts/ai'
 import { parseMemoryVectorFinishInput, type MemoryVectorFinishInput } from '../../contracts/memory-vector'
+import { parseGenerationFinishInput, type GenerationFinishInput } from '../../contracts/generation'
 import { checkedLocalDirectory, readSelectedFile, writeNewText } from '../file-access'
 
 export type PendingAiPayload = { contextHash: string } & (
-  { command: 'ai.finish'; input: AiFinishInput } | { command: 'memory.vector.finish'; input: MemoryVectorFinishInput }
+  { command: 'ai.finish'; input: AiFinishInput } | { command: 'memory.vector.finish'; input: MemoryVectorFinishInput } | { command: 'generation.finish'; input: GenerationFinishInput }
 )
 interface PendingAiVolume { id: string; hash: string | null; sequence: number; identity: string }
 interface Capacity { files: number; bytes: number }
@@ -49,6 +50,7 @@ function parsePayload(value: unknown): PendingAiPayload {
       typeof value.contextHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.contextHash)) invalid('待存模型结果的身份无效，请保留原文件。')
   if (value.command === 'ai.finish') return { command: value.command, contextHash: value.contextHash, input: parseAiFinishInput(value.input) }
   if (value.command === 'memory.vector.finish') return { command: value.command, contextHash: value.contextHash, input: parseMemoryVectorFinishInput(value.input) }
+  if (value.command === 'generation.finish') return { command: value.command, contextHash: value.contextHash, input: parseGenerationFinishInput(value.input) }
   return invalid('待存模型结果的命令不受支持。')
 }
 
@@ -60,9 +62,10 @@ function read(path: string, maximum: number): Uint8Array {
 
 /** 只写终态数据白名单；会话连接对象、请求头和密钥不能进入恢复日志。 */
 export class PendingAiResults {
+  constructor(private readonly directoryName: 'pending-model-results' | 'pending-generation-results' = 'pending-model-results') {}
   private directory(root: string, create: boolean): string | null {
     const parent = checkedLocalDirectory(root)
-    const directory = join(parent, 'pending-model-results')
+    const directory = join(parent, this.directoryName)
     if (!lstatSync(directory, { throwIfNoEntry: false })) {
       if (!create) return null
       mkdirSync(directory)
@@ -183,7 +186,7 @@ export class PendingAiResults {
           requiredId(value.readyId).toLowerCase() !== value.readyId)) invalid('待存模型结果的原分卷身份不符。')
         yield { file: { id, hash, root, volume, payload: parsePayload(value.payload) } }
       } catch {
-        yield { warning: `无法核对分卷 ${volume.id} 的留存项目 ${name}，原文件保留在 pending-model-results 中。` }
+        yield { warning: `无法核对分卷 ${volume.id} 的留存项目 ${name}，原文件保留在 ${this.directoryName} 中。` }
       }
     }
   }

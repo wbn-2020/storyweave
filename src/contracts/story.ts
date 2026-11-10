@@ -22,8 +22,8 @@ export type Disclosure = { state: 'unknown' | 'undisclosed' } | {
 
 /** 计划不要求正文已经存在；旧版固定段落目标保持原样可读。 */
 export type PlannedPayoff = Disclosure
-  | { state: 'volume'; volumeId: string | null; label: string }
-  | { state: 'chapter'; chapterId: string | null; label: string }
+  | { state: 'volume'; volumeId: string | null; label: string; targetNumber?: number }
+  | { state: 'chapter'; chapterId: string | null; label: string; targetNumber?: number }
   | { state: 'scene'; sceneId: string | null; chapterId: string | null; label: string }
   | { state: 'text'; label: string }
 
@@ -52,6 +52,8 @@ export interface RelationFields extends StoryCommonFields {
   toEntityId: string
   relationType: string
   direction: 'directed' | 'mutual'
+  /** 关系层次独立于读者披露；旧记录省略时表示未标注。 */
+  layer?: 'surface' | 'hidden'
   validFrom: StoryTime
   validUntil: StoryTime
   startEventId: string | null
@@ -72,6 +74,8 @@ export interface EventFields extends StoryCommonFields {
   participantIds: string[]
   mentionedEntityIds: string[]
   stateChanges: StoryStateChange[]
+  /** 作者核对整章后明确登记的缺席；正文修订改变后只能作为旧稿核对记录。 */
+  appearanceCheck?: { chapterId: string; revisionId: string; absentEntityIds: string[]; note: string }
 }
 
 export interface ForeshadowMilestone {
@@ -246,10 +250,16 @@ export function parsePlannedPayoff(value: unknown): PlannedPayoff {
   if (value.state === 'unknown' || value.state === 'undisclosed' || value.state === 'located') return parseDisclosure(value)
   const state = choice(value.state, ['volume', 'chapter', 'scene', 'text'] as const, '计划回收范围')
   const keys = state === 'volume' ? ['volumeId'] : state === 'chapter' ? ['chapterId'] : state === 'scene' ? ['sceneId', 'chapterId'] : []
-  const data = record(value, ['state', 'label', ...keys], '计划回收目标')
+  const data = record(value, ['state', 'label', ...keys, ...(state === 'volume' || state === 'chapter' ? ['targetNumber'] : [])], '计划回收目标')
   const label = requiredText(data.label, '计划回收范围说明', 500)
-  if (state === 'volume') return { state, label, volumeId: nullableId(data.volumeId) }
-  if (state === 'chapter') return { state, label, chapterId: nullableId(data.chapterId) }
+  let targetNumber: number | undefined
+  if (data.targetNumber !== undefined) {
+    targetNumber = requiredInteger(data.targetNumber, '计划卷章序号', 200_000)
+    if (targetNumber < 1 || data.volumeId != null || data.chapterId != null) return invalid('未建卷章序号须从 1 开始，且不能同时关联已有卷章。')
+  }
+  const number = targetNumber === undefined ? {} : { targetNumber }
+  if (state === 'volume') return { state, label, volumeId: nullableId(data.volumeId), ...number }
+  if (state === 'chapter') return { state, label, chapterId: nullableId(data.chapterId), ...number }
   if (state === 'scene') return { state, label, sceneId: nullableId(data.sceneId), chapterId: nullableId(data.chapterId) }
   return { state, label }
 }
@@ -257,7 +267,7 @@ export function parsePlannedPayoff(value: unknown): PlannedPayoff {
 export function plannedPayoffText(value: PlannedPayoff): string {
   if ('label' in value) {
     const labels = { volume: '卷', chapter: '章', scene: '场景', text: '文字范围' }
-    return `${labels[value.state]}：${value.label}`
+    return `${labels[value.state]}：${value.label}${'targetNumber' in value && value.targetNumber !== undefined ? `（计划第 ${value.targetNumber} ${value.state === 'volume' ? '卷' : '章'}）` : ''}`
   }
   // 旧目标沿用原记忆投影文字，避免同一历史修订重新投影时改变摘要指纹。
   if (value.state !== 'located') return value.state === 'unknown' ? '未知' : '未披露'
@@ -341,8 +351,8 @@ export function parseStoryFields(value: unknown, bookId: string): StoryRecordFie
   if (!isRecord(value)) return invalid('故事记录格式无效。')
   const kind = choice(value.kind, STORY_KINDS, '故事记录类型')
   const extraKeys = kind === 'relation'
-    ? ['fromEntityId', 'toEntityId', 'relationType', 'direction', 'validFrom', 'validUntil', 'startEventId', 'endEventId']
-    : kind === 'event' ? ['storyTime', 'participantIds', 'mentionedEntityIds', 'stateChanges']
+    ? ['fromEntityId', 'toEntityId', 'relationType', 'direction', 'layer', 'validFrom', 'validUntil', 'startEventId', 'endEventId']
+    : kind === 'event' ? ['storyTime', 'participantIds', 'mentionedEntityIds', 'stateChanges', 'appearanceCheck']
       : kind === 'foreshadow' ? ['storyTime', 'stage', 'entityIds', 'eventIds', 'milestones', 'plannedPayoff', 'actualPayoff']
         : ['storyTime', 'personId', 'attitude', 'concealed', 'acquisitionEventId', 'evolution']
   const data = record(value, [...COMMON_KEYS, ...extraKeys], '故事记录')
@@ -363,10 +373,24 @@ export function parseStoryFields(value: unknown, bookId: string): StoryRecordFie
     }
     return { ...common, kind, fromEntityId, toEntityId, relationType: requiredText(data.relationType, '关系类型', 120),
       direction: choice(data.direction, ['directed', 'mutual'] as const, '关系方向'), validFrom, validUntil,
+      ...(data.layer === undefined ? {} : { layer: choice(data.layer, ['surface', 'hidden'] as const, '关系层次') }),
       startEventId: nullableId(data.startEventId), endEventId: nullableId(data.endEventId) }
   }
-  if (kind === 'event') return { ...common, kind, storyTime: parseStoryTime(data.storyTime),
-    participantIds: idList(data.participantIds, '事件参与者'), mentionedEntityIds: idList(data.mentionedEntityIds, '被提及对象'), stateChanges: stateChanges(data.stateChanges) }
+  if (kind === 'event') {
+    const participantIds = idList(data.participantIds, '事件参与者')
+    const mentionedEntityIds = idList(data.mentionedEntityIds, '被提及对象')
+    let appearanceCheck: EventFields['appearanceCheck']
+    if (data.appearanceCheck !== undefined) {
+      const check = record(data.appearanceCheck, ['chapterId', 'revisionId', 'absentEntityIds', 'note'], '整章出场核对')
+      const absentEntityIds = idList(check.absentEntityIds, '已核对缺席的实体')
+      if (!absentEntityIds.length) return invalid('整章核对至少需要一个明确缺席的实体。')
+      if (absentEntityIds.some((entityId) => participantIds.includes(entityId) || mentionedEntityIds.includes(entityId))) return invalid('同一条事件不能同时标注某实体参与／提及与整章缺席。')
+      appearanceCheck = { chapterId: id(check.chapterId), revisionId: id(check.revisionId), absentEntityIds,
+        note: requiredText(check.note, '整章核对说明', 2000) }
+    }
+    return { ...common, kind, storyTime: parseStoryTime(data.storyTime), participantIds, mentionedEntityIds,
+      stateChanges: stateChanges(data.stateChanges), ...(appearanceCheck ? { appearanceCheck } : {}) }
+  }
   if (kind === 'foreshadow') {
     const stage = choice(data.stage, FORESHADOW_STAGES, '伏笔阶段')
     const history = milestones(data.milestones, bookId)

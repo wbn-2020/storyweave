@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DomainError, type AppError, type ChapterSnapshot, type Result, type SaveChapterOutput, type StudioApi } from '../../contracts/api'
+import { DomainError, type AppError, type BookSnapshot, type ChapterSnapshot, type Result, type SaveChapterOutput, type StudioApi } from '../../contracts/api'
 import { countCharacters, parseManuscript } from '../../contracts/manuscript'
 
 interface Session {
@@ -118,8 +118,10 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
             return false
           }
           const dirty = latest.editSequence !== captured.editSequence
-          publish({ ...latest, chapter: result.data.chapter, dirty, saving: false, error: null })
-          onSavedRef.current(result.data.chapter)
+          const chapter = latest.chapter.revisionId === result.data.chapter.revisionId && latest.chapter.bookRevision > result.data.chapter.bookRevision
+            ? latest.chapter : result.data.chapter
+          publish({ ...latest, chapter, dirty, saving: false, error: null })
+          onSavedRef.current(chapter)
         } catch {
           uncertainSave.current ??= { captured }
           publish({ ...current.current, saving: false, error: {
@@ -162,6 +164,15 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
 
   const getCurrent = useCallback(() => current.current, [])
 
+  const updateMetadata = useCallback((book: BookSnapshot) => {
+    const latest = current.current, chapter = latest.chapter
+    if (!chapter || chapter.bookId !== book.book.id || chapter.bookRevision > book.book.revision) return
+    const summary = book.chapters.find((item) => item.id === chapter.id)
+    if (!summary || summary.revisionId !== chapter.revisionId) return
+    // 同一正文修订只推进目录资料；保留草稿、输入法状态及编辑器实例和恢复检查点身份。
+    publish({ ...latest, chapter: { ...chapter, ...summary, bookRevision: book.book.revision } })
+  }, [publish])
+
   const resetAfterRecovery = useCallback((chapter: ChapterSnapshot | null, expectedEditSequence: number) => {
     // 仅供“副本已落盘 + 作者明确重载 + 磁盘读取成功”的恢复流程调用。
     if (inFlight.current || current.current.saving || current.current.composing || current.current.editSequence !== expectedEditSequence) {
@@ -194,5 +205,5 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
     }
   }, [flush, stopTimer])
 
-  return { session, changed, setComposing, load, flush, isComposing, getCurrent, resetAfterRecovery, pauseAutoSave }
+  return { session, changed, setComposing, load, updateMetadata, flush, isComposing, getCurrent, resetAfterRecovery, pauseAutoSave }
 }

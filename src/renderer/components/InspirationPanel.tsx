@@ -9,6 +9,9 @@ import { displayTime, request } from '../request'
 import { sameFields, useToolSession } from './workbench-ui'
 import ui from './WorkbenchPanel.module.css'
 import styles from './InspirationPanel.module.css'
+import { InspirationImport } from './InspirationImport'
+import { emptyStudyCard, isStudyCardKind, studyMaterialText } from '../../contracts/study-card'
+import { StudyCardEditor } from './StudyCardEditor'
 
 export interface InspirationPanelProps {
   api: StudioApi
@@ -31,10 +34,10 @@ interface CopyDraft {
   requiresUpgrade: boolean
 }
 const kindLabels: Record<InspirationFields['kind'], string> = {
-  idea: '灵感', reference: '参考作品', observation: '场景观察', excerpt: '摘录', technique: '手法分析', method: '方法卡',
+  idea: '灵感', reference: '参考作品', observation: '场景观察', excerpt: '摘录', technique: '手法分析', method: '方法卡', beat: '节拍骨架', style: '文风卡',
 }
 const nextKind: Record<InspirationFields['kind'], InspirationFields['kind']> = {
-  idea: 'observation', reference: 'observation', observation: 'excerpt', excerpt: 'technique', technique: 'method', method: 'observation',
+  idea: 'observation', reference: 'observation', observation: 'excerpt', excerpt: 'technique', technique: 'method', method: 'observation', beat: 'method', style: 'method',
 }
 const firstListing: Listing = { search: '', bookId: '', includeArchived: false, offset: 0 }
 function savedFields(item: InspirationItem): InspirationFields {
@@ -42,7 +45,7 @@ function savedFields(item: InspirationItem): InspirationFields {
 }
 function asNote(source: InspirationItem): NoteFields {
   const attribution = [`灵感来源：${source.title}`, source.source && `出处：${source.source}`, source.tags.length && `标签：${source.tags.join('、')}`].filter(Boolean).join('\n')
-  return { title: source.title, category: source.kind === 'method' || source.kind === 'technique' ? 'method' : source.kind === 'idea' ? 'inspiration' : 'material', body: `${source.body}\n\n${attribution}` }
+  return { title: source.title, category: source.kind === 'method' || source.kind === 'technique' || isStudyCardKind(source.kind) ? 'method' : source.kind === 'idea' ? 'inspiration' : 'material', body: `${studyMaterialText(source.kind, source.body)}\n\n${attribution}` }
 }
 function validItem(value: InspirationItem): boolean {
   try {
@@ -58,7 +61,13 @@ function validPage(value: InspirationPage, offset: number): boolean {
 
 export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChange, onUnknown, onBookChanged, onRecover }: InspirationPanelProps) {
   const currentBook = activeBook && ('book' in activeBook ? activeBook.book : activeBook)
-  const tool = useToolSession({ api, disabled, onDirtyChange, onUnknown })
+  const [importDirty, setImportDirty] = useState(false)
+  const [editorDirty, setEditorDirty] = useState(false)
+  const [importRefresh, setImportRefresh] = useState(0)
+  const dirtyCallback = useRef(onDirtyChange)
+  dirtyCallback.current = onDirtyChange
+  const tool = useToolSession({ api, disabled: disabled || importDirty, onDirtyChange: setEditorDirty, onUnknown })
+  useEffect(() => { onDirtyChange(editorDirty || importDirty) }, [editorDirty, importDirty, onDirtyChange])
   const [page, setPage] = useState<InspirationPage | null>(null)
   const [listing, setListing] = useState<Listing>(firstListing)
   const [filters, setFilters] = useState(firstListing)
@@ -76,7 +85,9 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   const copyTooLarge = Boolean(copyFields && (copyFields.title.length > 120 || copyFields.body.length > MAX_NOTE_BODY))
 
   useEffect(() => { if (!disabled && freshRef.current) { freshRef.current = false; void load(firstListing) } }, [disabled])
-  useEffect(() => () => { freshRef.current = true }, [])
+  useEffect(() => { if (importRefresh && !importDirty && !editorDirty) void load(firstListing) }, [importRefresh, importDirty])
+  // 恢复会卸载整个面板，聚合后的离开保护须直接向主窗口解除。
+  useEffect(() => () => { freshRef.current = true; dirtyCallback.current(false) }, [])
   useEffect(() => { if (draft) { editorRef.current?.scrollIntoView({ block: 'nearest' }); editorRef.current?.focus({ preventScroll: true }) } }, [draft?.input.id])
   useEffect(() => { setRecoveryPreserved(false) }, [tool.pending])
 
@@ -109,6 +120,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     const fields: InspirationFields = { kind: parent ? nextKind[parent.kind] : initialKind, title: '', body: '',
       source: parent?.source ?? '', tags: parent ? [...parent.tags] : [], parentId: parent?.id ?? null,
       bookId: parent?.bookId ?? null, archived: false }
+    if (isStudyCardKind(fields.kind)) fields.body = emptyStudyCard(fields.kind)
     setSelected(null); setCopy(null); setDiscard(false)
     setDraft({ input: { id: crypto.randomUUID(), expectedRevision: 0, fields }, tags: fields.tags.join('，') })
     tool.setDirty(Boolean(parent))
@@ -184,6 +196,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   return <section className={`${ui.panel} ${styles.panel}`} aria-label="灵感与拆书收件箱" aria-busy={tool.busy}>
     <div className={ui.heading}><div><h3>灵感与拆书</h3><p className={ui.muted}>随时收集，再把观察整理成自己的方法。</p></div><div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={tool.locked} onClick={() => create()}>记一条灵感</button><button className={ui.button} type="button" disabled={tool.locked} onClick={() => create(undefined, 'reference')}>添加参考作品</button></div></div>
     <p className={ui.muted}>收件箱属于当前书库，独立于作品保存；单部作品恢复包不包含这里的原件。</p>
+    <InspirationImport api={api} disabled={disabled || editorDirty} onDirtyChange={setImportDirty} onSaved={() => setImportRefresh((value) => value + 1)} onUnknown={onUnknown} onRecover={onRecover} />
     {tool.error && <p className={ui.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={ui.notice} role="status">{tool.notice}</p>}
     {tool.pending && <div className={ui.warning}><p>保存结果尚未确认，表单与本次复制标识已保留。核对原请求前暂停写入。</p><div className={ui.actions}>{tool.pending.error.requestId && <button className={ui.button} type="button" disabled={tool.busy} onClick={() => void tool.checkReceipt().then((success) => { if (success) void load({ ...listing, offset: 0 }, true) })}>核对原请求</button>}</div><p>若服务连接已中断，请先保留当前输入，再从主窗口的草稿恢复入口重新连接并核对资料。不会自动重发本次复制。</p>{onRecover && <><label className={ui.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存当前输入与复制标识，可以离开面板恢复</label><button className={ui.button} type="button" disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}</div>}
@@ -199,7 +212,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
         : !visible.length ? <div className={ui.empty}><h4>{page.total ? '本页没有匹配类型' : '留住还没找到归属的想法'}</h4><p>{page.total ? '可切换本页类型，或翻页继续查找。' : '写下一个画面、一句对白，或添加一本参考作品。以后再关联作品、补充出处。'}</p><button className={ui.button} type="button" disabled={tool.locked} onClick={() => create()}>新建灵感</button></div>
           : <ul className={styles.items}>{visible.map((item) => <li key={item.id} className={selected?.id === item.id ? styles.selected : undefined}>
             <button className={styles.itemTitle} type="button" disabled={tool.locked} aria-pressed={selected?.id === item.id} onClick={() => open(item)}><span>{kindLabels[item.kind]}{item.archived ? ' · 已归档' : ''}</span><strong>{item.title}</strong></button>
-            <p className={styles.preview}>{item.body || '尚未填写内容'}</p>{item.source && <p className={ui.muted}>出处：{item.source}</p>}{item.parentId && <p className={ui.muted}>上级：{parentNames[item.parentId] ?? `参考条目 ${item.parentId}`}</p>}
+            <p className={styles.preview}>{studyMaterialText(item.kind, item.body) || '尚未填写内容'}</p>{item.source && <p className={ui.muted}>出处：{item.source}</p>}{item.parentId && <p className={ui.muted}>上级：{parentNames[item.parentId] ?? `参考条目 ${item.parentId}`}</p>}
             {!!item.tags.length && <p className={styles.tags}>{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</p>}<p className={ui.muted}>{item.bookId ? books.find((entry) => entry.id === item.bookId)?.title ?? '关联作品暂不在书架' : '未关联作品'} · {displayTime(item.updatedAt)}</p>
             <div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked} onClick={() => create(item)}>继续写{kindLabels[nextKind[item.kind]]}</button><button className={ui.button} type="button" disabled={tool.locked || !books.some((entry) => !entry.archivedAt)} onClick={() => startCopy(item)}>复制到作品笔记</button></div>
           </li>)}</ul>}
@@ -208,10 +221,15 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
       {draft && <form ref={editorRef} tabIndex={-1} className={styles.editor} onSubmit={(event) => void save(event)}>
         <div className={ui.heading}><h4>{draft.input.expectedRevision ? '编辑收集条目' : '新建收集条目'}</h4><span className={ui.muted}>{tool.dirty ? '有未保存更改' : '尚未修改'}</span></div>
         <fieldset disabled={tool.locked}><div className={ui.fields}><div className={ui.fieldGrid}>
-          <label>类型<select value={draft.input.fields.kind} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, kind: event.target.value as InspirationFields['kind'] } } })}>{INSPIRATION_KINDS.map((item) => <option key={item} value={item}>{kindLabels[item]}</option>)}</select></label>
+          <label>类型<select value={draft.input.fields.kind} onChange={(event) => {
+            const kind = event.target.value as InspirationFields['kind']
+            const body = studyMaterialText(draft.input.fields.kind, draft.input.fields.body)
+            changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, kind, body: isStudyCardKind(kind) ? emptyStudyCard(kind, body) : body } } })
+          }}>{INSPIRATION_KINDS.map((item) => <option key={item} value={item}>{kindLabels[item]}</option>)}</select></label>
           <label>关联作品<select value={draft.input.fields.bookId ?? ''} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, bookId: event.target.value || null } } })}><option value="">暂不关联</option>{draft.input.fields.bookId && !books.some((item) => item.id === draft.input.fields.bookId) && <option value={draft.input.fields.bookId}>原关联作品暂不在书架</option>}{books.map((item) => <option key={item.id} value={item.id}>{item.title}{item.archivedAt ? '（已归档）' : ''}</option>)}</select></label></div>
           <label>标题<input required maxLength={160} value={draft.input.fields.title} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, title: event.target.value } } })} /></label>
-          <label>{draft.input.fields.kind === 'excerpt' ? '摘录内容' : draft.input.fields.kind === 'method' ? '方法与适用条件' : draft.input.fields.kind === 'technique' ? '写法、作用与分析' : '内容'}<textarea rows={10} maxLength={40000} value={draft.input.fields.body} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body: event.target.value } } })} /></label>
+          {isStudyCardKind(draft.input.fields.kind) ? <StudyCardEditor kind={draft.input.fields.kind} body={draft.input.fields.body} disabled={tool.locked} onChange={(body) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body } } })} />
+            : <label>{draft.input.fields.kind === 'excerpt' ? '摘录内容' : draft.input.fields.kind === 'method' ? '方法与适用条件' : draft.input.fields.kind === 'technique' ? '写法、作用与分析' : '内容'}<textarea rows={10} maxLength={40000} value={draft.input.fields.body} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body: event.target.value } } })} /></label>}
           <label>出处<textarea rows={2} maxLength={2000} placeholder="作品、作者、章节、页码或链接；记录足够的回查线索" value={draft.input.fields.source} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, source: event.target.value } } })} /></label>
           <label>标签<input maxLength={1100} placeholder="用逗号分隔，最多 20 个，每个最多 50 字符" value={draft.tags} onChange={(event) => changed({ ...draft, tags: event.target.value })} /></label>
           <InspirationParentPicker key={draft.input.id} api={api} id={draft.input.id} value={draft.input.fields.parentId} label={draft.input.fields.parentId ? parentNames[draft.input.fields.parentId] : undefined} disabled={tool.locked}

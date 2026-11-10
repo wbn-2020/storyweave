@@ -1,7 +1,7 @@
 import { createElement, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { isRecord, type BookSnapshot, type RequestStatus, type Result } from '../../contracts/api'
 import {
-  bookExportExtension, bookExportReference, type BookExportChapterEntry, type BookExportChapterInput,
+  MAX_EXPORT_NOTE_LENGTH, bookExportExtension, bookExportReference, type BookExportChapterEntry, type BookExportChapterInput,
   type BookExportChapterPreview, type BookExportCommitInput, type BookExportOptions,
   type BookExportPrepareInput, type BookExportPreview,
 } from '../../contracts/export'
@@ -32,6 +32,7 @@ export interface ExportBookPanelProps {
 
 const PAGE_SIZE = 50
 const stateLabels = { included: '包含', not_selected: '未勾选', not_finalized: '缺少定稿', unavailable: '正文不可用' }
+const defaultDocxOptions = { submissionLayout: false, preface: '', afterword: '' }
 
 function fileSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`
@@ -47,11 +48,12 @@ function inlinePreview(nodes: InlineNode[]): ReactNode[] {
   })
 }
 
-function ChapterContent({ chapter }: { chapter: BookExportChapterPreview }) {
-  if (chapter.format !== 'epub') return <pre className={styles.textPreview}>{chapter.text || '（空白章节）'}</pre>
-  return <article className={styles.epubPreview} lang={chapter.language}>
+function ChapterContent({ chapter, submissionLayout }: { chapter: BookExportChapterPreview; submissionLayout: boolean }) {
+  if (chapter.format !== 'epub' && chapter.format !== 'docx') return <pre className={styles.textPreview}>{chapter.text || '（空白章节）'}</pre>
+  return <article className={`${styles.epubPreview} ${chapter.format === 'docx' && submissionLayout ? styles.submissionPreview : ''}`} lang={chapter.language}>
     {chapter.includeChapterTitles && <h1>{chapter.title}</h1>}
-    {chapter.document.content.map((block) => block.type === 'horizontalRule' ? <hr key={block.attrs.id} />
+    {chapter.document.content.map((block) => block.type === 'horizontalRule'
+      ? chapter.format === 'docx' ? <p key={block.attrs.id} className={styles.sceneBreak}>* * *</p> : <hr key={block.attrs.id} />
       : createElement(block.type === 'heading' ? `h${block.attrs.level + (chapter.includeChapterTitles ? 1 : 0)}` : 'p',
         { key: block.attrs.id }, block.content?.length ? inlinePreview(block.content) : <br />))}
   </article>
@@ -91,6 +93,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
   const shownChapters = filtered.slice(shownPage * PAGE_SIZE, (shownPage + 1) * PAGE_SIZE)
   const blocked = busy || preparing || exporting || Boolean(pendingRead)
   const currentPreview = preview?.manifest.bookId === book.book.id && preview.manifest.bookRevision === book.book.revision ? preview : null
+  const docxOptions = options.docx ?? defaultDocxOptions
 
   useEffect(() => {
     mounted.current = true
@@ -132,8 +135,10 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
     invalidate()
     const ticket = ++prepareTicket.current
     const bookKey = currentBook
-    const input = { bookId: book.book.id, expectedBookRevision: book.book.revision, ...options,
-      ...(options.format === 'epub' ? {} : { author: '', language: 'zh-CN' }), chapterIds: selectedIds }
+    const { docx, ...baseOptions } = options
+    const input = { bookId: book.book.id, expectedBookRevision: book.book.revision, ...baseOptions,
+      ...(options.format === 'epub' || options.format === 'docx' ? {} : { author: '', language: 'zh-CN' }),
+      ...(options.format === 'docx' ? { docx: docx ?? defaultDocxOptions } : {}), chapterIds: selectedIds }
     setPreparing(true)
     const result = await request(() => api.prepareBookExport(input))
     if (!mounted.current || ticket !== prepareTicket.current || currentBookRef.current !== bookKey) return
@@ -186,10 +191,18 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
     // 补领只接收原请求身份与固定版本，不能把另一章的迟到结果放进当前预览。
     if (waiting.kind === 'prepare') {
       const selectedChapters = new Set(waiting.input.chapterIds)
+      let language: string
+      try { language = new Intl.Locale(waiting.input.language.trim()).baseName } catch {
+        setReadError('预览语言与原请求不符，请关闭面板后重新读取。'); return
+      }
       if (!isRecord(value) || !isRecord(value.manifest) || !Array.isArray(value.manifest.chapters) ||
           value.manifest.bookId !== waiting.input.bookId || value.manifest.bookRevision !== waiting.input.expectedBookRevision ||
           value.manifest.outputFormat !== waiting.input.format || value.manifest.scope !== waiting.input.scope ||
           value.manifest.includeChapterTitles !== waiting.input.includeChapterTitles ||
+          value.manifest.author !== waiting.input.author.trim() || value.manifest.language !== language ||
+          (waiting.input.format === 'docx' && (!isRecord(value.manifest.docx) ||
+            value.manifest.docx.submissionLayout !== waiting.input.docx?.submissionLayout ||
+            value.manifest.docx.preface !== waiting.input.docx?.preface || value.manifest.docx.afterword !== waiting.input.docx?.afterword)) ||
           value.manifest.chapters.some((entry: unknown) => !isRecord(entry) || typeof entry.chapterId !== 'string' ||
             entry.selected !== selectedChapters.has(entry.chapterId)) ||
           value.manifest.chapters.filter((entry: unknown) => isRecord(entry) && entry.selected === true).length !== selectedChapters.size ||
@@ -201,7 +214,8 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
     } else {
       const entry = waiting.preview.manifest.chapters.find((chapter) => chapter.chapterId === waiting.chapterId)
       if (!isRecord(value) || value.bookId !== waiting.preview.manifest.bookId || value.chapterId !== waiting.chapterId ||
-          value.revisionId !== entry?.revisionId || !isRecord(value.document)) {
+          value.revisionId !== entry?.revisionId || value.format !== waiting.preview.manifest.outputFormat ||
+          value.language !== waiting.preview.manifest.language || value.includeChapterTitles !== waiting.preview.manifest.includeChapterTitles || !isRecord(value.document)) {
         setReadError('正文回执与固定版本不符，请关闭面板后重新读取。'); return
       }
       setPendingRead(null); setReadError(null)
@@ -240,16 +254,26 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
         <option value="working">当前工作稿</option><option value="finalized">作者定稿</option>
       </select></label>
       <label>成品格式<select value={options.format} disabled={blocked} onChange={(event) => updateOptions({ format: event.target.value as BookExportOptions['format'] })}>
-        <option value="txt">TXT · 纯文本</option><option value="markdown">Markdown · 保留文字格式</option><option value="epub">EPUB · 读者样书</option>
+        <option value="txt">TXT · 纯文本</option><option value="markdown">Markdown · 保留文字格式</option><option value="epub">EPUB · 读者样书</option><option value="docx">DOCX · Word 文稿</option>
       </select></label>
-      {options.format === 'epub' && <>
+      {(options.format === 'epub' || options.format === 'docx') && <>
         <label>署名（选填）<input value={options.author} maxLength={120} disabled={blocked} onChange={(event) => updateOptions({ author: event.target.value })} autoComplete="off" /></label>
         <label>正文语言<input value={options.language} maxLength={64} disabled={blocked} onChange={(event) => updateOptions({ language: event.target.value })} aria-describedby={`${headingId}-language`} autoComplete="off" />
           <small id={`${headingId}-language`}>例如 zh-CN（简体中文）、en（英语）</small></label>
       </>}
     </div>
+    {options.format === 'docx' && <fieldset className={styles.docxOptions} disabled={blocked}>
+      <legend>DOCX 排版与附文</legend>
+      <label className={`${appStyles.checkLabel} ${styles.check}`}><input type="checkbox" checked={docxOptions.submissionLayout} onChange={(event) => updateOptions({ docx: { ...docxOptions, submissionLayout: event.target.checked } })} />使用投稿排版</label>
+      <p className={styles.help}>含书名与署名页，采用 A4、2.54 厘米页边距、12 磅正文宋体／Times New Roman；投稿排版使用双倍行距、正文首行缩进两字和页码。各章另起一页。</p>
+      <div className={styles.options}>
+        <label>前言（选填）<textarea value={docxOptions.preface} maxLength={MAX_EXPORT_NOTE_LENGTH} rows={4} onChange={(event) => updateOptions({ docx: { ...docxOptions, preface: event.target.value } })} aria-describedby={`${headingId}-notes`} /></label>
+        <label>后记（选填）<textarea value={docxOptions.afterword} maxLength={MAX_EXPORT_NOTE_LENGTH} rows={4} onChange={(event) => updateOptions({ docx: { ...docxOptions, afterword: event.target.value } })} aria-describedby={`${headingId}-notes`} /></label>
+      </div>
+      <p id={`${headingId}-notes`} className={styles.help}>各限 {MAX_EXPORT_NOTE_LENGTH.toLocaleString()} 个字符，仅进入本次 DOCX 与版本清单，不计入章节字数。修改后须重新生成预览。</p>
+    </fieldset>}
     <label className={`${appStyles.checkLabel} ${styles.check}`}><input type="checkbox" checked={options.includeChapterTitles} disabled={blocked} onChange={(event) => updateOptions({ includeChapterTitles: event.target.checked })} />正文包含章节标题</label>
-    <p className={styles.help}>{options.scope === 'finalized' ? '尚未定稿的章节会列出跳过原因；定稿后对工作稿的修改不进入本次成品。' : '预览使用已经保存的当前稿，生成预览后修改作品需要重新核对。'}{options.format === 'epub' && ' EPUB 目录保留章节名，实际分页与字体由阅读器决定。'}</p>
+    <p className={styles.help}>{options.scope === 'finalized' ? '尚未定稿的章节会列出跳过原因；定稿后对工作稿的修改不进入本次成品。' : '预览使用已经保存的当前稿，生成预览后修改作品需要重新核对。'}{options.format === 'epub' && ' EPUB 目录保留章节名，实际分页与字体由阅读器决定。'}{options.format === 'docx' && ' DOCX 预览展示固定正文与格式，实际分页和字体以打开文档的软件为准。'}</p>
 
     <div className={styles.selectionBar}>
       <p id={headingId}>已选 {selectedIds.length.toLocaleString()} / {book.chapters.length.toLocaleString()} 章</p>
@@ -289,12 +313,17 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
       </section>
       <section className={styles.manuscript} aria-label="固定版本正文预览" aria-busy={reading}>
         <h3>{chapterPreview ? chapterPreview.title : '正文预览'}</h3>
-        {reading ? <p className={styles.empty} role="status">正在读取固定版本…</p> : chapterPreview ? <ChapterContent chapter={chapterPreview} /> : <p className={styles.empty}>生成清单后，选择一章查看本次交付正文。</p>}
+        {reading ? <p className={styles.empty} role="status">正在读取固定版本…</p> : chapterPreview ? <ChapterContent chapter={chapterPreview} submissionLayout={currentPreview?.manifest.docx?.submissionLayout ?? false} /> : <p className={styles.empty}>生成清单后，选择一章查看本次交付正文。</p>}
       </section>
     </div>
 
     {currentPreview && <section className={styles.summary} aria-label="本次交付核对结果" aria-live="polite">
       <p><strong>{currentPreview.chapterCount.toLocaleString()} 章 · {currentPreview.characterCount.toLocaleString()} 字</strong><span>预计 {fileSize(currentPreview.estimatedBytes)} · 作品版本 {currentPreview.manifest.bookRevision}</span></p>
+      {currentPreview.manifest.outputFormat === 'docx' && <>
+        <p>DOCX · {currentPreview.manifest.docx?.submissionLayout ? '投稿排版' : '常规排版'} · 附文不计入章节字数</p>
+        {currentPreview.manifest.docx?.preface && <details><summary>本次前言</summary><pre className={styles.notePreview}>{currentPreview.manifest.docx.preface}</pre></details>}
+        {currentPreview.manifest.docx?.afterword && <details><summary>本次后记</summary><pre className={styles.notePreview}>{currentPreview.manifest.docx.afterword}</pre></details>}
+      </>}
       {currentPreview.blockingReasons.length > 0 && <ul className={styles.problem}>{currentPreview.blockingReasons.map((message) => <li key={message}>{message}</li>)}</ul>}
       {currentPreview.warnings.length > 0 && <ul>{currentPreview.warnings.map((message) => <li key={message}>{message}</li>)}</ul>}
       {currentPreview.requiresAcknowledgement && <label className={`${appStyles.checkLabel} ${styles.check}`}><input type="checkbox" checked={acknowledged} disabled={blocked} onChange={(event) => setAcknowledged(event.target.checked)} />我已核对不导出与空白章节，按这份清单交付。</label>}

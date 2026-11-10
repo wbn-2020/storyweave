@@ -13,6 +13,7 @@ interface Props {
   api: StudioApi
   book: BookSnapshot
   initialKind?: StoryKind
+  initialId?: string
   busy: boolean
   error?: string | null
   pendingMessage?: string | null
@@ -49,7 +50,7 @@ function CognitionHistoryView({ states, currentId, disabled, onSelect }: {
   </section>
 }
 
-export function StoryPanel({ api, book, initialKind = 'relation', busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, scenes }: Props) {
+export function StoryPanel({ api, book, initialKind = 'relation', initialId, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, scenes }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusRefresh, setStatusRefresh] = useState(0)
@@ -79,6 +80,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
   const readLock = useRef(false)
   const writeLock = useRef(false)
   const readTicket = useRef(0)
+  const initialOpened = useRef(false)
   const callback = useRef(onDirtyChange)
   callback.current = onDirtyChange
   const childReads = useRef(new Set<string>())
@@ -155,6 +157,11 @@ export function StoryPanel({ api, book, initialKind = 'relation', busy, error, p
     if (result.ok && result.data.bookId === book.book.id && result.data.id === id && result.data.fields.kind === kind) setDetail(result.data)
     else setMessage(result.ok ? '故事记录的身份或类型不符，请刷新后重试。' : result.error.message)
   }
+  useEffect(() => {
+    if (!initialId || initialOpened.current || !ready || busy || pendingMessage) return
+    initialOpened.current = true
+    void selectRecord(initialId)
+  }, [initialId, ready, busy, pendingMessage])
   function beginEdit(create: boolean) {
     if (!mayLeave() || archived || !ready || (create ? !page : !detail)) return
     if (!evolutionReady && (kind === 'cognition' || kind === 'foreshadow')) { setMessage('编辑伏笔计划与认知变迁前，请先在本面板备份升级作品。原记录仍可查阅。'); return }

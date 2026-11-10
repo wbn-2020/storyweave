@@ -33,7 +33,7 @@ export default defineConfig(({ command }) => {
           output: {
             format: 'cjs',
             entryFileNames: 'index.js',
-            inlineDynamicImports: true,
+            codeSplitting: false,
           },
         },
       },

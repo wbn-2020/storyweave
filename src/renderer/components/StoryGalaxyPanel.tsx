@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
-import type { AppError, BookSnapshot, StudioApi } from '../../contracts/api'
+import { DomainError, type AppError, type BookSnapshot, type StudioApi } from '../../contracts/api'
 import { AUTHOR_DECISIONS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES, type AuthorDecision, type KnowledgeItemDetail, type KnowledgeNature } from '../../contracts/knowledge'
-import { STORY_KINDS, type StoryRecordDetail } from '../../contracts/story'
+import { parseCreateStoryRecord, STORY_KINDS, type CreateStoryRecordInput, type RelationFields, type StoryRecordDetail } from '../../contracts/story'
 import { GALAXY_KINDS, GALAXY_PAGE_SIZE, GALAXY_ROLES, MAX_GALAXY_EDGES, galaxyKey, type GalaxyKind, type GalaxyRole, type GalaxyTarget, type StoryGalaxyInput, type StoryGalaxyPage } from '../../contracts/story-galaxy'
 import { request } from '../request'
 import { Dialog } from './Dialog'
-import { blockText, StoryFieldsView } from './StoryFieldsEditor'
+import { blockText, initialStoryFields, StoryFieldsView } from './StoryFieldsEditor'
 import { StoryGalaxyView } from './StoryGalaxyView'
+import { RelationshipCanvas } from './RelationshipCanvas'
+import { AppearanceMatrix, ForeshadowRadar } from './StoryControlPanel'
+import type { StoryKind } from '../../contracts/story'
+import type { CreativeResourceRef } from '../../contracts/creative-resources'
+import type { CompanionNavigateTarget } from './CompanionPanel'
+import { sameFields, useToolSession } from './workbench-ui'
 import shared from '../App.module.css'
 import styles from './StoryGalaxyPanel.module.css'
 
@@ -17,7 +23,15 @@ export interface StoryGalaxyPanelProps {
   error?: string | null
   onClose: () => void
   onOpenKnowledge: () => void | Promise<void>
-  onOpenRecords: () => void | Promise<void>
+  onOpenRecords: (kind?: StoryKind, id?: string) => void | Promise<void>
+  onNavigate: (target: CompanionNavigateTarget) => void | Promise<void>
+  onUseForeshadow?: (ref: CreativeResourceRef) => void
+  initialView?: 'galaxy' | 'matrix' | 'radar'
+  chapterId?: string
+  onDirtyChange: (dirty: boolean) => void
+  onBookChange: (book: BookSnapshot) => void
+  onUnknown?: (error: AppError) => void
+  onRecover?: () => void
 }
 
 interface Filters {
@@ -27,6 +41,7 @@ interface Filters {
   authorDecision: AuthorDecision | ''
 }
 type Versions = Pick<StoryGalaxyPage, 'bookRevision' | 'knowledgeRevision'>
+interface RelationDraft { fields: RelationFields; baseline: Versions }
 interface BookRequest { scope: 'book'; filters: Filters; offset: number; expected: Versions | null }
 type PageRequest = BookRequest | { scope: 'focus'; target: GalaxyTarget; offset: number; expected: Versions }
 type Detail = { source: 'knowledge'; value: KnowledgeItemDetail } | { source: 'story'; value: StoryRecordDetail }
@@ -103,7 +118,7 @@ export function StoryGalaxyPanel(props: StoryGalaxyPanelProps) {
   return <GalaxyContent key={props.book.book.id} {...props} />
 }
 
-function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpenRecords }: StoryGalaxyPanelProps) {
+function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpenRecords, onDirtyChange, onBookChange, onUnknown, onRecover, onNavigate, onUseForeshadow, initialView, chapterId }: StoryGalaxyPanelProps) {
   const bookId = book.book.id
   const [query, setQuery] = useState('')
   const [listing, setListing] = useState<PageRequest>({ scope: 'book', filters: EMPTY_FILTERS, offset: 0, expected: null })
@@ -122,6 +137,16 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [checkingRequest, setCheckingRequest] = useState(false)
   const [detailJump, setDetailJump] = useState(0)
+  const [view, setView] = useState<'galaxy' | 'relationships' | 'matrix' | 'radar'>(initialView ?? 'galaxy')
+  const [draft, setDraft] = useState<RelationDraft | null>(null)
+  const [confirmation, setConfirmation] = useState<CreateStoryRecordInput | null>(null)
+  const [discardRequested, setDiscardRequested] = useState(false)
+  const [recoveryPreserved, setRecoveryPreserved] = useState(false)
+  const [syncRequired, setSyncRequired] = useState(false)
+  const [savedRelation, setSavedRelation] = useState<Pick<StoryRecordDetail, 'id' | 'bookRevision' | 'knowledgeRevision'> | null>(null)
+  const syncRevision = useRef<number | null>(null)
+  const latestBook = useRef(book)
+  latestBook.current = book
   const mounted = useRef(false)
   const leaving = useRef(false)
   const listLock = useRef(true)
@@ -134,9 +159,16 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const startedListing = useRef<PageRequest | null>(null)
   const bookBaseline = useRef<BookRequest | null>(null)
   const detailHeading = useRef<HTMLHeadingElement>(null)
+  const relationHeading = useRef<HTMLHeadingElement>(null)
+  const confirmationHeading = useRef<HTMLHeadingElement>(null)
   const detailId = useId()
   const originalId = useId()
-  const disabled = busy || listLoading || reading !== null || pending !== null
+  const readDisabled = busy || listLoading || reading !== null || pending !== null
+  const tool = useToolSession({ api, disabled: readDisabled, onDirtyChange, onUnknown, isProtected: () => syncRevision.current !== null })
+  const disabled = readDisabled || tool.locked || syncRequired || draft !== null
+  const draftUnavailable = tool.locked || syncRequired || Boolean(book.book.archivedAt)
+  const hasDraft = draft !== null
+  const hasConfirmation = confirmation !== null
 
   const clearReading = useCallback(() => {
     readTicket.current += 1; readLock.current = false
@@ -205,8 +237,12 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
     if (detailJump > 0) detailHeading.current?.focus()
   }, [detailJump])
 
+  useEffect(() => { if (hasDraft) relationHeading.current?.focus() }, [hasDraft])
+  useEffect(() => { if (hasConfirmation) confirmationHeading.current?.focus() }, [hasConfirmation])
+
   function canRead(): boolean {
-    return mounted.current && !leaving.current && !busy && !listLock.current && !readLock.current && !pendingRead.current && !statusLock.current
+    return mounted.current && !leaving.current && !busy && !listLock.current && !readLock.current && !pendingRead.current && !statusLock.current &&
+      !tool.hasChanges() && !tool.hasPending() && !tool.busy && syncRevision.current === null
   }
 
   function changePage(next: PageRequest): boolean {
@@ -243,6 +279,9 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   }
 
   async function leave(action: () => void | Promise<void>, close = false) {
+    if (tool.hasChanges() || tool.hasPending() || tool.busy || syncRevision.current !== null) {
+      tool.setError('请先保存或明确放弃关系草稿；保存结果未知时须核对原请求，保存已确认时须完成目录同步。'); return
+    }
     if (busy || (!close && !canRead())) return
     leaving.current = true
     listTicket.current += 1; readTicket.current += 1; statusTicket.current += 1
@@ -250,6 +289,104 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
       // 父级保存门禁可能拒绝切换；仍挂载时恢复交互，不能永久停留在离开状态。
       if (mounted.current) leaving.current = false
     }
+  }
+
+  function beginRelation(fromEntityId?: string, toEntityId?: string) {
+    if (!canRead() || !page || book.book.archivedAt) return
+    const fields = initialStoryFields('relation')
+    if (fields.kind !== 'relation') return
+    const from = page.nodes.find((node) => node.source === 'knowledge' && sameTarget(node, selected))
+    if ([fromEntityId, toEntityId].some((id) => id && !page.nodes.some((node) => node.source === 'knowledge' && node.id === id))) return
+    setDraft({ fields: { ...fields, fromEntityId: fromEntityId ?? from?.id ?? '', toEntityId: toEntityId ?? '' }, baseline: versions(page) })
+    setConfirmation(null); setDiscardRequested(false); setRecoveryPreserved(false)
+    setSavedRelation(null)
+    tool.setDirty(true); tool.setError(null); tool.setNotice(null)
+  }
+
+  function changeRelation(changes: Partial<RelationFields>) {
+    if (!draft || draftUnavailable || confirmation) return
+    setDraft({ ...draft, fields: { ...draft.fields, ...changes } })
+    setDiscardRequested(false); tool.setDirty(true); tool.setError(null)
+  }
+
+  function chooseEntity(target: GalaxyTarget) {
+    if (!draft || draftUnavailable || confirmation || target.source !== 'knowledge' ||
+        !page?.nodes.some((node) => node.source === 'knowledge' && node.id === target.id)) return
+    if (target.id === draft.fields.fromEntityId || target.id === draft.fields.toEntityId) return
+    if (!draft.fields.fromEntityId) changeRelation({ fromEntityId: target.id })
+    else if (!draft.fields.toEntityId) changeRelation({ toEntityId: target.id })
+    else tool.setError('已选好两个实体。需要更换时，请使用起点或终点选择框。')
+  }
+
+  function prepareRelation(event: FormEvent) {
+    event.preventDefault()
+    if (!draft || draftUnavailable) return
+    try {
+      const input = parseCreateStoryRecord({ bookId, expectedKnowledgeRevision: draft.baseline.knowledgeRevision, fields: draft.fields })
+      // 固定编辑起点的双版本；冲突后保留草稿，不能刷新列表后偷偷替换提交基线。
+      if (!page || page.bookRevision !== draft.baseline.bookRevision || page.knowledgeRevision !== draft.baseline.knowledgeRevision ||
+          latestBook.current.book.revision > draft.baseline.bookRevision ||
+          ![draft.fields.fromEntityId, draft.fields.toEntityId].every((id) => page.nodes.some((node) => node.source === 'knowledge' && node.id === id))) {
+        tool.setError('关系草稿所依据的作品或实体快照已经变化。请复制留存草稿，放弃后刷新并重新核对。'); return
+      }
+      setConfirmation(input); setDiscardRequested(false); tool.setError(null)
+    } catch (cause) { tool.setError(cause instanceof DomainError ? cause.detail.message : '请补全两个不同的知识实体和关系名称。') }
+  }
+
+  async function syncBook() {
+    const minimum = syncRevision.current
+    if (minimum === null || tool.hasPending()) return
+    const success = await tool.read(() => api.getBook({ bookId }), (next) => {
+      if (next.book.id !== bookId || !Number.isSafeInteger(next.book.revision) || next.book.revision < minimum ||
+          next.book.revision < latestBook.current.book.revision) throw new Error('作品目录版本不符')
+      // 回读完整目录后才交给 App；不能把新修订号附加到旧章节和卷目录上。
+      onBookChange(next)
+      syncRevision.current = null; setSyncRequired(false)
+    })
+    if (success && syncRevision.current === null && mounted.current) refreshBook()
+  }
+
+  async function saveRelation() {
+    if (!draft || !confirmation || draftUnavailable || syncRevision.current !== null) return
+    const input = confirmation, baseline = draft.baseline
+    if (book.book.revision > baseline.bookRevision) { tool.setError('作品版本已改变，请保留草稿并重新核对。'); return }
+    // 预读单独执行；它的超时不能被当成 story.create 的未知写入回执。
+    let ready = false
+    await tool.read(() => api.getBook({ bookId }), (current) => {
+      if (current.book.id !== bookId || current.book.revision !== baseline.bookRevision || current.book.archivedAt) {
+        tool.setError('作品状态已变化，关系尚未提交。请保留草稿，放弃后刷新核对。'); return
+      }
+      ready = true
+    })
+    if (!ready || !mounted.current) return
+    const success = await tool.write('story.create', () => api.createStoryRecord(input), (value) => value.bookId === bookId && typeof value.id === 'string' && value.id.length > 0 &&
+      value.fields.kind === 'relation' && sameFields(value.fields, input.fields) &&
+      value.knowledgeRevision === input.expectedKnowledgeRevision + 1 && Number.isSafeInteger(value.bookRevision) && value.bookRevision >= baseline.bookRevision + 1 &&
+      value.sources.length === 0 &&
+      value.revisions.some((revision) => revision.recordId === value.id && revision.reason === 'created' && revision.knowledgeRevision === value.knowledgeRevision),
+    (value) => {
+      syncRevision.current = value.bookRevision; setSyncRequired(true)
+      setSavedRelation({ id: value.id, bookRevision: value.bookRevision, knowledgeRevision: value.knowledgeRevision })
+      setDraft(null); setConfirmation(null); setDiscardRequested(false)
+      invalidateSnapshot('关系保存已确认，正在同步作品目录。')
+    }, '关系已保存。作品目录同步后将刷新画布。')
+    if (success) await syncBook()
+  }
+
+  async function checkRelationReceipt() {
+    if (await tool.checkReceipt()) await syncBook()
+  }
+
+  function discardRelation() {
+    if (tool.locked || syncRequired || !draft) return
+    if (!discardRequested) { setDiscardRequested(true); return }
+    setDraft(null); setConfirmation(null); setDiscardRequested(false); tool.setDirty(false); tool.setError(null)
+  }
+
+  function focusSavedRelation() {
+    if (!savedRelation || !page) return
+    const baseline: BookRequest | null = listing.scope === 'book' ? { ...listing, expected: versions(page) } : null
+    if (changePage({ scope: 'focus', target: { source: 'story', id: savedRelation.id }, offset: 0, expected: versions(page) }) && baseline) bookBaseline.current = baseline
   }
 
   async function queryOriginalRequest() {
@@ -347,6 +484,15 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
     })
   }
 
+  async function jumpToOriginal(sourceId: string) {
+    if (!canRead() || !detail) return
+    const source = detail.value.sources.find((item) => item.id === sourceId)
+    const current = book.chapters.find((item) => source?.sourceType === 'chapter_text' && item.id === source.chapterId)
+    if (!source || source.sourceType !== 'chapter_text' || !current) return
+    await leave(() => onNavigate({ bookId, chapterId: source.chapterId, blockId: source.blockId,
+      expectedRevisionId: current.revisionId, sourceRevisionId: source.revisionId }))
+  }
+
   function closeOriginal() {
     if (!canRead()) return
     readTicket.current += 1; setOriginal(null); setOriginalSourceId(null); setReadError(null)
@@ -361,17 +507,43 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const filtered = Boolean(filters.search || filters.kind || filters.nature || filters.authorDecision)
   const filterDisabled = disabled || listing.scope === 'focus'
   const pageCount = page ? page.nodes.length - (page.focus ? 1 : 0) : 0
+  const entities = page?.nodes.filter((node) => node.source === 'knowledge') ?? []
+  const entityName = (id: string) => entities.find((node) => node.id === id)?.title ?? id
+  const chosenEntities = draft ? [draft.fields.fromEntityId, draft.fields.toEntityId] : []
 
-  return <Dialog title="故事星海" wide busy={busy} onClose={() => leave(onClose, true)} error={error}>
+  return <Dialog title="故事星海" wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}>
     <div className={styles.panel}>
       <div className={styles.intro}>
-        <div><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 只读查阅</span></div>
+        <div><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 星海与关系画布</span></div>
         <div className={styles.actions}>
           <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(onOpenKnowledge)}>知识条目</button>
-          <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(onOpenRecords)}>故事记录</button>
+          <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords())}>故事记录</button>
         </div>
       </div>
       <p className={styles.help}>展示已登记的对象与引用，包含未来计划、人物认知及未采纳记录。作者采纳不等于事实核实；本视图包含剧透，不按读者进度隐藏内容。</p>
+      <div className={styles.viewSwitch} role="group" aria-label="故事对象显示方式">
+        <button type="button" className={shared.button} aria-pressed={view === 'galaxy'} disabled={disabled} onClick={() => { if (canRead()) setView('galaxy') }}>星海视图</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'relationships'} disabled={disabled} onClick={() => { if (canRead()) setView('relationships') }}>2D 关系画布</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'matrix'} disabled={disabled} onClick={() => { if (canRead()) setView('matrix') }}>章节出场矩阵</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'radar'} disabled={disabled} onClick={() => { if (canRead()) setView('radar') }}>伏笔雷达</button>
+      </div>
+      {pending && <section className={styles.pending} aria-label="查询超时的只读请求">
+        <h3>等待读取结果</h3><p role="status">{pendingMessage}</p>
+        <p className={styles.ids}>{pending.requestId ? `请求 ${pending.requestId}` : '请求标识未返回'} · {pending.command}</p>
+        <button type="button" className={shared.button} disabled={busy || checkingRequest || !pending.requestId} onClick={() => void queryOriginalRequest()}>{checkingRequest ? '正在查询原请求…' : '查询原请求'}</button>
+      </section>}
+      {listError && <div className={styles.notice}>
+        <p className={shared.formError} role="alert">{listError}</p>
+        <button type="button" className={shared.button} disabled={disabled} onClick={() => needsRefresh ? refreshBook() : changePage({ ...listing })}>{needsRefresh ? '刷新全书' : '重试本次读取'}</button>
+        <p className={styles.help}>若提示旧库或结构未启用，可按错误提示进入「知识条目」或「故事记录」，查看备份与升级入口。</p>
+      </div>}
+      {tool.error && <p className={shared.formError} role="alert">{tool.error}</p>}
+      {tool.notice && <p className={styles.help} role="status">{tool.notice}</p>}
+      {view === 'matrix' || view === 'radar' ? <>
+        {view === 'matrix' ? <AppearanceMatrix api={api} book={book} disabled={busy || tool.locked || syncRequired} onNavigate={onNavigate} onOpenRecord={(kind, id) => void leave(() => onOpenRecords(kind, id))} />
+          : <ForeshadowRadar api={api} book={book} disabled={busy || tool.locked || syncRequired} asOfChapterId={chapterId} onNavigate={onNavigate}
+            onOpenRecord={(kind, id) => void leave(() => onOpenRecords(kind, id))} onUseForeshadow={onUseForeshadow} />}
+      </> : <>
       <div className={styles.filters}>
         <form className={styles.search} onSubmit={search}>
           <label>搜索名称与说明<input type="search" value={query} maxLength={200} disabled={filterDisabled} placeholder="输入后提交搜索" onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault() }} /></label>
@@ -390,21 +562,71 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         </div>
       </div>
       {listing.scope === 'focus' && <p className={styles.help}>仅查看中心对象的直接关联，全书搜索与筛选已保留。中心始终显示，分页总数不含中心。</p>}
-      {pending && <section className={styles.pending} aria-label="查询超时的只读请求">
-        <h3>等待读取结果</h3><p role="status">{pendingMessage}</p>
-        <p className={styles.ids}>{pending.requestId ? `请求 ${pending.requestId}` : '请求标识未返回'} · {pending.command}</p>
-        <button type="button" className={shared.button} disabled={busy || checkingRequest || !pending.requestId} onClick={() => void queryOriginalRequest()}>{checkingRequest ? '正在查询原请求…' : '查询原请求'}</button>
+      {savedRelation && !syncRequired && <button type="button" className={shared.button} disabled={disabled || !page} onClick={focusSavedRelation}>查看已保存关系及其两端</button>}
+      {tool.pending && <section className={styles.pending} aria-label="核对关系保存回执">
+        <h3>关系保存结果尚未确认</h3><p>当前草稿与提交版本已保留，暂不能离开或再次提交。请查询原请求。</p>
+        <p className={styles.ids}>{tool.pending.error.requestId ? `请求 ${tool.pending.error.requestId}` : '没有可查询的请求编号，请留存草稿后进入恢复流程。'} · story.create</p>
+        <button type="button" className={shared.button} disabled={tool.busy || busy || !tool.pending.error.requestId} onClick={() => void checkRelationReceipt()}>核对原请求</button>
       </section>}
-      {listError && <div className={styles.notice}>
-        <p className={shared.formError} role="alert">{listError}</p>
-        {!needsRefresh && <button type="button" className={shared.button} disabled={disabled} onClick={() => changePage({ ...listing })}>重试本次读取</button>}
-        <p className={styles.help}>若提示旧库或结构未启用，可按错误提示进入「知识条目」或「故事记录」，查看备份与升级入口。</p>
+      {syncRequired && !tool.pending && <section className={styles.pending} aria-label="同步保存后的作品目录">
+        <h3>关系已保存，目录待同步</h3><p>请重试读取作品目录，完成后再继续编辑或关闭。</p>
+        <button type="button" className={shared.button} disabled={tool.busy || busy} onClick={() => void syncBook()}>重试同步目录</button>
+      </section>}
+      {draft && <section className={styles.relationEditor} aria-label="新建实体关系">
+        <h3 ref={relationHeading} tabIndex={-1}>建立关系</h3><p className={styles.help}>选两个本页知识实体，填写名称与方向。画布点选只填入起点和终点；确认后才新增一条关系记录。</p>
+        <form onSubmit={prepareRelation} onKeyDown={(event) => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault() }}>
+          <fieldset className={styles.relationFields} disabled={draftUnavailable || confirmation !== null}>
+            <label>起点实体<select required value={draft.fields.fromEntityId} onChange={(event) => changeRelation({ fromEntityId: event.target.value })}>
+              <option value="">选择起点，或点选画布节点</option>{entities.map((node) => <option key={node.id} value={node.id} disabled={node.id === draft.fields.toEntityId}>{node.title} · {kindLabels[node.kind]} · {node.id.slice(0, 8)}</option>)}
+            </select></label>
+            <label>终点实体<select required value={draft.fields.toEntityId} onChange={(event) => changeRelation({ toEntityId: event.target.value })}>
+              <option value="">选择终点，或点选画布节点</option>{entities.map((node) => <option key={node.id} value={node.id} disabled={node.id === draft.fields.fromEntityId}>{node.title} · {kindLabels[node.kind]} · {node.id.slice(0, 8)}</option>)}
+            </select></label>
+            <label>关系名称<input required maxLength={120} value={draft.fields.title} placeholder="例如：师徒之间的约定" onChange={(event) => changeRelation({ title: event.target.value })} /></label>
+            <label>关系类型<input required maxLength={120} value={draft.fields.relationType} placeholder="例如：师徒、同盟、敌对" onChange={(event) => changeRelation({ relationType: event.target.value })} /></label>
+            <label>方向<select value={draft.fields.direction} onChange={(event) => changeRelation({ direction: event.target.value as RelationFields['direction'] })}><option value="directed">单向：起点 → 终点</option><option value="mutual">双向：起点 ↔ 终点</option></select></label>
+            <label>关系层次 · 需作品 v17<select value={draft.fields.layer ?? ''} onChange={(event) => {
+              const { layer: _layer, ...base } = draft.fields
+              setDraft({ ...draft, fields: event.target.value ? { ...base, layer: event.target.value as 'surface' | 'hidden' } : base }); tool.setDirty(true)
+            }}><option value="">未标注</option><option value="surface">表面关系</option><option value="hidden">隐藏关系</option></select></label>
+            <label>性质<select value={draft.fields.nature} onChange={(event) => changeRelation({ nature: event.target.value as KnowledgeNature })}>{KNOWLEDGE_NATURES.map((nature) => <option key={nature} value={nature}>{natureLabels[nature]}</option>)}</select></label>
+            <label className={styles.fullField}>关系说明<textarea rows={3} maxLength={20000} value={draft.fields.description} onChange={(event) => changeRelation({ description: event.target.value })} /></label>
+          </fieldset>
+          <p className={styles.help}>新记录标为「作者未处理／当前／冲突未检查」，有效期和披露位置未知。可在故事记录中继续补充来源与时间。</p>
+          <p className={styles.ids}>草稿基线：作品版本 {draft.baseline.bookRevision} · 知识版本 {draft.baseline.knowledgeRevision}</p>
+          {book.book.revision > draft.baseline.bookRevision && <p className={styles.caution} role="status">作品已有更新；草稿与原版本保留，请复制留存后放弃、刷新并重新核对。</p>}
+          {confirmation?.fields.kind === 'relation' ? <div className={styles.confirmation} aria-label="确认新建关系">
+            <h4 ref={confirmationHeading} tabIndex={-1}>确认保存这条关系</h4><p><strong>{confirmation.fields.title}</strong> · {confirmation.fields.relationType}</p>
+            <p>{entityName(confirmation.fields.fromEntityId)} {confirmation.fields.direction === 'mutual' ? '↔' : '→'} {entityName(confirmation.fields.toEntityId)}</p>
+            <p className={styles.ids}>起点 {confirmation.fields.fromEntityId}<br />终点 {confirmation.fields.toEntityId}</p>
+            <p>性质：{natureLabels[confirmation.fields.nature]}</p>
+            {confirmation.fields.description && <p className={styles.description}>{confirmation.fields.description}</p>}
+            <div className={styles.actions}><button type="button" className={shared.primaryButton} disabled={draftUnavailable || book.book.revision > draft.baseline.bookRevision} onClick={() => void saveRelation()}>{tool.busy ? '正在核对并保存…' : '确认保存关系'}</button>
+              <button type="button" className={shared.button} disabled={tool.locked} onClick={() => setConfirmation(null)}>返回修改</button></div>
+          </div> : <button type="submit" className={shared.primaryButton} disabled={draftUnavailable || book.book.revision > draft.baseline.bookRevision}>预览并确认关系</button>}
+          <div className={styles.discardActions}><button type="button" className={shared.button} disabled={tool.locked || syncRequired} onClick={discardRelation}>{discardRequested ? '确认放弃关系草稿' : '放弃关系草稿'}</button>
+            {discardRequested && <><span>放弃后当前关系输入不会保存。</span><button type="button" className={shared.button} onClick={() => setDiscardRequested(false)}>继续编辑</button></>}</div>
+        </form>
+      </section>}
+      {(draft || syncRequired) && <details className={styles.recoveryCopy}><summary>查看并复制关系草稿与保存状态</summary>
+        <textarea readOnly rows={8} aria-label="关系草稿与原请求留存内容" value={JSON.stringify({ bookId, draft, submitted: confirmation, requestId: tool.pending?.error.requestId ?? null, command: tool.pending?.command ?? null, savedRelation }, null, 2)} />
+      </details>}
+      {(tool.pending || syncRequired) && onRecover && <div className={styles.recoveryCopy}>
+        <label className={styles.check}><input type="checkbox" checked={recoveryPreserved} disabled={tool.busy || busy} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已复制留存上方草稿和保存状态，可进入恢复核对</label>
+        <button type="button" className={shared.button} disabled={tool.busy || busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button>
       </div>}
       <section className={styles.overview} aria-label="星海本页概览" aria-busy={listLoading}>
         {listLoading && <div className={styles.loading} role="status"><p>{busy ? '等待当前操作结束后读取星海…' : '正在读取故事星海…'}</p><div className={styles.skeleton} aria-hidden="true" /></div>}
         {page && <>
           <p className={styles.snapshot}>{page.focus ? `直接关联共 ${page.total} 个（不含中心）` : `匹配对象共 ${page.total} 个`} · 每页 {GALAXY_PAGE_SIZE} 个<br />作品版本 {page.bookRevision} · 知识版本 {page.knowledgeRevision}</p>
-          {page.nodes.length > 0 && <StoryGalaxyView nodes={page.nodes} edges={page.edges} focus={page.focus} selected={selected} disabled={disabled} onSelect={(target) => void selectNode(target)} />}
+          {view === 'relationships' && <div className={styles.canvasActions}><button type="button" className={shared.primaryButton} disabled={disabled || Boolean(book.book.archivedAt) || entities.length < 2} onClick={() => beginRelation()}>选择两个实体建立关系</button>
+            <span className={styles.help}>{book.book.archivedAt ? '作品已归档，关系仅供查看。' : entities.length < 2 ? '当前页不足两个知识实体；请调整筛选或翻页。' : '先选实体，再命名与确认保存。'}</span></div>}
+          {page.nodes.length > 0 && (view === 'galaxy'
+            ? <StoryGalaxyView nodes={page.nodes} edges={page.edges} focus={page.focus} selected={selected} disabled={disabled} onSelect={(target) => void selectNode(target)} />
+            : <RelationshipCanvas key={bookId} bookId={bookId} nodes={page.nodes} edges={page.edges} selected={selected} disabled={readDisabled || tool.locked || syncRequired || confirmation !== null}
+              picking={draft !== null} chosen={chosenEntities} kindLabels={kindLabels} roleLabels={roleLabels}
+              onConnect={!book.book.archivedAt ? beginRelation : undefined}
+              onSelect={(target) => { if (draft) chooseEntity(target); else void selectNode(target) }} />)}
           {page.total === 0 && <div className={styles.empty}>
             <h3>{page.focus ? '中心暂无直接关联' : filtered ? '没有匹配的对象' : '还没有故事对象'}</h3>
             <p>{page.focus ? '中心对象仍可选中查看。可在知识条目和故事记录中维护明确的引用。' : filtered ? '可清空搜索与筛选，查看全书已登记的对象。' : '从知识条目建立人物、地点等对象，并在故事记录中登记关系、事件、伏笔和认知。'}</p>
@@ -467,7 +689,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
                 <strong>{sourceLabels[source.sourceType]}</strong>
                 <p className={styles.help}>有效性：{validityLabels[source.validity]} · 版本登记：{source.sourceType === 'chapter_text' ? (source.referenceState ? referenceLabels[source.referenceState] : '未知') : '不适用'}</p>
                 <blockquote>{source.quote}</blockquote>
-                {source.sourceType === 'chapter_text' && <><p className={styles.ids}>章节 {source.chapterId}<br />版本 {source.revisionId}<br />段落 {source.blockId}</p><button type="button" className={shared.button} disabled={disabled} aria-controls={originalId} aria-expanded={original?.sourceId === source.id} onClick={() => void showOriginal(source.id)}>核对固定原文与引文</button></>}
+                {source.sourceType === 'chapter_text' && <><p className={styles.ids}>章节 {source.chapterId}<br />版本 {source.revisionId}<br />段落 {source.blockId}</p><button type="button" className={shared.button} disabled={disabled} aria-controls={originalId} aria-expanded={original?.sourceId === source.id} onClick={() => void showOriginal(source.id)}>核对固定原文与引文</button><button type="button" className={shared.button} disabled={disabled || page?.bookRevision !== book.book.revision} onClick={() => void jumpToOriginal(source.id)}>跳到当前稿段落</button></>}
               </li>)}</ul>}
             </section>
             <section id={originalId} className={styles.original} aria-label="固定原文核对">
@@ -487,6 +709,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
           </>}
         </section>
       </div>
+      </>}
     </div>
   </Dialog>
 }

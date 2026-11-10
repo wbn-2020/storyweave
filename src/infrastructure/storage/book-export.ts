@@ -12,6 +12,7 @@ import {
 } from '../../contracts/export'
 import { countCharacters, documentToText, MAX_CHAPTER_LENGTH, parseManuscript, type InlineNode, type ManuscriptDocument } from '../../contracts/manuscript'
 import { renderTextExport } from '../text/manuscript-text'
+import { docxDocumentParts, docxMetadata, renderDocxChapter } from './docx-export'
 import type { StudioRepository } from './studio-repository'
 
 const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
@@ -141,6 +142,7 @@ function xhtmlPage(title: string, language: string, body: string): string {
 
 export function renderBookExportChapter(document: ManuscriptDocument, title: string,
   options: Pick<BookExportManifest, 'outputFormat' | 'includeChapterTitles' | 'language'>): string {
+  if (options.outputFormat === 'docx') return renderDocxChapter(document, title, options)
   if (options.outputFormat !== 'epub') return renderTextExport([{ title, document }], options.outputFormat, options.includeChapterTitles)
   const body = parseManuscript(document).content.map((block) => {
     if (block.type === 'horizontalRule') return '<hr/>'
@@ -172,10 +174,15 @@ function epubMetadata(manifest: BookExportManifest): { name: string; text: strin
 function estimateBytes(manifest: BookExportManifest): number {
   const chapters = includedChapters(manifest)
   const contentBytes = chapters.reduce((sum, entry) => sum + (entry.contentBytes ?? 0), 0)
-  if (manifest.outputFormat !== 'epub') return contentBytes + Math.max(0, chapters.length - 1) * 2
-  const entries: ZipEntry[] = [...epubMetadata(manifest).map((entry) => ({ name: entry.name, bytes: Buffer.byteLength(entry.text, 'utf8') })),
-    ...chapters.map((entry, index) => ({ name: `EPUB/${chapterFile(index)}`, bytes: entry.contentBytes ?? 0 }))]
-  return 22 + entries.reduce((sum, entry) => sum + 30 + 46 + Buffer.byteLength(entry.name, 'utf8') * 2 + entry.bytes, 0)
+  if (manifest.outputFormat !== 'epub' && manifest.outputFormat !== 'docx') return contentBytes + Math.max(0, chapters.length - 1) * 2
+  const parts = manifest.outputFormat === 'docx' ? docxDocumentParts(manifest) : null
+  const entries: ZipEntry[] = parts
+    ? [...docxMetadata(manifest).map((entry) => ({ name: entry.name, bytes: Buffer.byteLength(entry.text, 'utf8') })),
+      { name: 'word/document.xml', bytes: contentBytes + Buffer.byteLength(parts.start, 'utf8') + Buffer.byteLength(parts.end, 'utf8') }]
+    : [...epubMetadata(manifest).map((entry) => ({ name: entry.name, bytes: Buffer.byteLength(entry.text, 'utf8') })),
+      ...chapters.map((entry, index) => ({ name: `EPUB/${chapterFile(index)}`, bytes: entry.contentBytes ?? 0 }))]
+  // DOCX 的正文流在条目后写入 16 字节数据描述符，预览必须计入该开销。
+  return 22 + (parts ? 16 : 0) + entries.reduce((sum, entry) => sum + 30 + 46 + Buffer.byteLength(entry.name, 'utf8') * 2 + entry.bytes, 0)
 }
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
@@ -183,10 +190,10 @@ const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
   for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1
   return value >>> 0
 })
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff
+function updateCrc32(bytes: Uint8Array, previous = 0xffffffff): number {
+  let crc = previous
   for (const value of bytes) crc = CRC_TABLE[(crc ^ value) & 0xff]! ^ (crc >>> 8)
-  return (crc ^ 0xffffffff) >>> 0
+  return crc
 }
 
 class StoredZipWriter {
@@ -201,43 +208,67 @@ class StoredZipWriter {
     this.dosDate = ((Math.max(1980, Math.min(2107, date.getUTCFullYear())) - 1980) << 9) | ((date.getUTCMonth() + 1) << 5) | date.getUTCDate()
   }
 
-  add(name: string, text: string): void {
+  add(name: string, text: string | Iterable<string>, expectedBytes?: number): void {
     const filename = Buffer.from(name, 'utf8')
-    const body = Buffer.from(text, 'utf8')
-    const checksum = crc32(body)
-    if (this.directory.length >= 0xffff || this.offset + body.length + filename.length + 30 > MAX_EXPORT_BYTES) return invalid('EPUB 超过 2 GiB 上限，请减少导出章节。')
+    const body = typeof text === 'string' ? Buffer.from(text, 'utf8') : null
+    const size = body?.length ?? expectedBytes
+    if (size === undefined || !Number.isSafeInteger(size) || size < 0) return invalid('导出条目长度无效，请重新生成预览。')
+    let checksum = body ? (updateCrc32(body) ^ 0xffffffff) >>> 0 : 0
+    const descriptorBytes = body ? 0 : 16
+    if (this.directory.length >= 0xffff || this.offset + size + filename.length + 30 + descriptorBytes > MAX_EXPORT_BYTES) return invalid('导出文件超过 2 GiB 上限，请减少导出章节。')
     // OCF 要求 mimetype 为首个无压缩条目，且局部头不能包含扩展字段。
     const local = Buffer.alloc(30)
     local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(10, 4)
-    local.writeUInt16LE(0x0800, 6)
+    local.writeUInt16LE(body ? 10 : 20, 4)
+    local.writeUInt16LE(body ? 0x0800 : 0x0808, 6)
     local.writeUInt16LE(this.dosTime, 10)
     local.writeUInt16LE(this.dosDate, 12)
     local.writeUInt32LE(checksum, 14)
-    local.writeUInt32LE(body.length, 18)
-    local.writeUInt32LE(body.length, 22)
+    local.writeUInt32LE(body ? size : 0, 18)
+    local.writeUInt32LE(body ? size : 0, 22)
     local.writeUInt16LE(filename.length, 26)
+    this.write(local); this.write(filename)
+    if (body) this.write(body)
+    else {
+      // 正文 XML 按章流式写入同一 ZIP 条目，避免长篇作品占用整书内存。
+      let written = 0
+      let crc = 0xffffffff
+      for (const part of text) {
+        const chunk = Buffer.from(part, 'utf8')
+        if (written + chunk.length > size) return conflict()
+        this.write(chunk)
+        written += chunk.length
+        crc = updateCrc32(chunk, crc)
+      }
+      if (written !== size) return conflict()
+      checksum = (crc ^ 0xffffffff) >>> 0
+      const descriptor = Buffer.alloc(16)
+      descriptor.writeUInt32LE(0x08074b50, 0)
+      descriptor.writeUInt32LE(checksum, 4)
+      descriptor.writeUInt32LE(size, 8)
+      descriptor.writeUInt32LE(size, 12)
+      this.write(descriptor)
+    }
     const central = Buffer.alloc(46 + filename.length)
     central.writeUInt32LE(0x02014b50, 0)
     central.writeUInt16LE(20, 4)
-    central.writeUInt16LE(10, 6)
-    central.writeUInt16LE(0x0800, 8)
+    central.writeUInt16LE(body ? 10 : 20, 6)
+    central.writeUInt16LE(body ? 0x0800 : 0x0808, 8)
     central.writeUInt16LE(this.dosTime, 12)
     central.writeUInt16LE(this.dosDate, 14)
     central.writeUInt32LE(checksum, 16)
-    central.writeUInt32LE(body.length, 20)
-    central.writeUInt32LE(body.length, 24)
+    central.writeUInt32LE(size, 20)
+    central.writeUInt32LE(size, 24)
     central.writeUInt16LE(filename.length, 28)
     central.writeUInt32LE(this.offset, 42)
     filename.copy(central, 46)
-    this.write(local); this.write(filename); this.write(body)
-    this.offset += local.length + filename.length + body.length
+    this.offset += local.length + filename.length + size + descriptorBytes
     this.directory.push(central)
   }
 
   finish(): void {
     const size = this.directory.reduce((sum, entry) => sum + entry.length, 0)
-    if (this.offset + size + 22 > MAX_EXPORT_BYTES) return invalid('EPUB 超过 2 GiB 上限，请减少导出章节。')
+    if (this.offset + size + 22 > MAX_EXPORT_BYTES) return invalid('导出文件超过 2 GiB 上限，请减少导出章节。')
     for (const entry of this.directory) this.write(entry)
     const end = Buffer.alloc(22)
     end.writeUInt32LE(0x06054b50, 0)
@@ -257,7 +288,20 @@ export function writeBookExport(manifest: BookExportManifest,
     if (Buffer.byteLength(text, 'utf8') !== entry.contentBytes) return conflict()
     return text
   }
-  if (manifest.outputFormat === 'epub') {
+  if (manifest.outputFormat === 'docx') {
+    const archive = new StoredZipWriter(write, manifest.createdAt)
+    const parts = docxDocumentParts(manifest)
+    for (const entry of docxMetadata(manifest)) archive.add(entry.name, entry.text)
+    const documentBytes = chapters.reduce((sum, entry) => sum + (entry.contentBytes ?? 0), 0)
+      + Buffer.byteLength(parts.start, 'utf8') + Buffer.byteLength(parts.end, 'utf8')
+    function* documentParts(): Generator<string> {
+      yield parts.start
+      for (const entry of chapters) yield chapterText(entry)
+      yield parts.end
+    }
+    archive.add('word/document.xml', documentParts(), documentBytes)
+    archive.finish()
+  } else if (manifest.outputFormat === 'epub') {
     const archive = new StoredZipWriter(write, manifest.createdAt)
     for (const entry of epubMetadata(manifest)) archive.add(entry.name, entry.text)
     chapters.forEach((entry, index) => archive.add(`EPUB/${chapterFile(index)}`, chapterText(entry)))
@@ -372,7 +416,7 @@ export class BookExportRepository {
         const manifest: BookExportManifest = { format: 'storyweave-book-export', version: 1, exportId: randomUUID(),
           createdAt: new Date().toISOString(), bookId: data.bookId, bookTitle: title, bookRevision: data.expectedBookRevision,
           outputFormat: data.format, scope: data.scope, includeChapterTitles: data.includeChapterTitles, author: data.author,
-          language: data.language, chapters: [] }
+          language: data.language, ...(data.docx ? { docx: data.docx } : {}), chapters: [] }
         if (data.format === 'epub') { xml(title); xml(data.author) }
         for (const row of outline) {
           const isSelected = selected.has(row.id)
@@ -429,7 +473,8 @@ export class BookExportRepository {
       const document = fixedRevision(db, entry)
       return { bookId: data.bookId, chapterId: entry.chapterId, revisionId: entry.revisionId, title: entry.title,
         format: preview.manifest.outputFormat, language: preview.manifest.language, includeChapterTitles: preview.manifest.includeChapterTitles, document,
-        text: preview.manifest.outputFormat === 'epub' ? documentToText(document) : renderBookExportChapter(document, entry.title, preview.manifest) }
+        text: preview.manifest.outputFormat === 'epub' || preview.manifest.outputFormat === 'docx'
+          ? documentToText(document) : renderBookExportChapter(document, entry.title, preview.manifest) }
     })
   }
 

@@ -1,6 +1,6 @@
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger } from './api'
 import { AUTHOR_DECISIONS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES, type AuthorDecision, type ConflictState, type KnowledgeFreshness, type KnowledgeKind, type KnowledgeNature } from './knowledge'
-import { STORY_KINDS, type StoryKind } from './story'
+import { STORY_KINDS, type StoryKind, type StoryTime } from './story'
 
 export const GALAXY_PAGE_SIZE = 40
 export const MAX_GALAXY_EDGES = 240
@@ -32,6 +32,8 @@ export interface GalaxyNode extends GalaxyTarget {
   authorDecision: AuthorDecision
   freshness: KnowledgeFreshness
   conflictState: ConflictState
+  relationLayer?: 'surface' | 'hidden'
+  relationTime?: { from: StoryTime; until: StoryTime }
 }
 /** 连线记录显式引用角色；不推断因果、人物知情或关系是否仍有效。 */
 export interface GalaxyEdge { id: string; from: GalaxyTarget; to: GalaxyTarget; role: GalaxyRole }

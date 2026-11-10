@@ -3,13 +3,21 @@ import { KnowledgeRepository } from '../../infrastructure/knowledge/knowledge-re
 import { StoryRepository } from '../../infrastructure/story/story-repository'
 import { StoryTimelineRepository } from '../../infrastructure/story/timeline-repository'
 import { StoryGalaxyRepository } from '../../infrastructure/story/galaxy-repository'
+import { StoryControlRepository } from '../../infrastructure/story/control-repository'
 import { NotesRepository } from '../../infrastructure/notes/notes-repository'
 import { WorkbenchRepository } from '../../infrastructure/workbench/workbench-repository'
 import { InspirationRepository } from '../../infrastructure/workbench/inspiration-repository'
+import { WritingCalendarRepository } from '../../infrastructure/workbench/calendar-repository'
+import { StudyRepository } from '../../infrastructure/workbench/study-repository'
+import { AiPresetRepository } from '../../infrastructure/ai/preset-repository'
+import { BookMediaRepository } from '../../infrastructure/workbench/media-repository'
 import { MemoryRepository } from '../../infrastructure/memory/task-repository'
 import { MemorySearchRepository } from '../../infrastructure/memory/search-repository'
 import { MemoryVectorRepository } from '../../infrastructure/memory/vector-repository'
 import { AiRepository } from '../../infrastructure/ai/ai-repository'
+import { GenerationRepository } from '../../infrastructure/ai/generation-repository'
+import { LivingRepository } from '../../infrastructure/workbench/living-repository'
+import { ForgeRepository } from '../../infrastructure/workbench/forge-repository'
 import { AiMemoryTaskRepository } from '../../infrastructure/ai/memory-task-repository'
 import { AiSummaryRepository } from '../../infrastructure/ai/summary-repository'
 import { AiContextSummaryRepository } from '../../infrastructure/ai/context-summary'
@@ -29,13 +37,21 @@ const knowledge = new KnowledgeRepository(repository)
 const story = new StoryRepository(repository)
 const timeline = new StoryTimelineRepository(repository)
 const galaxy = new StoryGalaxyRepository(repository)
+const control = new StoryControlRepository(repository)
 const notes = new NotesRepository(repository)
 const workbench = new WorkbenchRepository(repository)
 const inspirations = new InspirationRepository(repository, notes)
+const calendar = new WritingCalendarRepository(repository)
 const memory = new MemoryRepository((bookId) => repository.getMemoryDatabase(bookId))
 const memorySearch = new MemorySearchRepository((bookId) => repository.getMemoryDatabase(bookId), (input) => memory.status(input))
 const memoryVectors = new MemoryVectorRepository((bookId) => repository.getMemoryDatabase(bookId), memorySearch)
 const ai = new AiRepository(repository, memorySearch)
+const living = new LivingRepository(repository, ai)
+const forge = new ForgeRepository(repository, ai)
+const generation = new GenerationRepository(repository)
+const studies = new StudyRepository(repository, ai)
+const presets = new AiPresetRepository(repository)
+const media = new BookMediaRepository(repository)
 const aiMemoryTasks = new AiMemoryTaskRepository(repository, ai)
 const aiSummaries = new AiSummaryRepository(repository, ai)
 const aiContextSummaries = new AiContextSummaryRepository(repository)
@@ -50,6 +66,29 @@ let requestQueue = Promise.resolve()
 
 async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
   switch (request.command) {
+    case 'living.get': return living.get(request.payload)
+    case 'living.archive': return living.archive(request.payload)
+    case 'living.save': return living.save(request.payload)
+    case 'living.history': return living.history(request.payload)
+    case 'living.restore': return living.restore(request.payload)
+    case 'living.prepare': return living.prepare(request.payload)
+    case 'living.run': return living.getRun(request.payload)
+    case 'living.adopt': return living.adopt(request.payload)
+    case 'forge.get': return forge.get(request.payload)
+    case 'forge.prepare': return forge.prepare(request.payload)
+    case 'forge.run': return forge.getRun(request.payload)
+    case 'forge.adopt': return forge.adopt(request.payload)
+    case 'generation.connections': return generation.connections()
+    case 'generation.connection.save': return generation.saveConnection(request.payload)
+    case 'generation.draft': return generation.draft(request.payload)
+    case 'generation.get': return generation.get(request.payload)
+    case 'generation.prepare': return generation.prepare(request.payload)
+    case 'generation.claim': return generation.claim(request.payload)
+    case 'generation.checkpoint': return generation.checkpoint(request.payload)
+    case 'generation.finish': return generation.finish(request.payload)
+    case 'generation.interrupt': return generation.interrupt(request.payload)
+    case 'generation.select': return generation.select(request.payload)
+    case 'generation.adopt': return generation.adopt(request.payload)
     case 'revision.merge': return mergeRevision(repository, request.payload)
     case 'book.export.prepare': return bookExports.prepare(request.payload)
     case 'book.export.chapter': return bookExports.readChapter(request.payload)
@@ -64,6 +103,15 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'inspiration.list': return inspirations.list(request.payload)
     case 'inspiration.save': return inspirations.save(request.payload)
     case 'inspiration.copy': return inspirations.copyToNote(request.payload)
+    case 'inspiration.import': return inspirations.importItems(request.payload)
+    case 'calendar.get': return calendar.getWritingCalendar(request.payload)
+    case 'calendar.save': return calendar.saveCalendarEntry(request.payload)
+    case 'study.adopt': return studies.adopt(request.payload)
+    case 'ai.presets.get': return presets.getAiPresets(request.payload)
+    case 'ai.presets.save': return presets.saveAiPreset(request.payload)
+    case 'book.media.get': return media.getBookMedia(request.payload)
+    case 'book.media.read': return media.readBookMedia(request.payload)
+    case 'book.media.save': return media.saveBookMedia(request.payload)
     case 'workspace.get': return repository.getWorkspace()
     case 'workspace.open': {
       const workspace = repository.openWorkspace(request.payload.rootPath)
@@ -88,6 +136,8 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'story.list': return story.listRecords(request.payload)
     case 'story.timeline': return timeline.list(request.payload)
     case 'story.galaxy': return galaxy.list(request.payload)
+    case 'story.matrix': return control.matrix(request.payload)
+    case 'story.radar': return control.radar(request.payload)
     case 'story.get': return story.getRecord(request.payload)
     case 'story.revision': return story.readRevision(request.payload)
     case 'story.create': return story.createRecord(request.payload)

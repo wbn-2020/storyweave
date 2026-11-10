@@ -5,6 +5,7 @@ import { parseCreateKnowledgeItem, parseKnowledgeItemInput, parseKnowledgeStatus
 import { parseCreateStoryRecord, parseListStoryRecords, parseStoryRecordInput, parseStoryRevisionInput, parseUpdateStoryRecord } from '../contracts/story'
 import { parseStoryTimelineInput } from '../contracts/story-timeline'
 import { parseStoryGalaxyInput } from '../contracts/story-galaxy'
+import { parseAppearanceMatrixInput, parseForeshadowRadarInput } from '../contracts/story-control'
 import { parseCreateNoteInput, parseListNotesInput, parseNoteInput, parsePromoteNoteInput, parseUpdateNoteInput } from '../contracts/notes'
 import { parseMemoryBookInput, parseMemoryControlInput, parseMemoryEvidenceInput, parseMemorySearchInput, parseMemoryStartInput, parseMemoryTaskInput } from '../contracts/memory'
 import { parseAiAdoptInput, parseAiBookInput, parseAiCheckpointInput, parseAiConnectionSaveInput, parseAiFinishInput, parseAiListInput, parseAiMemoryAdoptInput, parseAiPrepareServiceInput, parseAiRunInput, parseAiStartInput, parseAiVersionInput } from '../contracts/ai'
@@ -17,8 +18,16 @@ import { parseMemoryVectorFinishInput, parseMemoryVectorPrepareServiceInput, par
 import { parseBookRecoveryExportServiceInput, parseBookRecoveryPrepareInput, parseBookRecoveryRestoreInput } from '../contracts/book-recovery'
 import { parseCopyInspirationInput, parseListInspirationInput, parseLogWritingSessionInput, parseSaveBriefInput, parseSaveInspirationInput, parseSaveReviewIssueInput, parseSaveSceneInput, parseSaveWritingGoalInput, parseWorkbenchBookInput } from '../contracts/workbench'
 import { parseApplyReviewIssueInput } from '../contracts/workbench'
+import { parseImportInspirationsInput } from '../contracts/workbench'
+import { parseGetWritingCalendarInput, parseSaveCalendarEntryInput } from '../contracts/writing-calendar'
+import { parseStudyAdoptInput } from '../contracts/study'
+import { parseGetAiPresetsInput, parseSaveAiPresetInput } from '../contracts/ai-presets'
+import { parseGetBookMediaInput, parseReadBookMediaInput, parseSaveBookMediaInput } from '../contracts/book-media'
 import { parseRevisionMergeInput } from '../contracts/revision-merge'
 import { parseBookExportPrepareInput, parseBookExportChapterInput, parseBookExportCommitServiceInput } from '../contracts/export'
+import { parseStudioAiConnectionInput, parseKickstartDraftInput, parseGenerationReadInput, parseGenerationPrepareInput, parseGenerationStartInput, parseGenerationCheckpointInput, parseGenerationFinishInput, parseGenerationVersionInput, parseGenerationSelectionInput, parseGenerationAdoptInput } from '../contracts/generation'
+import { parseLivingAdoptInput, parseLivingPrepareInput, parseLivingRunInput, parseOutlineHistoryInput, parseRestoreOutlineInput, parseSaveOutlineInput, parseMemoryArchiveInput } from '../contracts/living'
+import { parseForgeReadInput, parseForgePrepareInput, parseForgeRunInput, parseForgeAdoptInput } from '../contracts/forge'
 
 export function parseServiceRequest(value: unknown): ServiceRequest {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id.length > 64) {
@@ -27,12 +36,34 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
   const id = requiredId(value.id)
   const command = value.command
   const payload = value.payload
-  if (command === 'workspace.get' || command === 'service.close' || command === 'workspace.orphans') {
+  if (command === 'workspace.get' || command === 'service.close' || command === 'workspace.orphans' || command === 'generation.connections') {
     if (payload !== undefined) throw invalidRequest()
     return { id, command, payload: undefined }
   }
   if (!isRecord(payload)) throw invalidRequest()
   switch (command) {
+    case 'living.get': return { id, command, payload: parseAiBookInput(payload) }
+    case 'living.archive': return { id, command, payload: parseMemoryArchiveInput(payload) }
+    case 'living.save': return { id, command, payload: parseSaveOutlineInput(payload) }
+    case 'living.history': return { id, command, payload: parseOutlineHistoryInput(payload) }
+    case 'living.restore': return { id, command, payload: parseRestoreOutlineInput(payload) }
+    case 'living.prepare': return { id, command, payload: parseLivingPrepareInput(payload) }
+    case 'living.run': return { id, command, payload: parseLivingRunInput(payload) }
+    case 'living.adopt': return { id, command, payload: parseLivingAdoptInput(payload) }
+    case 'forge.get': return { id, command, payload: parseForgeReadInput(payload) }
+    case 'forge.prepare': return { id, command, payload: parseForgePrepareInput(payload) }
+    case 'forge.run': return { id, command, payload: parseForgeRunInput(payload) }
+    case 'forge.adopt': return { id, command, payload: parseForgeAdoptInput(payload) }
+    case 'generation.connection.save': return { id, command, payload: parseStudioAiConnectionInput(payload) }
+    case 'generation.draft': return { id, command, payload: parseKickstartDraftInput(payload) }
+    case 'generation.get': return { id, command, payload: parseGenerationReadInput(payload) }
+    case 'generation.prepare': return { id, command, payload: parseGenerationPrepareInput(payload) }
+    case 'generation.claim': return { id, command, payload: parseGenerationStartInput(payload) }
+    case 'generation.checkpoint': return { id, command, payload: parseGenerationCheckpointInput(payload) }
+    case 'generation.finish': return { id, command, payload: parseGenerationFinishInput(payload) }
+    case 'generation.interrupt': return { id, command, payload: parseGenerationVersionInput(payload) }
+    case 'generation.select': return { id, command, payload: parseGenerationSelectionInput(payload) }
+    case 'generation.adopt': return { id, command, payload: parseGenerationAdoptInput(payload) }
     case 'revision.merge': return { id, command, payload: parseRevisionMergeInput(payload) }
     case 'book.export.prepare': return { id, command, payload: parseBookExportPrepareInput(payload) }
     case 'book.export.chapter': return { id, command, payload: parseBookExportChapterInput(payload) }
@@ -47,6 +78,15 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'inspiration.list': return { id, command, payload: parseListInspirationInput(payload) }
     case 'inspiration.save': return { id, command, payload: parseSaveInspirationInput(payload) }
     case 'inspiration.copy': return { id, command, payload: parseCopyInspirationInput(payload) }
+    case 'inspiration.import': return { id, command, payload: parseImportInspirationsInput(payload) }
+    case 'calendar.get': return { id, command, payload: parseGetWritingCalendarInput(payload) }
+    case 'calendar.save': return { id, command, payload: parseSaveCalendarEntryInput(payload) }
+    case 'study.adopt': return { id, command, payload: parseStudyAdoptInput(payload) }
+    case 'ai.presets.get': return { id, command, payload: parseGetAiPresetsInput(payload) }
+    case 'ai.presets.save': return { id, command, payload: parseSaveAiPresetInput(payload) }
+    case 'book.media.get': return { id, command, payload: parseGetBookMediaInput(payload) }
+    case 'book.media.read': return { id, command, payload: parseReadBookMediaInput(payload) }
+    case 'book.media.save': return { id, command, payload: parseSaveBookMediaInput(payload) }
     case 'recovery.export': return { id, command, payload: parseBookRecoveryExportServiceInput(payload) }
     case 'recovery.prepare': return { id, command, payload: parseBookRecoveryPrepareInput(payload) }
     case 'recovery.restore': return { id, command, payload: parseBookRecoveryRestoreInput(payload) }
@@ -93,6 +133,8 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'story.list': return { id, command, payload: parseListStoryRecords(payload) }
     case 'story.timeline': return { id, command, payload: parseStoryTimelineInput(payload) }
     case 'story.galaxy': return { id, command, payload: parseStoryGalaxyInput(payload) }
+    case 'story.matrix': return { id, command, payload: parseAppearanceMatrixInput(payload) }
+    case 'story.radar': return { id, command, payload: parseForeshadowRadarInput(payload) }
     case 'story.get': return { id, command, payload: parseStoryRecordInput(payload) }
     case 'story.revision': return { id, command, payload: parseStoryRevisionInput(payload) }
     case 'story.create': return { id, command, payload: parseCreateStoryRecord(payload) }

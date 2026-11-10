@@ -1,4 +1,6 @@
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText, type BookInput, type BookMutationInput, type ChapterSnapshot } from './api'
+import { isStudyCardKind, readStudyCard } from './study-card'
+import { parseReviewCandidateSource, type ReviewCandidateSource } from './review'
 
 export const WORKBENCH_SCHEMA_VERSION = 13
 export const MAX_SCENES = 2_000
@@ -22,6 +24,9 @@ export interface ReviewIssueFields {
   title: string; kind: typeof REVIEW_KINDS[number]; status: typeof REVIEW_STATES[number]
   reason: string; evidence: string; suggestion: string; resolution: string; anchor: ManuscriptAnchor
   aiRunId: string | null
+  /** 分析性建议与可直接替换的正文分开；旧记录沿用 suggestion。 */
+  replacement?: string
+  candidateSource?: ReviewCandidateSource
 }
 export interface ReviewIssue extends ReviewIssueFields {
   id: string; revision: number; updatedAt: string; stale: boolean
@@ -52,7 +57,7 @@ export interface SaveWritingGoalInput extends BookMutationInput { id: string; ex
 export interface LogWritingSessionInput extends BookMutationInput {
   id: string; date: string; minutes: number; revisedChapterId: string | null
 }
-export const INSPIRATION_KINDS = ['idea', 'reference', 'observation', 'excerpt', 'technique', 'method'] as const
+export const INSPIRATION_KINDS = ['idea', 'reference', 'observation', 'excerpt', 'technique', 'method', 'beat', 'style'] as const
 export interface InspirationFields {
   kind: typeof INSPIRATION_KINDS[number]; title: string; body: string; source: string; tags: string[]
   parentId: string | null; bookId: string | null; archived: boolean
@@ -61,7 +66,11 @@ export interface InspirationItem extends InspirationFields { id: string; revisio
 export interface InspirationPage { items: InspirationItem[]; total: number; nextOffset: number | null }
 export interface ListInspirationInput { search?: string; bookId?: string; offset?: number; includeArchived?: boolean }
 export interface SaveInspirationInput { id: string; expectedRevision: number; fields: InspirationFields }
+export interface ImportInspirationsInput { items: SaveInspirationInput[] }
+export interface ImportInspirationsReceipt { items: InspirationItem[] }
 export interface CopyInspirationInput extends BookMutationInput { id: string; expectedRevision: number; noteId: string }
+
+export function reviewReplacement(fields: ReviewIssueFields): string { return fields.replacement ?? fields.suggestion }
 
 function object(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new DomainError({ code: 'INVALID_INPUT', message: '创作工具参数无效。' })
@@ -79,6 +88,10 @@ function text(value: unknown, label: string, maximum = 10_000): string {
   const result = optionalText(value, label, maximum)
   if (result.includes('\0')) throw new DomainError({ code: 'INVALID_INPUT', message: `${label}含有无效字符。` })
   return result
+}
+function exactText(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== 'string' || value.length > maximum || value.includes('\0')) throw new DomainError({ code: 'INVALID_INPUT', message: `${label}无效或超过 ${maximum} 个字符。` })
+  return value
 }
 function id(value: unknown): string { return requiredId(value).toLowerCase() }
 function nullableId(value: unknown): string | null { return value === null ? null : id(value) }
@@ -120,8 +133,10 @@ export function parseSceneFields(value: unknown): SceneFields {
 export function parseReviewIssueFields(value: unknown): ReviewIssueFields {
   const v = object(value)
   return { title: requiredText(v.title, '问题标题', 160), kind: choice(v.kind, REVIEW_KINDS), status: choice(v.status, REVIEW_STATES),
-    reason: text(v.reason, '问题理由'), evidence: text(v.evidence, '证据'), suggestion: text(v.suggestion, '修改建议', 20_000),
-    resolution: text(v.resolution, '处理说明'), anchor: parseManuscriptAnchor(v.anchor), aiRunId: nullableId(v.aiRunId) }
+    reason: text(v.reason, '问题理由'), evidence: v.candidateSource === undefined ? text(v.evidence, '证据') : exactText(v.evidence, '证据', 10000), suggestion: text(v.suggestion, '修改建议', 20_000),
+    resolution: text(v.resolution, '处理说明'), anchor: parseManuscriptAnchor(v.anchor), aiRunId: nullableId(v.aiRunId),
+    ...(v.replacement === undefined ? {} : { replacement: exactText(v.replacement, '替换正文', 20000) }),
+    ...(v.candidateSource === undefined ? {} : { candidateSource: parseReviewCandidateSource(v.candidateSource) }) }
 }
 export function parseWritingGoalFields(value: unknown): WritingGoalFields {
   const v = object(value)
@@ -148,7 +163,10 @@ export function parseInspirationFields(value: unknown): InspirationFields {
   const v = object(value)
   if (!Array.isArray(v.tags) || v.tags.length > 20) throw new DomainError({ code: 'INVALID_INPUT', message: '标签最多 20 个。' })
   const tags = [...new Set(v.tags.map((tag) => requiredText(tag, '标签', 50)))]
-  return { kind: choice(v.kind, INSPIRATION_KINDS), title: requiredText(v.title, '灵感标题', 160), body: text(v.body, '灵感内容', 40_000),
+  if (typeof v.body !== 'string' || v.body.length > 40_000 || v.body.includes('\0')) throw new DomainError({ code: 'INVALID_INPUT', message: '灵感内容不能超过 40,000 个字符，且不能包含空字符。' })
+  if (typeof v.kind === 'string' && isStudyCardKind(v.kind)) readStudyCard(v.kind, v.body)
+  // 原文缩进与分段换行属于内容；保存、读取和幂等核对都保留相同字符。
+  return { kind: choice(v.kind, INSPIRATION_KINDS), title: requiredText(v.title, '灵感标题', 160), body: v.body,
     source: text(v.source, '参考出处', 2_000), tags, parentId: nullableId(v.parentId), bookId: nullableId(v.bookId), archived: flag(v.archived) }
 }
 export function parseListInspirationInput(value: unknown): ListInspirationInput {
@@ -157,4 +175,11 @@ export function parseListInspirationInput(value: unknown): ListInspirationInput 
     offset: v.offset === undefined ? undefined : requiredInteger(v.offset, '页位置', 10_000), includeArchived: v.includeArchived === undefined ? false : flag(v.includeArchived) }
 }
 export function parseSaveInspirationInput(value: unknown): SaveInspirationInput { const v = object(value); return { ...identity(v), fields: parseInspirationFields(v.fields) } }
+export function parseImportInspirationsInput(value: unknown): ImportInspirationsInput {
+  const v = object(value)
+  if (!Array.isArray(v.items) || !v.items.length || v.items.length > 50 || JSON.stringify(v).length > 1_200_000) throw new DomainError({ code: 'INVALID_INPUT', message: '一次最多导入 50 个分段，文本合计不超过 120 万字符。' })
+  const items = v.items.map(parseSaveInspirationInput)
+  if (items.some((entry) => entry.expectedRevision !== 0) || new Set(items.map((entry) => entry.id)).size !== items.length) throw new DomainError({ code: 'INVALID_INPUT', message: '导入只能建立具有独立标识的新条目。' })
+  return { items }
+}
 export function parseCopyInspirationInput(value: unknown): CopyInspirationInput { const v = object(value); return { ...mutation(v), ...identity(v), noteId: id(v.noteId) } }

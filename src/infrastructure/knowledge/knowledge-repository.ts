@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3'
 import { DomainError, requiredId } from '../../contracts/api'
 import {
   MAX_KNOWLEDGE_HISTORY_PAGE, MAX_KNOWLEDGE_ITEMS, MAX_KNOWLEDGE_SOURCES,
-  parseCreateKnowledgeItem, parseKnowledgeFields, parseKnowledgeItemInput,
+  parseCreateKnowledgeItem, parseKnowledgeFields, parseKnowledgeItemInput, resolveKnowledgeFields,
   parseKnowledgeSource, parseListKnowledgeItems, parseUpdateKnowledgeItem,
   type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeItemFields,
   type KnowledgeItemInput, type KnowledgeItemPage, type KnowledgeItemSummary,
@@ -17,6 +17,7 @@ interface ItemRow {
   summary: string; nature: KnowledgeItemFields['nature']; author_decision: KnowledgeItemFields['authorDecision']
   freshness: KnowledgeItemFields['freshness']; conflict_state: KnowledgeItemFields['conflictState']
   created_at: string; updated_at: string
+  character_profile_json: string | null
 }
 interface SourceRow {
   id: string; item_id: string; source_type: KnowledgeSourceInput['sourceType']; book_id: string
@@ -35,6 +36,15 @@ const LIST_FILTER = `book_id = @bookId AND (@kind IS NULL OR kind = @kind)
   AND (@search = '' OR instr(name, @search) > 0 OR instr(summary, @search) > 0
     OR EXISTS (SELECT 1 FROM json_each(aliases_json) WHERE instr(value, @search) > 0))`
 
+function hasCharacterProfileColumn(db: Database.Database): boolean {
+  return !!db.prepare("SELECT 1 FROM pragma_table_info('knowledge_items') WHERE name = 'character_profile_json'").get()
+}
+
+function itemColumns(db: Database.Database): string {
+  // 旧书仍可浏览与编辑普通条目，读取不能隐式迁移。
+  return `${ITEM_COLUMNS}, ${hasCharacterProfileColumn(db) ? 'character_profile_json' : 'NULL AS character_profile_json'}`
+}
+
 function storageFailure(): DomainError {
   return new DomainError({ code: 'STORAGE_ERROR', message: '知识库资料读写失败，请保留当前编辑并检查作品文件。' })
 }
@@ -52,7 +62,8 @@ function storedFields(value: unknown): KnowledgeItemFields {
 
 function itemFields(row: ItemRow): KnowledgeItemFields {
   return storedFields({ kind: row.kind, name: row.name, aliases: JSON.parse(row.aliases_json), summary: row.summary,
-    nature: row.nature, authorDecision: row.author_decision, freshness: row.freshness, conflictState: row.conflict_state })
+    nature: row.nature, authorDecision: row.author_decision, freshness: row.freshness, conflictState: row.conflict_state,
+    ...(row.character_profile_json == null ? {} : { characterProfile: JSON.parse(row.character_profile_json) }) })
 }
 
 function itemSummary(row: ItemRow): KnowledgeItemSummary {
@@ -67,7 +78,7 @@ function readState(db: Database.Database, bookId: string): BookState {
 }
 
 function readItem(db: Database.Database, bookId: string, id: string): ItemRow {
-  const row = db.prepare(`SELECT ${ITEM_COLUMNS} FROM knowledge_items WHERE book_id = ? AND id = ?`).get(bookId, id) as ItemRow | undefined
+  const row = db.prepare(`SELECT ${itemColumns(db)} FROM knowledge_items WHERE book_id = ? AND id = ?`).get(bookId, id) as ItemRow | undefined
   if (!row) throw new DomainError({ code: 'NOT_FOUND', message: '当前作品中不存在这个知识条目。' })
   return row
 }
@@ -87,7 +98,7 @@ export class KnowledgeRepository {
         if (!Number.isSafeInteger(total) || total > MAX_KNOWLEDGE_ITEMS) throw storageFailure()
         const limit = data.limit ?? 50
         const offset = data.offset ?? 0
-        const rows = db.prepare(`SELECT ${ITEM_COLUMNS} FROM knowledge_items WHERE ${LIST_FILTER}
+        const rows = db.prepare(`SELECT ${itemColumns(db)} FROM knowledge_items WHERE ${LIST_FILTER}
           ORDER BY updated_at DESC, id LIMIT @limit OFFSET @offset`).all({ ...params, limit, offset }) as ItemRow[]
         return { bookId: data.bookId, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision,
           items: rows.map(itemSummary), total, nextOffset: offset + rows.length < total ? offset + rows.length : null }
@@ -152,6 +163,17 @@ export class KnowledgeRepository {
       }
       if (state.revision >= Number.MAX_SAFE_INTEGER || state.knowledge_revision >= Number.MAX_SAFE_INTEGER) throw storageFailure()
       const previous = existingId ? readItem(db, data.bookId, existingId) : null
+      const previousFields = previous ? itemFields(previous) : null
+      // 旧客户端和 AI 修订可能只提交通用字段；省略档案须保留，显式空对象才清空。
+      const fields = resolveKnowledgeFields(data.fields, previousFields ?? undefined)
+      if (fields.characterProfile && fields.kind !== 'person') throw new DomainError({ code: 'INVALID_INPUT', message: '此人物仍有档案，请先明确清空档案再更改条目类型；历史档案会保留。' })
+      const profileEnabled = hasCharacterProfileColumn(db)
+      if (fields.characterProfile?.abilities && (db.pragma('user_version', { simple: true }) as number) < 17) {
+        throw new DomainError({ code: 'FORBIDDEN', message: '请先备份并升级作品至 v17，再保存六维能力数值。' })
+      }
+      if (fields.characterProfile && !profileEnabled) {
+        throw new DomainError({ code: 'FORBIDDEN', message: '请先在知识库中备份并升级这部作品，再保存人物档案；普通条目和正文仍可继续编辑。' })
+      }
       if (previous?.kind === 'person' && data.fields.kind !== 'person' && (db.pragma('user_version', { simple: true }) as number) >= 4 &&
           db.prepare("SELECT record_id FROM story_entity_refs WHERE entity_id = ? AND role = 'cognition_subject' LIMIT 1").get(id)) {
         throw new DomainError({ code: 'INVALID_INPUT', message: '这个人物仍被人物认知记录引用，请先调整对应认知主体，再更改条目类型。' })
@@ -170,7 +192,7 @@ export class KnowledgeRepository {
         // 相同出处再次提交不新增重复记录，也不会单独制造一个修改版本。
         return (!existingId || !this.hasSource(db, existingId, source)) && values.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === index
       })
-      if (previous && JSON.stringify(itemFields(previous)) === JSON.stringify(data.fields) && sources.length === 0) {
+      if (previous && JSON.stringify(previousFields) === JSON.stringify(fields) && sources.length === 0) {
         return this.readDetail(db, data.bookId, id)
       }
       if (!previous) {
@@ -182,18 +204,19 @@ export class KnowledgeRepository {
         if (count + sources.length > MAX_KNOWLEDGE_SOURCES) throw new DomainError({ code: 'INVALID_INPUT', message: `每个条目最多记录 ${MAX_KNOWLEDGE_SOURCES} 个来源。` })
       }
       const now = new Date().toISOString()
-      const fields = data.fields
       const values = { id, bookId: data.bookId, kind: fields.kind, name: fields.name, aliases: JSON.stringify(fields.aliases),
         summary: fields.summary, nature: fields.nature, decision: fields.authorDecision, freshness: fields.freshness,
-        conflict: fields.conflictState, now }
+        conflict: fields.conflictState, now,
+        ...(profileEnabled ? { characterProfile: fields.characterProfile ? JSON.stringify(fields.characterProfile) : null } : {}) }
       if (previous) {
         const changed = db.prepare(`UPDATE knowledge_items SET kind = @kind, name = @name, aliases_json = @aliases,
           summary = @summary, nature = @nature, author_decision = @decision, freshness = @freshness,
-          conflict_state = @conflict, updated_at = @now WHERE id = @id AND book_id = @bookId`).run(values)
+          conflict_state = @conflict, updated_at = @now${profileEnabled ? ', character_profile_json = @characterProfile' : ''}
+          WHERE id = @id AND book_id = @bookId`).run(values)
         if (changed.changes !== 1) throw storageFailure()
       } else {
-        db.prepare(`INSERT INTO knowledge_items (${ITEM_COLUMNS})
-          VALUES (@id, @bookId, @kind, @name, @aliases, @summary, @nature, @decision, @freshness, @conflict, @now, @now)`).run(values)
+        db.prepare(`INSERT INTO knowledge_items (${ITEM_COLUMNS}${profileEnabled ? ', character_profile_json' : ''})
+          VALUES (@id, @bookId, @kind, @name, @aliases, @summary, @nature, @decision, @freshness, @conflict, @now, @now${profileEnabled ? ', @characterProfile' : ''})`).run(values)
       }
       for (const source of sources) this.insertSource(db, id, source, now)
       const revisionId = randomUUID()

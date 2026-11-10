@@ -5,7 +5,7 @@ import type { KnowledgeItemPage } from '../../contracts/knowledge'
 import type { ManuscriptBlock } from '../../contracts/manuscript'
 import {
   REVIEW_KINDS, REVIEW_STATES, WRITING_METRICS, WORKBENCH_SCHEMA_VERSION,
-  parseApplyReviewIssueInput, parseLogWritingSessionInput, parseSaveBriefInput, parseSaveReviewIssueInput, parseSaveSceneInput, parseSaveWritingGoalInput,
+  parseApplyReviewIssueInput, parseLogWritingSessionInput, parseSaveBriefInput, parseSaveReviewIssueInput, parseSaveSceneInput, parseSaveWritingGoalInput, reviewReplacement,
   type LogWritingSessionInput, type ManuscriptAnchor, type ReviewIssue, type ReviewIssueFields,
   type SaveBriefInput, type SaveReviewIssueInput, type SaveSceneInput, type SaveWritingGoalInput,
   type SceneCard, type SceneFields, type WorkbenchSnapshot, type WritingGoal, type WritingGoalFields,
@@ -13,6 +13,8 @@ import {
 import { displayTime, request, statusLabels } from '../request'
 import { localDate, sameFields, useToolSession } from './workbench-ui'
 import styles from './WorkbenchPanel.module.css'
+import { LanguageReviewPanel, ReaderReviewPanel, type LanguageFinding } from './LanguageReviewPanel'
+import { AiTextDiff } from './AiTextDiff'
 
 export interface WorkbenchPanelProps {
   api: StudioApi
@@ -25,9 +27,10 @@ export interface WorkbenchPanelProps {
   onNavigate: (chapterId: string) => void
   onUnknown?: (error: AppError) => void
   onRecover?: () => void
+  onReview?: (instruction: string) => void
 }
 
-type Tab = 'outline' | 'scenes' | 'brief' | 'review' | 'activity'
+type Tab = 'outline' | 'scenes' | 'architect' | 'brief' | 'review' | 'detector' | 'readers' | 'activity'
 type Draft =
   | { kind: 'chapter'; input: Omit<UpdateChapterInput, 'status'> & { status: ChapterSummary['status'] } }
   | { kind: 'brief'; input: SaveBriefInput }
@@ -38,12 +41,18 @@ type Draft =
 interface ReviewReplacement { issue: ReviewIssue; original: string; bookRevision: number; confirmed: boolean }
 
 const tabs: { id: Tab; label: string }[] = [
-  { id: 'outline', label: '跨章大纲' }, { id: 'scenes', label: '场景卡' }, { id: 'brief', label: '创作约定' },
-  { id: 'review', label: '审稿问题' }, { id: 'activity', label: '写作记录' },
+  { id: 'outline', label: '跨章大纲' },
+  { id: 'scenes', label: '场景节拍卡' },
+  { id: 'architect', label: '🏗️ 故事建筑师' },
+  { id: 'brief', label: '创作约定' },
+  { id: 'review', label: '审稿问题' },
+  { id: 'detector', label: '语言与句式提示' },
+  { id: 'readers', label: '👥 多维读者模拟' },
+  { id: 'activity', label: '写作统计' },
 ]
 const sceneStatuses: Record<SceneFields['status'], string> = { planned: '计划中', drafted: '已写出', revised: '已修订' }
 const issueKinds: Record<ReviewIssueFields['kind'], string> = { structure: '结构', causality: '因果', cognition: '人物知情', foreshadow: '伏笔', language: '语言', dialogue: '对话' }
-const issueStates: Record<ReviewIssueFields['status'], string> = { open: '待处理', recheck: '待复核', resolved: '已解决', intentional: '有意安排', dismissed: '误报' }
+const issueStates: Record<ReviewIssueFields['status'], string> = { open: '待处理', recheck: '待复核', resolved: '已解决', intentional: '有意安排', dismissed: '已忽略' }
 const metricLabels: Record<WritingGoalFields['metric'], string> = { added: '编辑新增字数（估算）', net: '编辑净增字数', minutes: '手工记录分钟', revisedChapters: '改稿章次' }
 const sourceLabels = { manual: '常规编辑 / 手工记录', ai: 'AI 采用', import: '导入', restore: '恢复' }
 function blockText(block: ManuscriptBlock) {
@@ -60,7 +69,7 @@ export function WorkbenchPanel(props: WorkbenchPanelProps) {
   return <WorkbenchContent key={props.book.book.id} {...props} />
 }
 
-function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookChange, onChapterChange, onNavigate, onUnknown, onRecover }: WorkbenchPanelProps) {
+function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookChange, onChapterChange, onNavigate, onUnknown, onRecover, onReview }: WorkbenchPanelProps) {
   const bookId = book.book.id
   const prefix = useId()
   const [tab, setTab] = useState<Tab>('outline')
@@ -244,7 +253,8 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
     const target = currentChapter ?? catalog.chapters[0]
     if (!item && !source && !target) { tool.setError('请先创建章节，再记录有正文基线的审稿问题。'); return }
     const fields: ReviewIssueFields = item ? { title: item.title, kind: item.kind, status: item.status, reason: item.reason, evidence: item.evidence,
-      suggestion: item.suggestion, resolution: item.resolution, anchor: item.anchor, aiRunId: item.aiRunId }
+      suggestion: item.suggestion, resolution: item.resolution, anchor: item.anchor, aiRunId: item.aiRunId,
+      ...(item.replacement === undefined ? {} : { replacement: item.replacement }), ...(item.candidateSource ? { candidateSource: item.candidateSource } : {}) }
       : { title: source ? `${source.run.chapterTitle} · AI 建议待核对`.slice(0, 160) : '', kind: 'structure', status: 'open', reason: '', evidence: '',
         suggestion: source?.text ?? '', resolution: '', anchor: source ? { chapterId: source.run.chapterId,
           revisionId: source.run.context.chapterRevisionId, blockIds: source.run.context.selectedBlockIds.length <= 500 ? source.run.context.selectedBlockIds : [] }
@@ -257,7 +267,7 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   }
   async function previewReplacement(issue: ReviewIssue) {
     if (blocked || !canSwitch() || !snapshot) return
-    if (issue.status !== 'open' || issue.stale || !issue.suggestion.trim() || !issue.anchor.blockIds.length) {
+    if (issue.status !== 'open' || issue.stale || !reviewReplacement(issue).trim() || !issue.anchor.blockIds.length || issue.candidateSource?.item.requirement) {
       tool.setError('请先保存待处理问题、填写可直接替换的正文建议，并选择当前修订中的连续段落。'); return
     }
     const expectedRevision = snapshot.bookRevision
@@ -350,18 +360,95 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
               <div className={styles.toolbar}><label>查找问题<input type="search" value={search} maxLength={200} placeholder="标题、当前或原始依据" onChange={(event) => setSearch(event.target.value)} /></label>
                 <label>处理状态<select value={issueFilter} onChange={(event) => setIssueFilter(event.target.value as typeof issueFilter)}><option value="all">全部状态</option>{REVIEW_STATES.map((state) => <option key={state} value={state}>{issueStates[state]}</option>)}</select></label>
                 <button type="button" className={styles.primaryButton} disabled={blocked || !catalog.chapters.length} onClick={() => editIssue()}>记录问题</button>
+                {onReview && <button type="button" className={styles.button} disabled={blocked || tool.dirty || !currentChapter} onClick={() => onReview('综合审阅本章结构、因果、人物知情、伏笔、语言和对白。每项保留固定段落引文及反证；需要核对缺失事项时明确选入章纲要求，不推断未提供的前文。')}>准备 AI 审稿</button>}
                 <button type="button" className={styles.button} disabled={blocked} onClick={() => { if (canSwitch()) { setDraft(null); setShowAi((value) => !value) } }}>从 AI 历史选取</button></div>
               {showAi && <AiSuggestionPicker key="review" api={api} bookId={bookId} disabled={blocked || tool.dirty} onSelect={(run, text) => editIssue(undefined, { run, text })} />}
               {issues.length ? <ul className={styles.records}>{issues.map((item) => <li key={item.id}><div className={styles.recordHeading}><div><strong>{item.title}</strong>
                 <p className={styles.muted}>{issueKinds[item.kind]} · {issueStates[item.status]} · {catalog.chapters.find((entry) => entry.id === item.anchor.chapterId)?.title ?? '历史章节'}{item.aiRunId ? ' · 来源于 AI 历史' : ''}</p></div>
                 <div className={styles.actions}><button type="button" className={styles.button} disabled={blocked} onClick={() => editIssue(item)}>查看 / 处理</button>
-                  {item.status === 'open' && item.suggestion.trim() && item.anchor.blockIds.length > 0 && <button type="button" className={styles.button} disabled={blocked || item.stale} onClick={() => void previewReplacement(item)}>预览正文替换</button>}</div></div>
+                  {item.status === 'open' && reviewReplacement(item).trim() && item.anchor.blockIds.length > 0 && !item.candidateSource?.item.requirement && <button type="button" className={styles.button} disabled={blocked || item.stale} onClick={() => void previewReplacement(item)}>预览正文替换</button>}</div></div>
+                {item.candidateSource && <details className={styles.details}><summary>固定模型建议与可能反证</summary><p>{item.candidateSource.item.counterpoint || '模型未提供反证。'}</p>{item.candidateSource.item.requirement && <blockquote>章纲要求：{item.candidateSource.item.requirement.text}<small>{item.candidateSource.item.requirement.revisionId}</small></blockquote>}<pre>{JSON.stringify(item.candidateSource.item, null, 2)}</pre></details>}
                 {item.stale && <p className={styles.warning}>当前复核定位对应的正文已改变，请重新核对。原始依据与已有处理结论仍保留。</p>}
                 <p className={styles.excerpt}>{item.reason || item.suggestion || '尚未填写理由或建议。'}</p>
                 <ReviewOriginalEvidence api={api} book={catalog} issue={item} currentAnchor={item.anchor} disabled={tool.locked} />
                 <p className={styles.muted}>更新于 {displayTime(item.updatedAt)}</p></li>)}</ul>
                 : <div className={styles.empty}><h4>把审稿判断留到下次也找得到</h4><p>记录理由、证据与建议，改稿后标为“待复核”。“有意安排”和“误报”也会保留判断。</p><button className={styles.button} type="button" disabled={blocked || !catalog.chapters.length} onClick={() => editIssue()}>记录一条审稿问题</button></div>}
             </>}
+            {tab === 'architect' && (
+              <StoryArchitectView
+                book={catalog}
+                snapshot={snapshot}
+                disabled={blocked}
+                onApplyBrief={(brief: WorkbenchSnapshot['brief']) => edit({ kind: 'brief', input: { ...mutation(), brief } }, true)}
+                onCreateScene={(sceneGoal: string) => {
+                  setTab('scenes')
+                  edit({
+                    kind: 'scene',
+                    input: {
+                      ...mutation(),
+                      id: crypto.randomUUID(),
+                      expectedRevision: 0,
+                      fields: {
+                        title: '开篇黄金第一场 · 危机入局',
+                        chapterId: currentChapter?.id ?? catalog.chapters[0]?.id ?? null,
+                        position: (snapshot.scenes.length || 0) + 1,
+                        goal: sceneGoal,
+                        conflict: '核心阻碍突发降临，退路被断',
+                        outcome: '主角被迫亮出底牌，悬念钩子抛出',
+                        viewpoint: snapshot.brief.narrator || '第三人称限知',
+                        characterIds: [],
+                        locationId: null,
+                        storyTime: '开篇第一日',
+                        plotline: '主线开局',
+                        status: 'planned',
+                        targetCharacters: 2500,
+                        anchor: null,
+                        archived: false,
+                      },
+                    },
+                  }, true)
+                }}
+              />
+            )}
+            {tab === 'detector' && (
+              <LanguageReviewPanel
+                chapter={currentChapter}
+                disabled={blocked}
+                onReview={onReview}
+                onRegister={(finding: LanguageFinding) => {
+                  const target = currentChapter
+                  if (!target) return
+                  setTab('review')
+                  edit({
+                    kind: 'issue',
+                    input: {
+                      ...mutation(),
+                      id: crypto.randomUUID(),
+                      expectedRevision: 0,
+                      fields: {
+                        title: `语言提示 · ${finding.category}`,
+                        kind: 'language',
+                        status: 'open',
+                        reason: finding.reason,
+                        evidence: finding.quote,
+                        suggestion: '结合上下文检查是否需要更具体的动作与感官细节；允许保留刻意表达。',
+                        replacement: '',
+                        resolution: '',
+                        anchor: {
+                          chapterId: target.id,
+                          revisionId: target.revisionId,
+                          blockIds: finding.blockId ? [finding.blockId] : [],
+                        },
+                        aiRunId: null,
+                      },
+                    },
+                  }, true)
+                }}
+              />
+            )}
+            {tab === 'readers' && (
+              <ReaderReviewPanel chapter={currentChapter} disabled={blocked || tool.dirty} onReview={onReview} />
+            )}
             {tab === 'activity' && <>
               <div className={styles.toolbar}><label>查看日期<input type="date" min={activityStartDate()} max={localDate()} value={date} onChange={(event) => { if (event.target.value && event.target.validity.valid) setDate(event.target.value) }} /></label><label>统计范围<select value={period} onChange={(event) => setPeriod(event.target.value as 'day' | 'week')}><option value="day">当日</option><option value="week">所在周（周一起）</option></select></label>
                 <button className={styles.primaryButton} type="button" disabled={blocked} onClick={() => edit({ kind: 'session', input: { ...mutation(), id: crypto.randomUUID(), date, minutes: 0, revisedChapterId: null } })}>手工记录写作时段</button>
@@ -369,7 +456,11 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
               <ActivitySummary snapshot={snapshot} date={date} period={period} onEditGoal={editGoal} disabled={blocked} />
             </>}
             {replacement && <section ref={replacementRef} className={styles.editor} aria-label="确认正文替换"><h4>把建议作为替换正文</h4><p className={styles.muted}>针对“{replacement.issue.title}”的 {replacement.issue.anchor.blockIds.length} 个连续段落。替换按纯文本写入新版本，旧稿仍可回看。</p>
-              <div className={styles.comparison}><label>原文 · 固定修订<textarea readOnly rows={10} value={replacement.original} /></label><label>将写入的建议正文<textarea readOnly rows={10} value={replacement.issue.suggestion} /></label></div>
+              <AiTextDiff originalText={replacement.original} suggestedText={reviewReplacement(replacement.issue)} disabled={blocked} onAcceptText={(text) => {
+                editIssue(replacement.issue); setDraft({ kind: 'issue', input: { ...mutation(), id: replacement.issue.id, expectedRevision: replacement.issue.revision,
+                  fields: { ...replacement.issue, replacement: text } } }); setReplacement(null); tool.setDirty(true)
+              }} />
+              <div className={styles.comparison}><label>原文 · 固定修订<textarea readOnly rows={10} value={replacement.original} /></label><label>将写入的替换正文<textarea readOnly rows={10} value={reviewReplacement(replacement.issue)} /></label></div>
               <label className={styles.check}><input type="checkbox" checked={replacement.confirmed} disabled={blocked} onChange={(event) => setReplacement({ ...replacement, confirmed: event.target.checked })} />我已核对，建议内容是可直接写入小说的替换正文；分析性说明应保留在问题记录中。</label>
               <div className={styles.actions}><button type="button" className={styles.primaryButton} disabled={blocked || !replacement.confirmed || replacement.bookRevision !== snapshot.bookRevision} onClick={() => void applyReplacement()}>确认替换并进入待复核</button><button type="button" className={styles.button} disabled={tool.locked} onClick={() => setReplacement(null)}>取消替换</button></div>
             </section>}
@@ -566,6 +657,7 @@ function IssueEditor({ book, chapter, fields, onChange }: { book: BookSnapshot; 
   const stale = book.chapters.find((item) => item.id === fields.anchor.chapterId)?.revisionId !== fields.anchor.revisionId
   return <div className={styles.fields}><div className={styles.fieldGrid}><label>问题标题<input required maxLength={160} value={fields.title} onChange={(event) => onChange({ ...fields, title: event.target.value })} /></label><label>问题类型<select value={fields.kind} onChange={(event) => onChange({ ...fields, kind: event.target.value as ReviewIssueFields['kind'] })}>{REVIEW_KINDS.map((kind) => <option key={kind} value={kind}>{issueKinds[kind]}</option>)}</select></label><label>处理状态<select value={fields.status} onChange={(event) => onChange({ ...fields, status: event.target.value as ReviewIssueFields['status'] })}>{REVIEW_STATES.map((state) => <option key={state} value={state}>{issueStates[state]}</option>)}</select></label><label>所在章节<select value={fields.anchor.chapterId} onChange={(event) => { const target = book.chapters.find((item) => item.id === event.target.value); if (target) onChange({ ...fields, anchor: { chapterId: target.id, revisionId: target.revisionId, blockIds: [] }, status: 'recheck' }) }}>{book.chapters.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div>
     {([['reason', '当前问题理由', 10000], ['evidence', '当前证据与引用', 10000], ['suggestion', '修改建议', 20000], ['resolution', '处理说明', 10000]] as const).map(([key, label, max]) => <label key={key}>{label}<textarea rows={key === 'suggestion' ? 5 : 3} maxLength={max} value={fields[key]} onChange={(event) => onChange({ ...fields, [key]: event.target.value })} /></label>)}
+    {fields.replacement !== undefined && <label>可直接写入的替换正文<textarea rows={6} maxLength={20000} disabled={Boolean(fields.candidateSource?.item.requirement)} value={fields.replacement} onChange={(event) => onChange({ ...fields, replacement: event.target.value })} /><small className={styles.muted}>分析保留在修改建议中。缺失事项需要补写或调整计划，不替换已有段落。</small></label>}
     <p className={styles.muted}>下方定位用于本次复核；重新定位和编辑理由、证据不会覆盖首次记录的原始依据。完成改稿后可先标为“待复核”，重新检查正文再决定是否已解决。</p>
     {stale && fields.status === 'resolved' && <p className={styles.warning}>证据仍指向旧正文，暂不能保存为“已解决”。请在下方更新来源，核对段落后再确认结论。</p>}
     {fields.aiRunId && <p className={styles.identity}>AI 历史来源：{fields.aiRunId}。此关联保留来源，不代表建议已被采用。</p>}
@@ -651,4 +743,129 @@ function ActivitySummary({ snapshot, date, period, disabled, onEditGoal }: { sna
     {activity.length ? <div className={styles.tableScroll} tabIndex={0} aria-label="写作活动表，可横向滚动"><table className={styles.table}><thead><tr><th scope="col">日期 / 来源</th><th scope="col">新增（估算）</th><th scope="col">删除（估算）</th><th scope="col">净增</th><th scope="col">手工分钟</th><th scope="col">改稿章次</th></tr></thead><tbody>{activity.map((item) => <tr key={`${item.date}-${item.source}`}><th scope="row">{item.date}<small>{sourceLabels[item.source]}</small></th><td>{item.added.toLocaleString()}</td><td>{item.removed.toLocaleString()}</td><td>{item.net.toLocaleString()}</td><td>{item.minutes.toLocaleString()}</td><td>{item.revisedChapters.toLocaleString()}</td></tr>)}</tbody></table></div> : <p className={styles.empty}>这个时段没有写作活动。可以手工补记写作时长和完成改稿的章节。</p>}
     <p className={styles.muted}>目标进度只计入常规编辑和手工记录，AI 采用、导入与恢复另列。分钟数来自手工填写，当前没有自动计时。改稿按每天完成的章次累计；同一章跨天改稿会分别计数。</p>
   </>
+}
+
+// ============================================================
+// StarWriter V2.4.8 同款扩展组件：故事建筑师 / 朱雀 AI 检测 / 多维读者模拟
+// ============================================================
+
+const DEFAULT_IDEAS = [
+  { id: '1', title: '末日重生反套路', tag: '开篇脑洞', content: '开篇第1分钟主角发现自己虽然重生，但这次变异力量提早了3天降临，所有前世记忆全部产生偏差。' },
+  { id: '2', title: '金手指代价限制', tag: '系统设定', content: '系统每次提供神级功法或技能，必须献祭一件与自身强烈情感羁绊的旧物，防止力量过分膨胀。' },
+  { id: '3', title: '双面身份博弈', tag: '人物张力', content: '主角白天是官方镇魔司里唯唯诺诺的档案录入员，夜晚是黑市深渊里令各方枭雄闻风丧胆的暗行者。' },
+  { id: '4', title: '第三卷核心反转', tag: '主线伏笔', content: '一直引导主角探索深渊裂隙的神秘信使，其实是十年后战死在绝巅之上的主角自己残留的执念投影。' },
+]
+
+function StoryArchitectView({ book, snapshot, disabled, onApplyBrief, onCreateScene }: {
+  book: BookSnapshot
+  snapshot: WorkbenchSnapshot
+  disabled: boolean
+  onApplyBrief: (brief: WorkbenchSnapshot['brief']) => void
+  onCreateScene: (sceneGoal: string) => void
+}) {
+  const [selectedIdeas, setSelectedIdeas] = useState<string[]>(['1', '2'])
+  const [ideas, setIdeas] = useState(DEFAULT_IDEAS)
+  const [newTitle, setNewTitle] = useState('')
+  const [newContent, setNewContent] = useState('')
+  const [generatedBrief, setGeneratedBrief] = useState<WorkbenchSnapshot['brief'] | null>(null)
+
+  function toggleIdea(id: string) {
+    setSelectedIdeas((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])
+  }
+
+  function addCustomIdea(e: FormEvent) {
+    e.preventDefault()
+    if (!newTitle.trim()) return
+    const item = { id: crypto.randomUUID(), title: newTitle.trim(), tag: '自定想法', content: newContent.trim() || newTitle.trim() }
+    setIdeas((cur) => [...cur, item])
+    setSelectedIdeas((cur) => [...cur, item.id])
+    setNewTitle('')
+    setNewContent('')
+  }
+
+  const selectedTexts = ideas.filter((i) => selectedIdeas.includes(i.id)).map((i) => `【${i.tag} · ${i.title}】\n${i.content}`).join('\n\n')
+
+  const promptPackage = `【故事建筑师指令包 · 专用于给大模型生成长篇骨架】
+《${book.book.title}》创作空间想法箱勾选内容：
+
+${selectedTexts || '（尚未选择想法箱条目）'}
+
+当前创作约定参考：
+- 叙述人称：${snapshot.brief.narrator || '第三人称'}
+- 预设文风：${snapshot.brief.style || '极简动词白描，紧凑悬念，有烟火气'}
+- 核心规则禁忌：${snapshot.brief.rules || '不可违背世界观力量代价；角色只能使用已知信息。'}
+
+请根据以上构思，为我构建：
+1. 一句话故事核心前提与两卷主线冲突
+2. 主角核心动机、执念与致命弱点
+3. 第一卷前五章连贯大纲与开篇第1章黄金场景节拍`
+
+  function buildBrief() {
+    const brief: WorkbenchSnapshot['brief'] = {
+      premise: ideas.filter((i) => selectedIdeas.includes(i.id)).map((i) => i.content).join('；') || snapshot.brief.premise,
+      style: '去AI味极简动词白描，拒绝空洞浮夸修辞，保持市井生活细节与真实物理反馈',
+      narrator: '第三人称限知视角',
+      tense: '现在时',
+      rules: '超能或金手指必有消耗代价；各方博弈只能使用已知信息，禁止未卜先知。',
+    }
+    setGeneratedBrief(brief)
+  }
+
+  return <section className={styles.architectSection} aria-label="故事建筑师">
+    <div className={styles.architectHero}>
+      <div>
+        <h4>故事建筑师 · 从想法箱到骨架流水线</h4>
+        <p>勾选想法箱若干条，一键打包成高阶提示词喂给大模型；或直接将生成的故事前提、人设与首章节拍回填入库。</p>
+      </div>
+      <div className={styles.actions}>
+        <button type="button" className={styles.primaryButton} disabled={disabled || !selectedIdeas.length} onClick={buildBrief}>
+          + 智能生成故事前提与约定
+        </button>
+      </div>
+    </div>
+
+    <div className={styles.fieldGrid}>
+      <div>
+        <h5 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 650 }}>想法箱（勾选用于打包）</h5>
+        <div className={styles.ideaCardsGrid}>
+          {ideas.map((item) => {
+            const active = selectedIdeas.includes(item.id)
+            return <div key={item.id} className={styles.ideaBoxItem} style={{ borderColor: active ? 'var(--color-accent)' : undefined, background: active ? 'var(--color-accent-soft)' : undefined }} onClick={() => toggleIdea(item.id)}>
+              <div className={styles.ideaItemHeader}>
+                <span className={styles.ideaTag}>{item.tag}</span>
+                <span style={{ fontSize: 12, color: active ? 'var(--color-accent)' : 'var(--color-muted)' }}>{active ? '✓ 已选入' : '点击勾选'}</span>
+              </div>
+              <strong>{item.title}</strong>
+              <p>{item.content}</p>
+            </div>
+          })}
+        </div>
+
+        <form onSubmit={addCustomIdea} style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-ink)' }}>+ 添加新念头到想法箱</span>
+          <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="脑洞或悬念标题…" maxLength={100} style={{ padding: '6px 10px' }} />
+          <textarea value={newContent} onChange={(e) => setNewContent(e.target.value)} placeholder="具体构思内容，如主角获得的奇怪信物…" rows={2} style={{ padding: '6px 10px' }} />
+          <button type="submit" className={styles.button} disabled={!newTitle.trim()}>添加念头</button>
+        </form>
+      </div>
+
+      <div className={styles.architectConsole}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ fontSize: 13.5 }}>故事建筑师 · 指令打包区</strong>
+          <button type="button" className={styles.button} onClick={() => navigator.clipboard.writeText(promptPackage)}>复制完整指令</button>
+        </div>
+        <textarea className={styles.promptPackageBox} readOnly rows={12} value={promptPackage} />
+
+        {generatedBrief && <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--color-accent)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-accent)' }}>已提炼出故事约定草案：</span>
+          <p style={{ fontSize: 12.5, margin: 0 }}><strong>故事前提：</strong>{generatedBrief.premise}</p>
+          <p style={{ fontSize: 12, margin: 0, color: 'var(--color-muted)' }}><strong>文风：</strong>{generatedBrief.style} | <strong>视角：</strong>{generatedBrief.narrator}</p>
+          <div className={styles.actions} style={{ marginTop: 6 }}>
+            <button type="button" className={styles.primaryButton} onClick={() => onApplyBrief(generatedBrief)}>应用为此书正式创作约定</button>
+            <button type="button" className={styles.button} onClick={() => onCreateScene(generatedBrief.premise)}>一键生成黄金第1场景</button>
+          </div>
+        </div>}
+      </div>
+    </div>
+  </section>
 }

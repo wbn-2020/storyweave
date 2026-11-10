@@ -4,9 +4,11 @@ import { MAX_NOTE_BODY, type NoteDetail, type NoteFields } from '../../contracts
 import {
   parseCopyInspirationInput, parseInspirationFields, parseListInspirationInput, parseSaveInspirationInput,
   type CopyInspirationInput, type InspirationItem, type InspirationPage, type ListInspirationInput, type SaveInspirationInput,
+  parseImportInspirationsInput, type ImportInspirationsInput, type ImportInspirationsReceipt,
 } from '../../contracts/workbench'
 import { NotesRepository } from '../notes/notes-repository'
 import type { StudioRepository } from '../storage/studio-repository'
+import { isStudyCardKind, studyMaterialText } from '../../contracts/study-card'
 
 interface Row {
   id: string; revision: number; kind: string; title: string; body: string; source: string; tags_json: string
@@ -91,8 +93,8 @@ export class InspirationRepository {
       const source = read(db, data.id)
       if (source.revision !== data.expectedRevision) return failure('灵感已有新版本，请重读后复制。', 'REVISION_CONFLICT')
       const attribution = [`灵感来源：${source.title}`, source.source && `出处：${source.source}`, source.tags.length && `标签：${source.tags.join('、')}`].filter(Boolean).join('\n')
-      const fields: NoteFields = { title: source.title, category: source.kind === 'method' || source.kind === 'technique' ? 'method' : source.kind === 'idea' ? 'inspiration' : 'material',
-        body: `${source.body}\n\n${attribution}` }
+      const fields: NoteFields = { title: source.title, category: source.kind === 'method' || source.kind === 'technique' || isStudyCardKind(source.kind) ? 'method' : source.kind === 'idea' ? 'inspiration' : 'material',
+        body: `${studyMaterialText(source.kind, source.body)}\n\n${attribution}` }
       if (fields.title.length > 120 || fields.body.length > MAX_NOTE_BODY) return failure('这条灵感超过作品笔记的标题或正文上限，请先拆分或缩短后复制；原文会保留。', 'INVALID_INPUT')
       // 复制不删除或改写收件箱原件；同一 noteId 的重试须核对完整内容，避免重复写入。
       let existing: NoteDetail | null = null
@@ -104,6 +106,25 @@ export class InspirationRepository {
         return existing
       }
       return this.notes.create({ bookId: data.bookId, expectedBookRevision: data.expectedBookRevision, id: data.noteId, fields })
+    })
+  }
+
+  importItems(input: ImportInspirationsInput): ImportInspirationsReceipt {
+    return perform(() => {
+      const data = parseImportInspirationsInput(input)
+      const db = this.studio.getInspirationDatabase(true)!
+      return db.transaction(() => {
+        // 客户端固定导入标识，未知回执重试只确认相同内容；整批在同一事务提交。
+        const items = data.items.map((entry) => {
+          if (db.prepare('SELECT id FROM inspirations WHERE id = ?').get(entry.id)) {
+            const saved = read(db, entry.id)
+            if (saved.revision !== 1 || JSON.stringify(parseInspirationFields(saved)) !== JSON.stringify(entry.fields)) return failure('已有导入条目内容不符，本次没有覆盖。', 'REVISION_CONFLICT')
+            return saved
+          }
+          return this.save(entry)
+        })
+        return { items }
+      }).immediate()
     })
   }
 }

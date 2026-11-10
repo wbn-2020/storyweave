@@ -16,12 +16,18 @@ import { parseNoteFields } from '../../contracts/notes'
 import { parseMemoryVectorValues } from '../../contracts/memory-vector'
 import { NotesRepository } from '../notes/notes-repository'
 import { AiRepository } from '../ai/ai-repository'
+import { GenerationRepository } from '../ai/generation-repository'
+import { LivingRepository } from '../workbench/living-repository'
 import { AiMemoryTaskRepository } from '../ai/memory-task-repository'
 import { AiSummaryRepository } from '../ai/summary-repository'
 import { MemoryRepository } from '../memory/task-repository'
 import { MemorySearchRepository } from '../memory/search-repository'
 import { MemoryVectorRepository } from '../memory/vector-repository'
 import { validateWorkbenchDatabase } from '../workbench/workbench-repository'
+import { WORKBENCH_SCHEMA } from '../workbench/schema'
+import { validateCalendarDatabase } from '../workbench/calendar-repository'
+import { validateAiPresetsDatabase } from '../ai/preset-repository'
+import { validateMediaDatabase } from '../workbench/media-repository'
 import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
 import { STORY_SCHEMA } from '../story/schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
@@ -30,7 +36,8 @@ import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memor
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
-import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
+import { BOOK_APPLICATION_ID, BOOK_BASE_SCHEMA, BOOK_V14_SCHEMA, BOOK_V15_SCHEMA, BOOK_V16_SCHEMA, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
+import { ForgeRepository } from '../workbench/forge-repository'
 import { BOOK_RECOVERY_COMPLETE, BOOK_RECOVERY_PENDING, StudioRepository } from './studio-repository'
 
 const MANIFEST_NAME = 'manifest.json'
@@ -239,9 +246,7 @@ function normalizedSql(sql: string): string {
 }
 
 function expectedSchema(version: number): Map<string, SchemaObject> {
-  const baseEnd = BOOK_SCHEMA.indexOf(KNOWLEDGE_SCHEMA)
-  if (baseEnd < 0) invalid('程序内置作品结构不可用。')
-  let ddl = BOOK_SCHEMA.slice(0, baseEnd)
+  let ddl = BOOK_BASE_SCHEMA
   if (version >= 3) ddl += KNOWLEDGE_SCHEMA
   if (version >= 4) ddl += STORY_SCHEMA
   if (version >= 5) ddl += MEMORY_SCHEMA
@@ -256,7 +261,11 @@ function expectedSchema(version: number): Map<string, SchemaObject> {
   if (version >= 10) ddl += MEMORY_VECTOR_SCHEMA
   if (version >= 11) ddl += AI_MEMORY_MAINTENANCE_SCHEMA
   if (version >= 12) ddl += NOTES_SCHEMA
-  // 当前格式直接使用完整内置结构；新增工作台表随 BOOK_SCHEMA 一起进入恢复白名单。
+  if (version >= 13) ddl += WORKBENCH_SCHEMA
+  if (version === 14) ddl = BOOK_V14_SCHEMA
+  if (version === 15) ddl = BOOK_V15_SCHEMA
+  if (version === 16) ddl = BOOK_V16_SCHEMA
+  // 新建和备份升级采用相同追加结构，避免格式版本增加后误用新字段验证旧恢复包。
   if (version === BOOK_SCHEMA_VERSION) ddl = BOOK_SCHEMA
   // 只执行程序自带 DDL 构造私有参照库，FTS5 影子表与隐式索引由同一 SQLite 版本生成。
   // 恢复包中的 SQL 只作为待比较的文本，绝不交给 exec 或用于创建数据库对象。
@@ -311,7 +320,8 @@ function schemaVersion(db: Database.Database): number {
 
 function requireIdle(db: Database.Database, version: number): void {
   if ((version >= 6 && db.prepare("SELECT 1 FROM ai_runs WHERE state = 'running' LIMIT 1").get()) ||
-      (version >= 10 && db.prepare("SELECT 1 FROM memory_vector_runs WHERE state = 'running' LIMIT 1").get())) {
+      (version >= 10 && db.prepare("SELECT 1 FROM memory_vector_runs WHERE state = 'running' LIMIT 1").get()) ||
+      (version >= 15 && db.prepare("SELECT 1 FROM generation_runs WHERE state = 'running' LIMIT 1").get())) {
     throw new DomainError({ code: 'FORBIDDEN', message: '作品仍有正在发送或生成的 AI／向量请求，请在请求结束或明确中断后重新导出。运行中的请求不能封存到恢复包。' })
   }
 }
@@ -424,13 +434,23 @@ function verifyNonManuscriptData(db: Database.Database, version: number, book: B
         if (key.endsWith('_json')) parsed(value)
       }
       if (table.name === 'knowledge_items') {
-        parseKnowledgeFields({ kind: row.kind, name: row.name, aliases: parsed(row.aliases_json), summary: row.summary,
-          nature: row.nature, authorDecision: row.author_decision, freshness: row.freshness, conflictState: row.conflict_state })
+        const fields = parseKnowledgeFields({ kind: row.kind, name: row.name, aliases: parsed(row.aliases_json), summary: row.summary,
+          nature: row.nature, authorDecision: row.author_decision, freshness: row.freshness, conflictState: row.conflict_state,
+          ...(row.character_profile_json == null ? {} : { characterProfile: parsed(row.character_profile_json) }) })
+        if (version < 17 && fields.characterProfile?.abilities) invalid('旧格式恢复包不能包含六维能力数值。')
       } else if (table.name === 'knowledge_item_revisions') {
-        parseKnowledgeFields(parsed(row.fields_json))
+        const fields = parseKnowledgeFields(parsed(row.fields_json))
+        if (version < 17 && fields.characterProfile?.abilities) invalid('旧格式恢复包不能包含六维能力数值。')
         requiredInteger(row.knowledge_revision, '知识历史版本', knowledgeRevision as number)
       } else if (table.name === 'story_records' || table.name === 'story_record_revisions') {
         const fields = parseStoryFields(parsed(row.fields_json), book.id)
+        if (version < 17 && fields.kind === 'relation' && fields.layer !== undefined) invalid('旧格式恢复包不能包含关系层次。')
+        if (fields.kind === 'event' && fields.appearanceCheck) {
+          const check = fields.appearanceCheck
+          if (version < 17 || !db.prepare('SELECT id FROM chapter_revisions WHERE chapter_id = ? AND id = ?').get(check.chapterId, check.revisionId)) invalid('整章出场核对的格式版本或正文修订不符。')
+          for (const entityId of check.absentEntityIds) if (!db.prepare('SELECT id FROM knowledge_items WHERE id = ? AND book_id = ?').get(entityId, book.id)) invalid('整章出场核对引用了其他作品或不存在的实体。')
+        }
+        if (version < 17 && fields.kind === 'foreshadow' && 'targetNumber' in fields.plannedPayoff) invalid('旧格式恢复包不能包含未建卷章序号。')
         disclosure(fields)
         if (table.name === 'story_records') {
           const time = fields.kind === 'relation' ? fields.validFrom : fields.storyTime
@@ -493,6 +513,14 @@ function verifyNonManuscriptData(db: Database.Database, version: number, book: B
   if (version >= 9) eachId('ai_summary_tasks', (taskId) => pages((afterOrdinal) => summaries.get({ bookId: book.id, taskId, afterOrdinal })))
   if (version >= 10) eachId('memory_vector_runs', (runId) => { vectors.get({ bookId: book.id, runId }) })
   if (version >= 13) validateWorkbenchDatabase(db, book.id)
+  if (version >= 14) {
+    validateCalendarDatabase(db, book.id)
+    validateAiPresetsDatabase(db, book.id)
+    validateMediaDatabase(db, book.id)
+  }
+  if (version >= 15) new GenerationRepository(studio).validateBook(book.id)
+  if (version >= 16) new LivingRepository(studio, ai).validateBook(book.id)
+  if (version >= 17) new ForgeRepository(studio, ai).validateBook(book.id)
   if (version >= 12) eachId('notes', (id) => { notes.get({ bookId: book.id, id }) })
 }
 
@@ -507,14 +535,17 @@ function readSnapshot(db: Database.Database): Snapshot {
     CASE WHEN length(CAST(synopsis AS BLOB)) <= 80000 THEN synopsis END AS synopsis,
     CASE WHEN archived_at IS NULL OR length(CAST(archived_at AS BLOB)) <= 24 THEN archived_at ELSE '' END AS archivedAt, revision,
     CASE WHEN length(CAST(created_at AS BLOB)) <= 24 THEN created_at END AS createdAt,
-    CASE WHEN length(CAST(updated_at AS BLOB)) <= 24 THEN updated_at END AS updatedAt FROM book_meta LIMIT 2`).all() as BookSummary[]
+    CASE WHEN length(CAST(updated_at AS BLOB)) <= 24 THEN updated_at END AS updatedAt
+    ${version >= 15 ? ', lifecycle' : ''} FROM book_meta LIMIT 2`).all() as BookSummary[]
   const row = rows[0]
   if (rows.length !== 1 || !row || requiredId(row.id).toLowerCase() !== row.id || !row.title || row.title !== row.title.trim() || row.title.length > 120 ||
       typeof row.genre !== 'string' || row.genre.length > 120 || typeof row.synopsis !== 'string' || row.synopsis.length > 20_000 ||
       !isoTime(row.createdAt) || !isoTime(row.updatedAt) || (row.archivedAt !== null && !isoTime(row.archivedAt))) invalid('恢复包作品资料无效。')
   requiredInteger(row.revision, '作品版本')
+  if (version >= 15 && !['kickstarting', 'active', 'finished'].includes(row.lifecycle ?? '')) invalid('恢复包作品生命周期无效。')
   const book: BookSummary = { id: row.id, title: row.title, genre: row.genre, synopsis: row.synopsis, archivedAt: row.archivedAt,
-    revision: row.revision, createdAt: row.createdAt, updatedAt: row.updatedAt }
+    revision: row.revision, createdAt: row.createdAt, updatedAt: row.updatedAt,
+    ...(version >= 15 ? { lifecycle: row.lifecycle } : {}) }
   const count = (table: 'chapters' | 'chapter_revisions' | 'volumes', maximum = Number.MAX_SAFE_INTEGER): number => {
     const result = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }
     return requiredInteger(result.count, '作品记录数', maximum)

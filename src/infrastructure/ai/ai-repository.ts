@@ -15,7 +15,7 @@ import { AI_SUMMARY_PROMPT_VERSION, parseAiSummaryContext } from '../../contract
 import { AI_CONTEXT_SUMMARY_PROMPT_VERSION, contextSummaryRef, parseAiContextSummarySnapshots } from '../../contracts/ai-context-summary'
 import { characterScopeOf, isAiCharacterContextPromptVersion, parseAiCharacterContext } from '../../contracts/ai-character-context'
 import { parseManuscript } from '../../contracts/manuscript'
-import { parseKnowledgeFields } from '../../contracts/knowledge'
+import { parseKnowledgeFields, resolveKnowledgeFields } from '../../contracts/knowledge'
 import { parseDisclosure } from '../../contracts/story'
 import { KnowledgeRepository } from '../knowledge/knowledge-repository'
 import type { MemorySearchRepository } from '../memory/search-repository'
@@ -24,7 +24,14 @@ import { BOOK_SCHEMA_VERSION } from '../storage/schema'
 import { textToDocument } from '../text/manuscript-text'
 import { buildAiContext, validateAiContext } from './context'
 import { validateAiSummaryContext } from './summary-context'
+import { creativeRef, parseCreativeResources } from '../../contracts/creative-resources'
 import { AiMemoryTaskRepository } from './memory-task-repository'
+import { parseLivingWritingContext } from '../../contracts/living'
+import { REVIEW_PROMPT_VERSION } from '../../contracts/review'
+import { STUDY_CARDS_PROMPT_VERSION } from '../../contracts/study'
+import { requireLiving } from '../workbench/living-state'
+import { requireForge } from '../workbench/forge-state'
+import { forgeInstructionKind, forgeUsesChapter } from '../../contracts/forge'
 
 interface BookState { id: string; revision: number; knowledge_revision: number; archived_at: string | null }
 interface ConnectionRow {
@@ -33,7 +40,7 @@ interface ConnectionRow {
 }
 interface SummaryRow {
   sequence: number; id: string; book_id: string; chapter_id: string; chapter_title: string; kind: AiTaskKind
-  purpose: 'review' | null
+  purpose: 'review' | 'study' | 'living' | 'forge' | null
   state: AiRunState; version: number; connection_id: string; connection_name: string; model: string
   output_characters: number; error: string | null; created_at: string; updated_at: string
 }
@@ -106,13 +113,13 @@ function summary(row: SummaryRow, bookId: string): AiRunSummary {
   try {
     if (row.book_id !== bookId || !['plan', 'continue', 'rewrite', 'summarize', 'extract'].includes(row.kind) || !RUN_STATES.includes(row.state) ||
       [row.sequence, row.version, row.output_characters].some((number) => !Number.isSafeInteger(number) || number < 0) ||
-      (row.purpose !== null && (row.purpose !== 'review' || row.kind !== 'plan')) ||
+      (row.purpose !== null && (!['review', 'study', 'living', 'forge'].includes(row.purpose) || row.kind !== 'plan')) ||
       row.output_characters > AI_OUTPUT_LIMIT || typeof row.chapter_title !== 'string' || row.chapter_title.length > 120 ||
       typeof row.connection_name !== 'string' || row.connection_name.length > 80 || typeof row.model !== 'string' || row.model.length > 200 ||
       (row.error !== null && (typeof row.error !== 'string' || row.error.length > 500))) throw storageFailure()
     requiredId(row.connection_id)
     return { id: requiredId(row.id), bookId, chapterId: requiredId(row.chapter_id), chapterTitle: row.chapter_title,
-      ...(row.purpose === 'review' ? { purpose: 'review' as const } : {}),
+      ...(row.purpose === 'review' || row.purpose === 'study' || row.purpose === 'living' || row.purpose === 'forge' ? { purpose: row.purpose } : {}),
       kind: row.kind, state: row.state, version: row.version, connectionName: row.connection_name, model: row.model,
       outputCharacters: row.output_characters, error: row.error, createdAt: row.created_at, updatedAt: row.updated_at }
   } catch { throw storageFailure() }
@@ -131,6 +138,15 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
     if (config.id !== row.connection_id || config.name !== row.connection_name || config.model !== row.model) throw storageFailure()
     const contextSummaries = value.contextSummaries === undefined ? [] : parseAiContextSummarySnapshots(value.contextSummaries)
     const characterContext = value.characterContext === undefined ? undefined : parseAiCharacterContext(value.characterContext)
+    const creativeResources = value.creativeResources === undefined ? undefined : parseCreativeResources(value.creativeResources)
+    const livingContext = value.livingContext === undefined ? undefined : parseLivingWritingContext(value.livingContext)
+    if (livingContext && JSON.stringify(livingContext) !== JSON.stringify(value.livingContext)) throw storageFailure()
+    if (creativeResources && JSON.stringify(creativeResources) !== JSON.stringify(value.creativeResources)) throw storageFailure()
+    if (value.purpose === 'study' && (value.writingContext !== undefined || value.chapterBlocks.length || value.originalText !== '')) throw storageFailure()
+    if (value.purpose === 'living' && (value.writingContext !== undefined || value.originalText !== '' || value.summary !== undefined)) throw storageFailure()
+    if (value.purpose === 'forge' && (value.writingContext !== undefined || value.creativeResources !== undefined || value.livingContext !== undefined || value.summary !== undefined ||
+      value.perspective !== undefined || value.evidence.length || contextSummaries.length || value.originalText !== '' ||
+      !forgeUsesChapter(forgeInstructionKind(value.instruction as string)) && value.chapterBlocks.length)) throw storageFailure()
     if (value.writingContext !== undefined && (isAiMemoryTask(row.kind) || value.perspective === 'reader' || value.perspective === 'character' ||
       JSON.stringify(parseAiWritingContext(value.writingContext)) !== JSON.stringify(value.writingContext))) throw storageFailure()
     if ((value.perspective === 'character') !== Boolean(characterContext)) throw storageFailure()
@@ -139,7 +155,9 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
       kind: value.kind, purpose: value.purpose, instruction: value.instruction, contextScope: value.contextScope, perspective: value.perspective,
       selectedBlockIds: value.selectedBlockIds, memoryChunkIds: value.evidence.map((item) => isRecord(item) ? item.chunkId : null),
       ...(characterContext ? { characterScope: characterScopeOf(characterContext) } : {}),
-      ...(contextSummaries.length ? { summaryRefs: contextSummaries.map(contextSummaryRef) } : {}) })
+      ...(contextSummaries.length ? { summaryRefs: contextSummaries.map(contextSummaryRef) } : {}),
+      ...(livingContext ? { useLivingContext: true } : {}),
+      ...(creativeResources ? { resourceRefs: creativeResources.items.map(creativeRef), resourceApplication: creativeResources.application } : {}) })
     if (value.messages.some((item) => !isRecord(item) || (item.role !== 'system' && item.role !== 'user') || typeof item.content !== 'string') ||
       value.messages.reduce((length: number, item: unknown) => length + (isRecord(item) && typeof item.content === 'string' ? item.content.length : 0), 0) > AI_CONTEXT_LIMIT) throw storageFailure()
     if (value.summary !== undefined) {
@@ -154,7 +172,7 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         value.perspective !== undefined || characterContext !== undefined || value.estimatedInputTokens !== estimated || value.reservedOutputTokens !== config.maxOutputTokens ||
         estimated + config.maxOutputTokens > config.contextWindow) throw storageFailure()
     } else {
-      const supportedPrompt = characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
+      const supportedPrompt = value.purpose === 'review' && value.promptVersion === REVIEW_PROMPT_VERSION || value.purpose === 'study' && value.promptVersion === STUDY_CARDS_PROMPT_VERSION ? true : characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
         : value.promptVersion === (isAiMemoryTask(row.kind) ? AI_MEMORY_PROMPT_VERSION : value.perspective === 'reader' ? AI_READER_CONTEXT_PROMPT_VERSION : contextSummaries.length ? AI_CONTEXT_SUMMARY_PROMPT_VERSION : AI_PROMPT_VERSION)
       if (!supportedPrompt) throw storageFailure()
     }
@@ -176,7 +194,7 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         return disclosure.state !== 'located' || JSON.stringify(disclosure) !== JSON.stringify(item.readerDisclosure)
       })) throw storageFailure()
     }
-    if (contextSummaries.length || value.perspective === 'reader' || characterContext || value.writingContext !== undefined) {
+    if (contextSummaries.length || value.perspective === 'reader' || characterContext || value.writingContext !== undefined || creativeResources || livingContext || value.purpose === 'living' || value.purpose === 'forge' || value.purpose === 'review' && value.promptVersion === REVIEW_PROMPT_VERSION) {
       const estimated = Math.ceil(Buffer.byteLength(JSON.stringify(value.messages), 'utf8') * 1.1) + 1024
       if (value.messages.length !== 2 || !isRecord(value.messages[0]) || value.messages[0].role !== 'system' ||
         !isRecord(value.messages[1]) || value.messages[1].role !== 'user' || value.warnings.some((warning) => typeof warning !== 'string') ||
@@ -203,6 +221,11 @@ function run(row: RunRow, bookId: string): AiRun {
     return { ...base, context: storedContext(row, bookId), outputText: row.output_text, acceptedText: row.accepted_text,
       adoptedRevisionId: row.adopted_revision_id, usage: finish.usage, finishReason: row.finish_reason }
   } catch { throw storageFailure() }
+}
+
+/** 作品恢复校验使用传入的只读连接，保持候选的来源与完整性检查一致。 */
+export function readStoredAiRun(db: Database.Database, bookId: string, runId: string): AiRun {
+  return run(readRunRow(db, bookId, runId), bookId)
 }
 
 function memoryAdoptions(db: Database.Database, candidate: AiRun): AiRun {
@@ -326,13 +349,17 @@ export class AiRepository {
 
   prepare(input: AiPrepareServiceInput): AiRun {
     if (!isRecord(input) || Object.keys(input).some((key) => !['bookId', 'chapterId', 'expectedBookRevision', 'expectedKnowledgeRevision',
-      'expectedRevisionId', 'connectionId', 'kind', 'purpose', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs', 'connection'].includes(key))) invalid('准备请求格式无效。')
+      'expectedRevisionId', 'connectionId', 'kind', 'purpose', 'instruction', 'contextScope', 'perspective', 'characterScope', 'selectedBlockIds', 'memoryChunkIds', 'summaryRefs', 'resourceRefs', 'resourceApplication', 'useLivingContext', 'connection'].includes(key))) invalid('准备请求格式无效。')
     const { connection: requestedConnection, ...request } = input
     const data = parseAiPrepareInput(request)
     const config = checkedConnection(requestedConnection)
     return perform(() => {
       const db = this.studio.getMemoryDatabase(data.bookId)
       requireAi(db)
+      if (data.purpose === 'forge') {
+        requireForge(db)
+        if (!db.inTransaction) invalid('请从角色与世界工坊准备固定预览。')
+      }
       if (isAiMemoryTask(data.kind) && schemaVersion(db) < 7) throw new DomainError({ code: 'FORBIDDEN', message: '章节整理需要先备份并升级至 v7；已有创作协作仍可使用。' })
       return db.transaction(() => {
         const book = readBook(db, data.bookId)
@@ -493,7 +520,7 @@ export class AiRepository {
           if (row.state !== 'succeeded') invalid('只有已成功完成的候选可以采用，部分输出请先复制另行处理。')
           if (candidate.context.summary !== undefined) invalid('分层汇总须在汇总任务中审阅，不能写入正文或章节备注。')
           if (isAiMemoryTask(candidate.kind)) invalid('章节整理结果须逐条审阅后采用为知识，不能写入正文或章节备注。')
-          if (candidate.context.purpose === 'review') invalid('审稿候选须在审稿问题中逐项确认并关联固定原稿，不能采用为章节备注或正文。')
+          if (candidate.context.purpose) invalid('审稿或拆书候选须在对应审阅入口逐项确认，不能采用为章节备注或正文。')
           const previous = this.verifyBaseline(db, candidate, false)
           if (!previous) throw storageFailure()
           if (candidate.context.bookRevision >= Number.MAX_SAFE_INTEGER) throw storageFailure()
@@ -566,9 +593,10 @@ export class AiRepository {
             // 来源、作者选择、实体修订和候选终态在同一事务提交；重复来源可能是无变化的关联。
             const target = action === 'create' ? null : knowledge.getItem({ bookId: data.bookId, id: entry.targetItemId! })
             const previousFields = target ? parseKnowledgeFields(target.revisions[0]!.fields) : undefined
+            const resolvedFields = resolveKnowledgeFields(entry.fields, previousFields)
             if (target && (target.revisions[0]?.id !== entry.expectedTargetRevisionId || target.knowledgeRevision !== revision)) conflict('目标实体已变化，请重新读取后审阅。')
             if (previousFields && (previousFields.kind !== proposal.items[entry.sourceIndex]!.kind || previousFields.kind !== entry.fields.kind || previousFields.nature !== entry.fields.nature ||
-              (action === 'link' && JSON.stringify(previousFields) !== JSON.stringify(entry.fields)))) invalid('关联只能追加来源；显式修订须保持目标实体类型与知识性质，请重新核对。')
+              (action === 'link' && JSON.stringify(previousFields) !== JSON.stringify(resolvedFields)))) invalid('关联只能追加来源；显式修订须保持目标实体类型与知识性质，请重新核对。')
             const change = { bookId: data.bookId, expectedKnowledgeRevision: revision, fields: entry.fields }
             const saved = target
               ? knowledge.updateItemWithSources({ ...change, id: target.id }, entry.expectedTargetRevisionId!, sources)
@@ -576,7 +604,7 @@ export class AiRepository {
             const changed = saved.knowledgeRevision !== revision
             if (saved.knowledgeRevision !== revision + (changed ? 1 : 0)) throw storageFailure()
             revision = saved.knowledgeRevision
-            adopted.push({ ...entry, itemId: saved.id, changed, resultingRevisionId: saved.revisions[0]!.id,
+            adopted.push({ ...entry, fields: parseKnowledgeFields(saved.revisions[0]!.fields), itemId: saved.id, changed, resultingRevisionId: saved.revisions[0]!.id,
               ...(previousFields ? { previousFields } : {}) })
           }
           const reviewJson = JSON.stringify({ entries: adopted })
@@ -604,6 +632,16 @@ export class AiRepository {
     writable(book)
     if (maintenanceBaseline) new AiMemoryTaskRepository(this.studio, this).verifyMaintenanceBaseline(candidate, maintenanceBaseline)
     else if (book.revision !== context.bookRevision || book.knowledge_revision !== context.knowledgeRevision) conflict('作品或知识已变化，请保留候选并按当前版本重新预览。')
+    if (context.purpose === 'living') {
+      requireLiving(db)
+      const fixed = db.prepare('SELECT envelope_json FROM living_runs WHERE run_id = ?').get(candidate.id) as { envelope_json: string } | undefined
+      if (!fixed || fixed.envelope_json !== context.instruction) conflict('演进提案缺少匹配的固定来源，请从演进沙盘重新准备。')
+    }
+    if (context.purpose === 'forge') {
+      requireForge(db)
+      const fixed = db.prepare('SELECT envelope_json FROM forge_runs WHERE run_id = ?').get(candidate.id) as { envelope_json: string } | undefined
+      if (!fixed || fixed.envelope_json !== context.instruction) conflict('工坊任务缺少匹配的固定来源，请从工坊重新准备。')
+    }
     if (checkConnection && !sameConnection(this.readConnection(db, candidate.bookId, context.connection.id), context.connection)) {
       conflict('模型连接已变化，请按当前配置重新预览。')
     }

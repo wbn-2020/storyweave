@@ -1,15 +1,21 @@
-import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
+import { KNOWLEDGE_SCHEMA, CHARACTER_PROFILE_SCHEMA } from '../knowledge/schema'
 import { STORY_SCHEMA } from '../story/schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
 import { AI_SCHEMA } from '../ai/schema'
+import { GENERATION_BOOK_UPGRADE, STUDIO_GENERATION_SCHEMA } from '../ai/generation-schema'
 import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
 import { WORKBENCH_SCHEMA } from '../workbench/schema'
+import { CALENDAR_SCHEMA } from '../workbench/calendar-schema'
+import { AI_PRESETS_SCHEMA } from '../ai/preset-schema'
+import { MEDIA_SCHEMA } from '../workbench/media-schema'
+import { LIVING_SCHEMA } from '../workbench/living-schema'
+import { FORGE_SCHEMA } from '../workbench/forge-schema'
 
-export const STUDIO_SCHEMA_VERSION = 2
-export const BOOK_SCHEMA_VERSION = 13
+export const STUDIO_SCHEMA_VERSION = 3
+export const BOOK_SCHEMA_VERSION = 17
 export const STUDIO_APPLICATION_ID = 0x53545753
 export const BOOK_APPLICATION_ID = 0x53545742
 
@@ -29,9 +35,11 @@ export const STUDIO_SCHEMA = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT;
+  ${STUDIO_GENERATION_SCHEMA}
 `
 
-export const BOOK_SCHEMA = `
+// 历史基础结构保持原样，恢复包按其真实版本校验；新格式统一追加同一份升级 DDL。
+export const BOOK_BASE_SCHEMA = `
   CREATE TABLE book_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     id TEXT NOT NULL UNIQUE,
@@ -115,6 +123,10 @@ export const BOOK_SCHEMA = `
     byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
     created_at TEXT NOT NULL
   ) STRICT;
+`
+
+export const BOOK_V14_SCHEMA = `
+  ${BOOK_BASE_SCHEMA}
   ${KNOWLEDGE_SCHEMA}
   ${STORY_SCHEMA}
   ${MEMORY_SCHEMA}
@@ -125,4 +137,12 @@ export const BOOK_SCHEMA = `
   ${AI_MEMORY_MAINTENANCE_SCHEMA}
   ${NOTES_SCHEMA}
   ${WORKBENCH_SCHEMA}
+  ${CHARACTER_PROFILE_SCHEMA}
+  ${CALENDAR_SCHEMA}
+  ${AI_PRESETS_SCHEMA}
+  ${MEDIA_SCHEMA}
 `
+
+export const BOOK_V15_SCHEMA = `${BOOK_V14_SCHEMA}${GENERATION_BOOK_UPGRADE}`
+export const BOOK_V16_SCHEMA = `${BOOK_V15_SCHEMA}${LIVING_SCHEMA}`
+export const BOOK_SCHEMA = `${BOOK_V16_SCHEMA}${FORGE_SCHEMA}`

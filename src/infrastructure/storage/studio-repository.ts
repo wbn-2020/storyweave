@@ -20,11 +20,18 @@ import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
 import { STORY_SCHEMA } from '../story/schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
 import { AI_SCHEMA, AI_V6_TO_V7_SCHEMA } from '../ai/schema'
+import { GENERATION_BOOK_UPGRADE, STUDIO_GENERATION_SCHEMA } from '../ai/generation-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
 import { INSPIRATION_APPLICATION_ID, INSPIRATION_SCHEMA, WORKBENCH_SCHEMA } from '../workbench/schema'
+import { CHARACTER_PROFILE_SCHEMA } from '../knowledge/schema'
+import { CALENDAR_SCHEMA } from '../workbench/calendar-schema'
+import { AI_PRESETS_SCHEMA } from '../ai/preset-schema'
+import { MEDIA_SCHEMA } from '../workbench/media-schema'
+import { LIVING_SCHEMA } from '../workbench/living-schema'
+import { FORGE_SCHEMA } from '../workbench/forge-schema'
 import { recordWritingActivity } from '../workbench/writing-activity'
 import type { WritingDay } from '../../contracts/workbench'
 import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
@@ -33,6 +40,7 @@ import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION, STUDIO_APPLICATI
 interface BookRow {
   id: string; title: string; genre: string; synopsis: string; archived_at: string | null
   revision: number; created_at: string; updated_at: string
+  lifecycle?: 'kickstarting' | 'active' | 'finished'
 }
 interface ChapterRow {
   id: string; title: string; position: number; current_revision_id: string
@@ -169,11 +177,12 @@ function assertDatabasePaths(path: string): boolean {
 }
 
 function verifyDatabase(db: Database.Database, applicationId: number): void {
-  const version = db.pragma('user_version', { simple: true })
+  const version = db.pragma('user_version', { simple: true }) as number
   if (db.pragma('application_id', { simple: true }) === applicationId && version === 1) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '此书库使用旧版 v1 格式，需要专门的迁移工具。当前版本未修改旧库，也不支持直接恢复旧格式。' })
   }
-  const supported = applicationId === BOOK_APPLICATION_ID ? Number.isInteger(version) && version >= 2 && version <= BOOK_SCHEMA_VERSION : version === STUDIO_SCHEMA_VERSION
+  const supported = applicationId === BOOK_APPLICATION_ID ? Number.isInteger(version) && version >= 2 && version <= BOOK_SCHEMA_VERSION
+    : version === 2 || version === STUDIO_SCHEMA_VERSION
   if (db.pragma('application_id', { simple: true }) !== applicationId || !supported) {
     throw new DomainError({ code: 'STORAGE_ERROR', message: '数据库格式或版本不受当前程序支持，未修改该数据库。' })
   }
@@ -194,6 +203,7 @@ function bookSummary(row: BookRow): BookSummary {
   return {
     id: row.id, title: row.title, genre: row.genre, synopsis: row.synopsis, archivedAt: row.archived_at,
     revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at,
+    ...(row.lifecycle === undefined ? {} : { lifecycle: row.lifecycle }),
   }
 }
 
@@ -286,13 +296,68 @@ export class StudioRepository {
   }
 
   createBook(input: CreateBookInput): BookSnapshot {
+    return this.createBookAsset(input, randomUUID())
+  }
+
+  createKickstartBook(bookId: string, seedJson: string): BookSnapshot {
+    const id = requiredId(bookId).toLowerCase()
+    const studio = this.requireStudio()
+    const directory = join(this.requireRoot(), 'books', id)
+    if (studio.prepare('SELECT id FROM books WHERE id = ?').get(id)) return this.getBook({ bookId: id })
+    // 同一草稿重试先核对已有资产；初始化残件保留，由恢复入口报告，不能覆盖重建。
+    if (lstatSync(directory, { throwIfNoEntry: false })) return this.registerOrphanBook({ bookId: id })
+    return this.createBookAsset({ title: '未完成的开书草稿' }, id, seedJson)
+  }
+
+  getStudioDatabase(): Database.Database { return this.requireStudio() }
+
+  async prepareStudioGenerationStorage(): Promise<Database.Database> {
+    const db = this.requireStudio(), root = this.requireRoot()
+    if (db.pragma('user_version', { simple: true }) === STUDIO_SCHEMA_VERSION) return db
+    // 打开旧书库不改格式；作者首次保存全局连接时，先留存目录库备份再追加配置表。
+    const backups = join(root, 'studio-backups')
+    ensureDirectory(backups)
+    const directory = join(backups, `v2-${randomUUID()}`)
+    mkdirSync(directory)
+    assertLocalPath(directory, true)
+    const path = join(directory, 'studio.sqlite'), descriptor = openSync(path, 'wx')
+    let identity: ReturnType<typeof fstatSync>
+    try { identity = fstatSync(descriptor); fsyncSync(descriptor) } finally { closeSync(descriptor) }
+    try {
+      const copied = await db.backup(path)
+      assertLocalPath(root, true); assertLocalPath(backups, true); assertLocalPath(directory, true); assertLocalPath(path, false)
+      const actual = lstatSync(path)
+      if (copied.remainingPages !== 0 || copied.totalPages <= 0 || actual.dev !== identity.dev || actual.ino !== identity.ino) throw storageFailure()
+      const probe = new Database(path, { readonly: true, fileMustExist: true })
+      try {
+        if (probe.pragma('application_id', { simple: true }) !== STUDIO_APPLICATION_ID || probe.pragma('user_version', { simple: true }) !== 2 ||
+            probe.pragma('quick_check(1)', { simple: true }) !== 'ok') throw storageFailure()
+      } finally { probe.close() }
+      const durable = openSync(path, 'r+')
+      try {
+        const current = fstatSync(durable)
+        if (current.dev !== identity.dev || current.ino !== identity.ino) throw storageFailure()
+        fsyncSync(durable)
+      } finally { closeSync(durable) }
+      if (this.studio !== db || this.requireRoot() !== root) throw storageFailure()
+      db.transaction(() => {
+        if (db.pragma('user_version', { simple: true }) !== 2) throw storageFailure()
+        db.exec(STUDIO_GENERATION_SCHEMA)
+        db.pragma(`user_version = ${STUDIO_SCHEMA_VERSION}`)
+      }).immediate()
+    } catch {
+      throw new DomainError({ code: 'STORAGE_ERROR', message: `工作区模型配置尚未保存。请保留目录库与本次备份：${path}；备份可能未完成，勿直接替换原库。` })
+    }
+    return db
+  }
+
+  private createBookAsset(input: CreateBookInput, id: string, kickstartSeed?: string): BookSnapshot {
     return perform(() => {
       const data = parseCreateBookInput(input)
       const title = data.title
       const studio = this.requireStudio()
       const count = studio.prepare('SELECT COUNT(*) AS count FROM books').get() as { count: number }
       if (count.count >= MAX_BOOKS) throw new DomainError({ code: 'INVALID_INPUT', message: `当前书库已达到 ${MAX_BOOKS} 部作品的上限。` })
-      const id = randomUUID()
       const now = new Date().toISOString()
       const directory = join(this.requireRoot(), 'books', id)
       assertLocalPath(join(this.requireRoot(), 'books'), true)
@@ -308,6 +373,7 @@ export class StudioRepository {
           db.pragma(`application_id = ${BOOK_APPLICATION_ID}`)
           db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
           db.prepare('INSERT INTO book_meta (singleton, id, title, created_at, updated_at) VALUES (1, ?, ?, ?, ?)').run(id, title, now, now)
+          if (kickstartSeed !== undefined) db.prepare("UPDATE book_meta SET lifecycle = 'kickstarting', seed_json = ? WHERE singleton = 1").run(kickstartSeed)
           if (data.starter) {
             // 新手引导只保存作者填写的种子，不凭空创建人物事实；首章与前提同事务建立。
             const seed = data.starter
@@ -820,7 +886,7 @@ export class StudioRepository {
     return perform(() => {
       const { bookId } = parseKnowledgeStatusInput(input)
       const db = this.openBook(bookId)
-      const schemaVersion = db.pragma('user_version', { simple: true })
+      const schemaVersion = db.pragma('user_version', { simple: true }) as number
       const row = db.prepare('SELECT knowledge_revision FROM book_meta WHERE singleton = 1').get() as { knowledge_revision: number } | undefined
       if ((!Number.isInteger(schemaVersion) || schemaVersion < 2 || schemaVersion > BOOK_SCHEMA_VERSION) || !row ||
           !Number.isSafeInteger(row.knowledge_revision) || row.knowledge_revision < 0) throw storageFailure()
@@ -915,6 +981,15 @@ export class StudioRepository {
         if (previousVersion < 11) db.exec(AI_MEMORY_MAINTENANCE_SCHEMA)
         if (previousVersion < 12) db.exec(NOTES_SCHEMA)
         if (previousVersion < 13) db.exec(WORKBENCH_SCHEMA)
+        if (previousVersion < 14) {
+          db.exec(CHARACTER_PROFILE_SCHEMA)
+          db.exec(CALENDAR_SCHEMA)
+          db.exec(AI_PRESETS_SCHEMA)
+          db.exec(MEDIA_SCHEMA)
+        }
+        if (previousVersion < 15) db.exec(GENERATION_BOOK_UPGRADE)
+        if (previousVersion < 16) db.exec(LIVING_SCHEMA)
+        if (previousVersion < 17) db.exec(FORGE_SCHEMA)
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
         this.recordMutation(db, 'book.metadata', new Date().toISOString())
@@ -935,7 +1010,7 @@ export class StudioRepository {
     return perform(() => {
       const id = requiredId(bookId).toLowerCase()
       const db = this.openBook(id)
-      const version = db.pragma('user_version', { simple: true })
+      const version = db.pragma('user_version', { simple: true }) as number
       if (!Number.isInteger(version) || version < 3 || version > BOOK_SCHEMA_VERSION) {
         throw new DomainError({ code: 'FORBIDDEN', message: '请先在知识库页面备份并升级这部作品，再使用知识条目。' })
       }
@@ -1170,7 +1245,8 @@ export class StudioRepository {
   }
 
   private readBookMetadata(db: Database.Database, expectedId: string): BookSummary {
-    const row = db.prepare(`SELECT ${BOOK_COLUMNS} FROM book_meta WHERE singleton = 1`).get() as BookRow | undefined
+    const lifecycle = (db.pragma('user_version', { simple: true }) as number) >= 15 ? ', lifecycle' : ''
+    const row = db.prepare(`SELECT ${BOOK_COLUMNS}${lifecycle} FROM book_meta WHERE singleton = 1`).get() as BookRow | undefined
     if (!row || row.id !== expectedId) throw new DomainError({ code: 'STORAGE_ERROR', message: '作品数据库身份与当前目录不一致，已停止访问。' })
     return bookSummary(row)
   }
