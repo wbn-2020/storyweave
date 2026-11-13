@@ -216,30 +216,34 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
     {snapshot && !snapshot.requiresUpgrade && !fields && <div className={styles.setup}><button className={styles.button} type="button" disabled={blocked} onClick={edit}><StudioIcon name="plus" size={20} />录入本书境界与战力</button></div>}
     {snapshot && <div className={styles.workspace}>
       <aside className={styles.ladder}><h3>境界阶梯 <StudioIcon name="spark" size={20} /></h3>
-        {fields ? <ol>{[...fields.levels].reverse().map((level, index) => <li key={level.id} data-current={level.id === activeCharacter?.realmId} data-rank={index}>
-          <span className={styles.realmMark} aria-hidden="true"><StudioIcon name="spark" size={40} /><StudioIcon name="star" size={24} /></span>
-          <div><strong>{level.name}</strong>{level.id === activeCharacter?.realmId && <span className={styles.current}>当前</span>}<p>{level.description}</p>
-            <small>{level.conditions.length ? level.conditions.map((item) => item.kind === 'quantity' ? `${item.name} ${item.required.toLocaleString()}` : item.name).join(' · ') : '突破条件未登记'}</small></div>
-        </li>)}</ol> : <p className={styles.note}>尚未登记五级境界</p>}
+        {fields ? <ol>{[...fields.levels].reverse().map((level, index) => {
+          const requirements = level.conditions.length ? level.conditions.map((item) => item.kind === 'quantity' ? `${item.name} ${item.required.toLocaleString()}` : item.name).join(' · ') : '突破条件未登记'
+          return <li key={level.id} data-current={level.id === activeCharacter?.realmId} data-rank={index} aria-current={level.id === activeCharacter?.realmId ? 'step' : undefined}>
+            <span className={styles.realmMark} aria-hidden="true"><StudioIcon name="spark" size={40} /><StudioIcon name="star" size={24} /></span>
+            <div><strong title={level.name}>{level.name}</strong>{level.id === activeCharacter?.realmId && <span className={styles.current}>当前</span>}<p title={level.description}>{level.description}</p>
+              <small title={requirements}>{requirements}</small></div>
+          </li>
+        })}</ol> : <p className={styles.note}>尚未登记五级境界</p>}
         <div className={styles.ladderScene} aria-hidden="true"><StudioIcon name="city" size={96} /></div>
       </aside>
       <section className={styles.comparison}><h3>人物战力对比 <StudioIcon name="spark" size={20} /><button type="button" className={styles.iconButton} disabled={tool.locked || Boolean(draft) || syncRequired || stale || snapshot.schemaVersion < 3} aria-label="选择最多三位人物" title="选择人物" onClick={() => setPicker(true)}><StudioIcon name="users" size={20} /></button></h3>
         <div className={styles.comparisons}>{characters.map((person) => {
           const combat = fields?.characters.find((item) => item.personId === person.id), level = fields?.levels.find((item) => item.id === combat?.realmId)
           return <article key={person.id} className={styles.character} data-active={active?.id === person.id}>
-            <button type="button" className={styles.identity} disabled={tool.locked || Boolean(draft)} aria-pressed={active?.id === person.id} onClick={() => { setFocus(person.id); setSimulation(null) }}>
+            <button type="button" className={styles.identity} disabled={tool.locked || Boolean(draft)} aria-pressed={active?.id === person.id} title={`查看${person.name}的境界和突破条件`} onClick={() => { setFocus(person.id); setSimulation(null) }}>
               <SavedPortrait api={api} bookId={bookId} personId={person.id} metadata={portraits.items.find((item) => item.personId === person.id)} name={person.name} className={styles.portrait}
                 fallback={<span className={styles.portraitFallback}><StudioIcon name="user" size={72} /><small>{portraits.loading ? '立绘读取中' : '未载入立绘'}</small></span>} />
-              <h4>{person.name}</h4><span className={styles.stage}>{level ? `${level.name}${combat?.stage || ''}` : '境界未知'}</span>
+              <h4 title={person.name}>{person.name}</h4><span className={styles.stage} data-unknown={!level} title={level ? `${level.name}${combat?.stage || ''}` : '境界未知'}>{level ? `${level.name}${combat?.stage || ''}` : '境界未知'}</span>
             </button>
             <dl className={styles.axes}>{COMBAT_AXES.map((axis) => {
               const value = combat?.abilities[axis]
               return <div key={axis} data-unknown={value === undefined}><dt><StudioIcon name={axisIcons[axis]} size={20} />{COMBAT_LABELS[axis]}</dt>
                 <dd><span className={styles.bar} role={value === undefined ? 'img' : 'meter'} aria-label={`${person.name}的${COMBAT_LABELS[axis]}${value === undefined ? '未知' : ''}`}
-                  aria-valuemin={value === undefined ? undefined : 0} aria-valuemax={value === undefined ? undefined : 100} aria-valuenow={value}><i style={{ width: `${value ?? 0}%` }} /></span><span>{value ?? '未知'}</span></dd></div>
+                  title={`${COMBAT_LABELS[axis]}：${value === undefined ? '未知' : `${value} / 100`}`}
+                  aria-valuemin={value === undefined ? undefined : 0} aria-valuemax={value === undefined ? undefined : 100} aria-valuenow={value}><i style={{ width: `${value ?? 0}%` }} /></span><span className={styles.axisValue} aria-hidden="true">{value ?? '未知'}</span></dd></div>
             })}</dl>
-            <div className={styles.power}><span>总战力</span><strong data-long={(combat?.totalPower?.toLocaleString().length ?? 0) > 9}>{combat?.totalPower?.toLocaleString() ?? '未知'}</strong></div>
-            <button type="button" className={styles.profileButton} disabled={tool.locked || Boolean(draft)} onClick={() => onOpen(person.id)} title="查看人物原始档案">人物档案<StudioIcon name="chevron" size={16} /></button>
+            <div className={styles.power}><span>总战力</span><strong data-unknown={combat?.totalPower == null} data-long={(combat?.totalPower?.toLocaleString().length ?? 0) > 9}>{combat?.totalPower?.toLocaleString() ?? '未知'}</strong></div>
+            <button type="button" className={styles.profileButton} disabled={tool.locked || Boolean(draft)} onClick={() => onOpen(person.id)} title="查看人物原始档案" aria-label={`查看${person.name}的人物原始档案`}><StudioIcon name="user" size={20} /></button>
           </article>
         })}</div>
         {!characters.length && <div className={styles.empty}><StudioIcon name="user" size={32} /><h4>尚未选择人物</h4><button className={styles.button} type="button" disabled={tool.locked || snapshot.schemaVersion < 3} onClick={() => setPicker(true)}>选择人物</button><button className={styles.button} type="button" disabled={tool.locked} onClick={() => onOpen()}>建立人物档案</button></div>}
@@ -247,7 +251,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
       <aside className={styles.conditions}><h3>突破条件 <StudioIcon name="spark" size={20} /></h3>
         {active && <div className={styles.target}><span>{active.name}</span><small>{breakthrough ? `下一阶 · ${fields?.levels.find((level) => level.id === breakthrough.toId)?.name}` : '未能确定下一境界'}</small></div>}
         {breakthrough && <ul>{breakthrough.checks.map((item) => <li key={item.id} data-met={item.met} data-unknown={item.available === null}>
-          <StudioIcon name={item.kind === 'milestone' ? 'notes' : item.consume ? 'crystal' : 'spark'} size={40} /><div><strong>{item.name}</strong><span>{item.kind === 'milestone' ? item.available === null ? '未知' : item.met ? '已完成' : '未完成'
+          <span className={styles.conditionSymbol} aria-hidden="true"><StudioIcon name={item.kind === 'milestone' ? 'notes' : item.consume ? 'crystal' : 'spark'} size={40} /></span><div><strong>{item.name}</strong><span>{item.kind === 'milestone' ? item.available === null ? '未知' : item.met ? '已完成' : '未完成'
             : `${item.available?.toLocaleString() ?? '未知'} / ${item.required.toLocaleString()}`}</span>{item.consume && <small>突破时扣减</small>}</div>
           <span className={styles.conditionStatus} aria-label={item.met ? '已满足' : item.available === null ? '未知' : '不足'}><StudioIcon name={item.met ? 'check' : item.available === null ? 'info' : 'minus'} size={20} /></span>
         </li>)}</ul>}
