@@ -81,18 +81,19 @@
 .due[data-due='overdue'] { color: var(--color-danger); background: var(--color-danger-soft); }.due[data-due='due'] { color: var(--color-warning); background: var(--color-warning-soft); }.due[data-due='closed'] { color: var(--color-success); background: var(--color-success-soft); }
 .facts { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: var(--space-2) var(--space-3); margin: 0; font-size: var(--text-xs); }.facts dt { color: var(--color-muted); }.facts dd { margin: 0; overflow-wrap: anywhere; }
 .detail { min-width: 0; border-left: 1px solid var(--color-line); padding-left: var(--space-5); display: grid; gap: var(--space-4); }
+.detail button[aria-disabled='true'] { opacity: .45; cursor: wait; }
 .sourceList { list-style: none; padding: 0; margin: 0; }.sourceList li { padding-block: var(--space-3); border-bottom: 1px solid var(--color-line); }
 .ids { composes: identity from './stellar/Workspace.module.css'; }
 .error { composes: error from './stellar/Workspace.module.css'; }
 .dueStrip { display: grid; gap: var(--space-3); padding: var(--space-3); background: var(--color-warning-soft); border: 1px solid var(--color-warning); border-radius: var(--radius-md); font-size: var(--text-xs); }
 .dueStrip ul { margin: 0; padding-left: var(--space-4); }.dueStrip li { margin-block: var(--space-2); }
-.panel[data-control='radar'] .radarLayout { grid-template-columns: minmax(320px,.85fr) minmax(0,1.65fr); gap: var(--space-5); }
+.panel[data-control='radar'] .radarLayout { grid-template-columns: minmax(400px,.85fr) minmax(0,1.65fr); gap: var(--space-5); }
 .radarOrbit { min-width: 0; }
 .radarOrbit > h3 { font-size: var(--text-md); color: var(--color-muted); }
 .radarOrbit > .help { text-align: center; }
 .radarFilters > summary { color: var(--color-muted); font-size: var(--text-xs); }
 .panel[data-control='radar'] .toolbar { padding-block: var(--space-3); }
-.radarCanvas { position: relative; width: min(100%,calc((100dvh - 352px) * .75)); max-width: 480px; aspect-ratio: 480/640; margin-inline: auto; }
+.radarCanvas { position: relative; width: 100%; max-width: 480px; aspect-ratio: 480/640; margin-inline: auto; }
 .radarCanvas > svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .radarGrid { fill: none; stroke: var(--color-line); stroke-width: .7; }
 .radarArc { fill: none; stroke-width: 2; }
@@ -115,15 +116,15 @@
 .radarSegment:focus-visible { outline: none; }
 .radarSegment:focus-visible .radarSegmentHalo { stroke: var(--color-ink); stroke-width: 3; opacity: 1; }
 .radarCards { position: absolute; inset: 0; pointer-events: none; }
-.radarCards > button { position: absolute; display: grid; grid-template-columns: var(--space-6) minmax(0,1fr); align-items: center; gap: var(--space-2); width: 45%; min-height: 64px; padding: var(--space-3); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--color-ink); text-align: left; pointer-events: auto; }
+.radarCards > button { position: absolute; display: grid; grid-template-columns: var(--space-6) minmax(0,1fr); align-items: center; gap: 0 var(--space-2); width: 42%; min-height: 64px; padding: var(--space-2); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--color-ink); text-align: left; pointer-events: auto; }
 .radarCards > button > svg { grid-row: 1/3; color: var(--color-accent); }
 .radarCards > button > strong { font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.radarCards > button > small { grid-column: 2; color: var(--color-muted); font-size: var(--text-xs); }
-.radarCards > button[data-position='0'] { left: 4%; top: 14%; }
+.radarCards > button > small { grid-column: 2; color: var(--color-muted); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.radarCards > button[data-position='0'] { left: 4%; top: 14%; width: 38%; }
 .radarCards > button[data-position='1'] { left: 12%; top: 29%; }
-.radarCards > button[data-position='2'] { left: 18%; top: 45%; }
-.radarCards > button[data-position='3'] { left: 12%; top: 63%; }
-.radarCards > button[data-position='4'] { left: 4%; top: 81%; }
+.radarCards > button[data-position='2'] { left: 10%; top: 45%; }
+.radarCards > button[data-position='3'] { left: 12%; top: 60%; }
+.radarCards > button[data-position='4'] { left: 4%; top: 75%; width: 38%; }
 .radarCards > button[data-due='overdue'] { border-color: var(--color-danger); background: var(--color-danger-soft); }
 .radarCards > button[data-due='overdue'] > svg { color: var(--color-danger); }
 .radarCards > button[data-stage='resolved'] > svg { color: var(--color-success); }
@@ -176,5 +177,5 @@
 @media(max-width:1199px) { .radarLayout,.radarLayout:has(> .detail) { grid-template-columns: 200px minmax(0,1fr); }.radarLayout > .detail { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--color-line); padding: var(--space-4) 0; } }
 @media(max-width:699px) { .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }.radarLayout,.radarLayout:has(> .detail) { grid-template-columns: minmax(0,1fr); }.orbit { position: static; }.orbit svg { width: min(260px,100%); margin-inline: auto; } }
 @media(width < 1000px) { .matrixLayout { grid-template-columns: minmax(0,1fr); }.matrixAside { width: 100%; }.matrixAside h3 { font-size: var(--text-md); }.matrixAside .absenceSummary { padding-block: var(--space-3); }.matrixAside .threshold { padding-block: var(--space-3); } }
-@media(width < 1200px) { .panel[data-control='radar'] .radarLayout { grid-template-columns: minmax(280px,.8fr) minmax(0,1.4fr); }.radarTable tbody :is(th,td) { padding-inline: var(--space-2); } }
+@media(width < 1200px) { .panel[data-control='radar'] .radarLayout { grid-template-columns: minmax(400px,.8fr) minmax(0,1.4fr); }.radarTable tbody :is(th,td) { padding-inline: var(--space-2); } }
 @media(width < 1000px) { .panel[data-control='radar'] .radarLayout { grid-template-columns: minmax(0,1fr); }.radarCanvas { width: 100%; max-width: 440px; }.radarTableScroll { max-height: 600px; }.radarReminder { flex-wrap: wrap; }.radarTable { min-width: 640px; } }

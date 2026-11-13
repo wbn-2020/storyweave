@@ -45,6 +45,7 @@ function RecordEvidence({ api, book, disabled, id, expected, onOpenRecord, onNav
   const [reading, setReading] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const ticket = useRef(0), lock = useRef(false)
+  const detailRoot = useRef<HTMLElement>(null)
   useEffect(() => {
     let active = true
     ticket.current += 1; lock.current = false; setReading(false)
@@ -92,13 +93,14 @@ function RecordEvidence({ api, book, disabled, id, expected, onOpenRecord, onNav
     } catch (cause) { if (current === ticket.current) setError(cause instanceof Error ? cause.message : '正文跳转未完成。') }
     finally { if (current === ticket.current) { lock.current = false; setReading(false) } }
   }
-  return <section className={styles.detail} aria-label="出场或伏笔的来源与历史" aria-busy={loading || reading}>
+  return <section ref={detailRoot} className={styles.detail} tabIndex={-1} aria-label="出场或伏笔的来源与历史" aria-busy={loading || reading}>
     {loading && <p role="status">正在读取记录与来源…</p>}
-    {error && <><p className={styles.error} role="alert">{error}</p>{!detail && <button type="button" className={shared.button} disabled={disabled || loading} onClick={() => setRefresh((value) => value + 1)}>重读记录</button>}</>}
+    {error && <><p className={styles.error} role="alert">{error}</p>{!detail && <button type="button" className={shared.button} disabled={disabled || loading} onClick={() => { detailRoot.current?.focus({ preventScroll: true }); setRefresh((value) => value + 1) }}>重读记录</button>}</>}
     {detail && <><div className={styles.recordHeading}><h3>{detail.fields.title}</h3><button type="button" className={shared.button} disabled={disabled || reading} onClick={() => onOpenRecord(detail.fields.kind, detail.id)}>编辑记录与历程</button></div>
       <StoryFieldsView fields={detail.fields} book={book} names={detail.labels} />
       <p className={styles.help}>登记引文用于追溯出处，陈述本身仍需作者判断。跳转定位当前稿；固定原稿保留引用时的版本。</p>
-      <ul className={styles.sourceList}>{detail.sources.map((source) => <li key={source.id}><p className={styles.help}>{source.sourceType === 'chapter_text' ? `固定正文 · ${source.referenceState === 'current' ? '当前稿登记' : '历史稿登记'}` : '作者／外部来源说明'}</p><blockquote>{source.quote}</blockquote>{source.sourceType === 'chapter_text' && <div className={styles.actions}><button type="button" className={shared.button} disabled={disabled || reading} onClick={() => void read(source)}>核对固定原文</button><button type="button" className={shared.button} disabled={disabled || reading} onClick={() => void navigate(source)}>跳到当前稿段落</button></div>}</li>)}</ul>
+      {/* 读取锁拦截重复操作，保留按钮焦点，避免原生禁用后 Esc 无法送达证据区。 */}
+      <ul className={styles.sourceList}>{detail.sources.map((source) => <li key={source.id}><p className={styles.help}>{source.sourceType === 'chapter_text' ? `固定正文 · ${source.referenceState === 'current' ? '当前稿登记' : '历史稿登记'}` : '作者／外部来源说明'}</p><blockquote>{source.quote}</blockquote>{source.sourceType === 'chapter_text' && <div className={styles.actions}><button type="button" className={shared.button} disabled={disabled} aria-disabled={reading || undefined} onClick={() => void read(source)}>核对固定原文</button><button type="button" className={shared.button} disabled={disabled} aria-disabled={reading || undefined} onClick={() => void navigate(source)}>跳到当前稿段落</button></div>}</li>)}</ul>
       {!detail.sources.length && <p className={styles.help}>尚无登记引文；整章缺席只代表作者对固定稿的明确核对。</p>}
     </>}
     {original && <div><p className={styles.ids}>固定版本 {original.source.revisionId} · 段落 {original.source.blockId}</p><p className={styles.help} role="status">{original.matches ? '登记引文逐字匹配该固定段落。' : '引文没有逐字匹配，请复核登记。'}</p><blockquote>{original.text}</blockquote></div>}
