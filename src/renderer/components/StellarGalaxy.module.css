@@ -145,6 +145,10 @@
 .controlPage .intro > div:first-child { display: none; }
 .controlPage .viewSwitch { margin-block: var(--space-2); }
 .controlPage .viewSwitch > button { min-height: var(--control-compact); padding-block: var(--space-2); }
+.matrixPage > header { align-items: center; }
+.matrixToolbar { display: flex; flex: 1; min-width: 0; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.matrixToolbar > select { flex: 0 1 200px; min-width: 0; width: 200px; min-height: var(--control-height); color: var(--color-ink-secondary); }
+.matrixToolbar > .actions { margin-left: auto; }
 .radarPage,.matrixPage { isolation: isolate; }
 .radarPage::before,.matrixPage::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background:

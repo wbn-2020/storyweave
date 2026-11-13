@@ -30,6 +30,7 @@ type ChapterSource = Extract<KnowledgeSourceInput, { sourceType: 'chapter_text' 
 const entityLabels: Record<KnowledgeKind, string> = { person: '人物', place: '地点', organization: '势力', object: '物品', rule: '规则', theme: '主题', other: '其他' }
 const cellLabels = { present: '登场行动', mentioned: '被提及', absent: '已核对缺席', conflict: '登记有冲突', stale: '旧稿／待复核', unknown: '未知' }
 const cellMarks = { present: '●', mentioned: '○', absent: '—', conflict: '!', stale: '↺', unknown: '?' }
+const cellLegend = { present: '登场', mentioned: '提及', absent: '缺席', conflict: '冲突', stale: '旧稿／待复核', unknown: '未知' } satisfies Record<keyof typeof cellLabels, string>
 export const radarDueLabels: Record<RadarDue, string> = { overdue: '已过计划位置', due: '本章／本卷到期', upcoming: '尚未到期', unplaced: '范围待定位', unconfirmed: '待作者复核', closed: '已经结束' }
 const snapshot = (value: ControlVersions) => ({ expectedBookRevision: value.bookRevision, expectedKnowledgeRevision: value.knowledgeRevision })
 function matchesVersions(page: ControlVersions, input: { expectedBookRevision?: number; expectedKnowledgeRevision?: number }): boolean {
@@ -228,15 +229,18 @@ export function AppearanceMatrix(props: Props) {
       maxHeight: Math.min(180, Math.max(0, above ? rect.top - 24 : window.innerHeight - rect.bottom - 24)) })
   }
   return <div ref={matrixRoot} className={styles.panel} data-control="matrix">
-    <details className={styles.matrixSearch}><summary>搜索与筛选</summary>
+    <details className={styles.matrixSearch}>
+    <summary className={styles.matrixHeading} title="搜索与筛选">
+      <span className={styles.filterLabel}>搜索与筛选</span>
+      <span className={styles.rangeSummary}>{page ? <><span>实体 {page.entityOffset + (page.entities.length ? 1 : 0)}–{page.entityOffset + page.entities.length} / {page.entityTotal}</span><span>章节 {page.chapterOffset + (page.chapters.length ? 1 : 0)}–{page.chapterOffset + page.chapters.length} / {page.chapterTotal}<StudioIcon name="down" size={16} /></span></> : <span>读取本页范围<StudioIcon name="down" size={16} /></span>}</span>
+      <span className={styles.legend}>{Object.entries(cellLegend).map(([key, label]) => <span key={key} data-state={key} title={cellLabels[key as keyof typeof cellLabels]}><i aria-hidden="true">{cellMarks[key as keyof typeof cellMarks]}</i>{label}</span>)}</span>
+    </summary>
     <div className={styles.toolbar}><label>实体名称<input type="search" maxLength={200} value={query} disabled={disabled || loading} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); change({ search: query.trim() }) } }} /></label><button className={shared.button} type="button" disabled={disabled || loading} onClick={() => change({ search: query.trim() })}>查找</button>
       <label>实体类型<select value={input.kind ?? ''} disabled={disabled || loading} onChange={(event) => change({ kind: event.target.value ? event.target.value as KnowledgeKind : undefined })}><option value="">全部类型</option>{KNOWLEDGE_KINDS.map((kind) => <option key={kind} value={kind}>{entityLabels[kind]}</option>)}</select></label>
       <button className={shared.button} type="button" disabled={disabled || loading} onClick={() => change({})}><StudioIcon name="refresh" />刷新矩阵</button>
     </div>
     <p className={styles.help}>只汇总已采纳事件及其正文来源。整章核对由作者单独登记；未索引、未采纳或没有证据都保持未知。提醒仅覆盖当前章节窗口，不推断全书缺席。</p>
     </details>
-    <div className={styles.matrixHeading}><div className={styles.rangeSummary}>{page ? <><span>实体 {page.entityOffset + (page.entities.length ? 1 : 0)}–{page.entityOffset + page.entities.length} / {page.entityTotal}</span><span>章节 {page.chapterOffset + (page.chapters.length ? 1 : 0)}–{page.chapterOffset + page.chapters.length} / {page.chapterTotal}</span></> : <span>读取本页范围</span>}</div>
-      <div className={styles.legend}>{Object.entries(cellLabels).map(([key, label]) => <span key={key} data-state={key}><i aria-hidden="true">{cellMarks[key as keyof typeof cellMarks]}</i>{label}</span>)}</div></div>
     {loading && <p role="status">正在读取章节与实体矩阵…</p>}{error && <p className={styles.error} role="alert">{error}</p>}
     {page && <div className={styles.matrixLayout}><div className={styles.matrixMain}><div className={styles.scroll}><table className={styles.matrix} style={{ minWidth: 128 + page.chapters.length * 36 }}><caption>当前页实体与章节的已登记出场</caption><thead><tr><th className={`${styles.rowHeading} ${styles.matrixCorner}`} scope="col" aria-label="实体与章节"><span>章节</span><span>实体</span></th>{page.chapters.map((chapter) => <th scope="col" key={chapter.id} title={chapter.title}><span className={styles.columnHeading}>{String(chapter.position + 1).padStart(2, '0')}</span></th>)}</tr></thead><tbody>{page.entities.map((entity) => {
       const absent = tail(entity.id)

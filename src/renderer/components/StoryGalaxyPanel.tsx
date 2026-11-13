@@ -33,7 +33,7 @@ export interface StoryGalaxyPanelProps {
   onUseForeshadow?: (ref: CreativeResourceRef) => void
   onScanRelations?: () => void
   initialView?: 'galaxy' | 'relationships' | 'world' | 'matrix' | 'radar'
-  onMapViewChange: (view: 'galaxy' | 'world') => void
+  onViewChange: (view: NonNullable<StoryGalaxyPanelProps['initialView']>) => void
   chapterId?: string
   onOpenChapter?: (chapterId: string) => void
   onDirtyChange: (dirty: boolean) => void
@@ -132,11 +132,11 @@ export function StoryGalaxyPanel(props: StoryGalaxyPanelProps) {
   // 地图与星图切换同步外层路由，命令再次打开地图时才能命中真实视图。
   return props.initialView === 'world' ? <WorldMapPanel api={props.api} book={props.book} busy={props.busy} error={props.error} onClose={props.onClose}
     onOpenKnowledge={props.onOpenKnowledge} onOpenRecords={props.onOpenRecords} onNavigate={props.onNavigate} onOpenScene={props.onOpenScene}
-    initialPlaceId={props.initialPlaceId} initialOffset={props.initialMapOffset} onGalaxy={() => props.onMapViewChange('galaxy')} />
-    : <GalaxyContent key={props.book.book.id} {...props} onWorld={() => props.onMapViewChange('world')} />
+    initialPlaceId={props.initialPlaceId} initialOffset={props.initialMapOffset} onGalaxy={() => props.onViewChange('galaxy')} />
+    : <GalaxyContent key={props.book.book.id} {...props} />
 }
 
-function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpenRecords, onDirtyChange, onBookChange, onUnknown, onRecover, onNavigate, onUseForeshadow, onScanRelations, initialView, chapterId, onOpenChapter, onWorld }: StoryGalaxyPanelProps & { onWorld: () => void }) {
+function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpenRecords, onDirtyChange, onBookChange, onUnknown, onRecover, onNavigate, onUseForeshadow, onScanRelations, initialView, chapterId, onOpenChapter, onViewChange }: StoryGalaxyPanelProps) {
   const bookId = book.book.id
   const [query, setQuery] = useState('')
   const [chapterPosition, setChapterPosition] = useState(Math.max(0, book.chapters.findIndex((chapter) => chapter.id === chapterId)))
@@ -156,7 +156,8 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [checkingRequest, setCheckingRequest] = useState(false)
   const [detailJump, setDetailJump] = useState(0)
-  const [view, setView] = useState<'galaxy' | 'relationships' | 'matrix' | 'radar'>(initialView === 'world' ? 'galaxy' : initialView ?? 'galaxy')
+  const view = initialView === 'world' ? 'galaxy' : initialView ?? 'galaxy'
+  const previousView = useRef(view), matrixSelector = useRef<HTMLSelectElement>(null), viewSummary = useRef<HTMLElement>(null)
   const [draft, setDraft] = useState<RelationDraft | null>(null)
   const [confirmation, setConfirmation] = useState<CreateStoryRecordInput | null>(null)
   const [discardRequested, setDiscardRequested] = useState(false)
@@ -258,6 +259,13 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
 
   useEffect(() => { if (hasDraft) relationHeading.current?.focus() }, [hasDraft])
   useEffect(() => { if (hasConfirmation) confirmationHeading.current?.focus() }, [hasConfirmation])
+  useEffect(() => {
+    if (disabled || previousView.current === view) return
+    previousView.current = view
+    // 外壳切换会暂时禁用控件；提交新视图后再把焦点交给当前显示方式入口。
+    const control = view === 'matrix' ? matrixSelector.current : viewSummary.current
+    control?.focus({ preventScroll: true })
+  }, [view, disabled])
 
   function canRead(): boolean {
     return mounted.current && !leaving.current && !busy && !listLock.current && !readLock.current && !pendingRead.current && !statusLock.current &&
@@ -521,6 +529,13 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
     readTicket.current += 1; setOriginal(null); setOriginalSourceId(null); setReadError(null)
   }
 
+  function changeDisplay(next: NonNullable<StoryGalaxyPanelProps['initialView']>) {
+    if (next === view || !canRead()) return
+    // 显示方式与外壳路由共用状态；局部切换保留图谱快照，地图离开仍核对关系草稿。
+    if (next === 'world') void leave(() => onViewChange(next))
+    else onViewChange(next)
+  }
+
   const selectedNode = page?.nodes.find((node) => sameTarget(node, selected))
   const center = page?.focus ? page.nodes.find((node) => sameTarget(node, page.focus)) : undefined
   const nodes = page ? (center ? [center, ...page.nodes.filter((node) => !sameTarget(node, center))] : page.nodes) : []
@@ -541,22 +556,34 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const jumpSource = detail?.value.sources.find((source) => source.sourceType === 'chapter_text')
   const positionChapter = book.chapters[Math.min(chapterPosition, Math.max(0, book.chapters.length - 1))]
 
-  return <Dialog title={view === 'relationships' ? '关系星网' : view === 'galaxy' ? '记忆星图' : view === 'matrix' ? '章节出场矩阵' : <><StudioIcon name="spark" size={32} /><span>伏笔雷达</span></>} className={view === 'relationships' ? styles.relationshipPage : view === 'galaxy' ? styles.galaxyPage : view === 'radar' ? `${styles.controlPage} ${styles.radarPage}` : `${styles.controlPage} ${styles.matrixPage}`} wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}>
+  return <Dialog title={view === 'relationships' ? '关系星网' : view === 'galaxy' ? '记忆星图' : view === 'matrix' ? '章节出场矩阵' : <><StudioIcon name="spark" size={32} /><span>伏笔雷达</span></>} className={view === 'relationships' ? styles.relationshipPage : view === 'galaxy' ? styles.galaxyPage : view === 'radar' ? `${styles.controlPage} ${styles.radarPage}` : `${styles.controlPage} ${styles.matrixPage}`} wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}
+    toolbar={view === 'matrix' ? <div className={styles.matrixToolbar}>
+      <select ref={matrixSelector} aria-label="故事对象显示方式" value={view} disabled={disabled} onChange={(event) => {
+        const next = event.target.value
+        if (next === 'galaxy' || next === 'relationships' || next === 'world' || next === 'matrix' || next === 'radar') changeDisplay(next)
+      }}>
+        <option value="galaxy">星海视图</option><option value="relationships">关系星网</option><option value="world">世界星域</option><option value="matrix">章节出场矩阵</option><option value="radar">伏笔雷达</option>
+      </select>
+      <div className={styles.actions}>
+        <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenKnowledge())}>知识条目</button>
+        <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords())}>故事记录</button>
+      </div>
+    </div> : undefined}>
     <div className={styles.panel} data-view={view}>
-      <div className={styles.intro}>
+      {view !== 'matrix' && <div className={styles.intro}>
         <div>{view === 'radar' ? <p>全生命周期 · 精准追踪每一条伏笔</p> : <><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 星海与关系画布</span></>}</div>
         <div className={styles.actions}>
           <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenKnowledge())}>知识条目</button>
           <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords())}>故事记录</button>
         </div>
-      </div>
-      <details className={styles.viewModes}><summary>显示方式</summary><div className={styles.viewSwitch} role="group" aria-label="故事对象显示方式">
-        <button type="button" className={shared.button} aria-pressed={view === 'galaxy'} disabled={disabled} onClick={() => { if (canRead()) setView('galaxy') }}>星海视图</button>
-        <button type="button" className={shared.button} aria-pressed={view === 'relationships'} disabled={disabled} onClick={() => { if (canRead()) setView('relationships') }}>关系星网</button>
-        <button type="button" className={shared.button} aria-pressed={false} disabled={disabled} onClick={() => void leave(onWorld)}>世界星域</button>
-        <button type="button" className={shared.button} aria-pressed={view === 'matrix'} disabled={disabled} onClick={() => { if (canRead()) setView('matrix') }}>章节出场矩阵</button>
-        <button type="button" className={shared.button} aria-pressed={view === 'radar'} disabled={disabled} onClick={() => { if (canRead()) setView('radar') }}>伏笔雷达</button>
-      </div></details>
+      </div>}
+      {view !== 'matrix' && <details className={styles.viewModes}><summary ref={viewSummary}>显示方式</summary><div className={styles.viewSwitch} role="group" aria-label="故事对象显示方式">
+        <button type="button" className={shared.button} aria-pressed={view === 'galaxy'} disabled={disabled} onClick={() => changeDisplay('galaxy')}>星海视图</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'relationships'} disabled={disabled} onClick={() => changeDisplay('relationships')}>关系星网</button>
+        <button type="button" className={shared.button} aria-pressed={false} disabled={disabled} onClick={() => changeDisplay('world')}>世界星域</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'matrix'} disabled={disabled} onClick={() => changeDisplay('matrix')}>章节出场矩阵</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'radar'} disabled={disabled} onClick={() => changeDisplay('radar')}>伏笔雷达</button>
+      </div></details>}
       {view === 'galaxy' && <div className={styles.galaxyLegend} role="group" aria-label="记忆星图类型">
         {galaxyLegend.map((entry) => <button key={entry.kind} type="button" data-kind={entry.kind} aria-pressed={filters.kind === entry.kind} disabled={filterDisabled}
           onClick={() => refreshBook({ kind: filters.kind === entry.kind ? '' : entry.kind })}><StudioIcon name={entry.icon} size={20} />{entry.label}</button>)}

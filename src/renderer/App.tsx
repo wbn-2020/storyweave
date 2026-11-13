@@ -1324,8 +1324,10 @@ export function App({ api }: Props) {
 
   const activeCanvasKey = isCanvasView && modal ? modal.kind : studioView
   const worldMapVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'world'
-  const compactBookCanvas = worldMapVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities')
+  const matrixVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'matrix'
+  const compactBookCanvas = worldMapVisible || matrixVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities')
   const headerInfo = worldMapVisible ? { title: '世界星域地图', subtitle: '世界地点与已登记航道' }
+    : matrixVisible ? { title: '章节出场矩阵', subtitle: '实体与章节的已登记出场' }
     : modal?.kind === 'media' && modal.scenePlaceId ? { title: '地点场景图', subtitle: '地点关联与图片版本' }
     : SURFACE_TITLES[activeCanvasKey] ?? SURFACE_TITLES.home
 
@@ -1477,7 +1479,7 @@ export function App({ api }: Props) {
             {book ? book.book.title : headerInfo.subtitle}
           </span>
         </div>}
-        {book && modal?.kind !== 'weave' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
+        {book && !matrixVisible && modal?.kind !== 'weave' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
         <div className={styles.topActions}>
           {compactBookCanvas && book && <label className={styles.canvasTools} title="更多作品工具"><StudioIcon name="more" size={20} />
             <select aria-label="更多作品工具" value="" disabled={busy || bookRecoveryLocked} onChange={(event) => {
@@ -1561,7 +1563,7 @@ export function App({ api }: Props) {
             onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard} onBookChange={applyBook} onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} onClose={modal.scenePlaceId ? () => showDialog({ kind: 'galaxy', view: 'world', initialPlaceId: modal.scenePlaceId, initialMapOffset: modal.mapOffset }) : closeModal}
             onPerson={(initialId) => showDialog({ kind: 'knowledge', initialKind: 'person', initialId })} />}
           {modal?.kind === 'timeline' && api && book && <StoryTimelinePanel key={book.book.id} api={api} book={book} busy={busy} error={modalError} onClose={closeModal} onOpenRecords={(kind, initialCreate) => showDialog({ kind: 'story', initialKind: kind, initialCreate })} />}
-          {modal?.kind === 'galaxy' && api && book && <StoryGalaxyPanel key={`${workspace.rootPath}:${book.book.id}:${modal.view ?? ''}`} api={api} book={book} busy={busy} error={modalError} initialView={modal.view} onMapViewChange={(view) => showDialog({ kind: 'galaxy', view })} chapterId={chapter?.id} onOpenChapter={(id) => void openChapter(id)} onNavigate={navigateCompanion} onUseForeshadow={chapter && !archived ? useForeshadow : undefined} onScanRelations={chapter && !archived ? () => showDialog({ kind: 'forge', initialKind: 'relations' }) : undefined} onClose={closeModal} onDirtyChange={(value) => { auxiliaryDirty.current = value }} onBookChange={applyBook} onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} onOpenKnowledge={(initialId) => changeView(async () => { setModal({ kind: 'knowledge', initialId }) })} onOpenRecords={(initialKind, initialId, initialCreate) => changeView(async () => { setModal({ kind: 'story', initialKind, initialId, initialCreate }) })}
+          {modal?.kind === 'galaxy' && api && book && <StoryGalaxyPanel key={`${workspace.rootPath}:${book.book.id}`} api={api} book={book} busy={busy} error={modalError} initialView={modal.view} onViewChange={(view) => showDialog({ kind: 'galaxy', view })} chapterId={chapter?.id} onOpenChapter={(id) => void openChapter(id)} onNavigate={navigateCompanion} onUseForeshadow={chapter && !archived ? useForeshadow : undefined} onScanRelations={chapter && !archived ? () => showDialog({ kind: 'forge', initialKind: 'relations' }) : undefined} onClose={closeModal} onDirtyChange={(value) => { auxiliaryDirty.current = value }} onBookChange={applyBook} onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} onOpenKnowledge={(initialId) => changeView(async () => { setModal({ kind: 'knowledge', initialId }) })} onOpenRecords={(initialKind, initialId, initialCreate) => changeView(async () => { setModal({ kind: 'story', initialKind, initialId, initialCreate }) })}
             initialPlaceId={modal.initialPlaceId} initialMapOffset={modal.initialMapOffset}
             onOpenScene={(scenePlaceId, mapOffset) => showDialog({ kind: 'media', scenePlaceId, mapOffset })} />}
           {modal?.kind === 'notes' && api && book && <NotesPanel key={book.book.id} api={api} book={book} initialNoteId={modal.initialId} displayPreferences={display.preferences} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onGlobalMaterials={() => showDialog({ kind: 'inspiration' })} onDirtyChange={(value) => { notesDirty.current = value }} onUpgrade={upgradeKnowledge}
