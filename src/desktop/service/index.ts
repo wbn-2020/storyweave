@@ -167,6 +167,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'story.matrix': return control.matrix(request.payload)
     case 'story.radar': return control.radar(request.payload)
     case 'story.get': return story.getRecord(request.payload)
+    case 'story.thumbnail': return story.readThumbnail(request.payload)
     case 'story.revision': return story.readRevision(request.payload)
     case 'story.create': return story.createRecord(request.payload)
     case 'story.update': return story.updateRecord(request.payload)

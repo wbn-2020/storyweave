@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react'
 import type { Result, StudioApi } from '../../contracts/api'
 import { BOOK_MEDIA_MIMES, MAX_BOOK_MEDIA_ITEM_BYTES, validateBookMediaPayload, type BookMediaMime } from '../../contracts/book-media'
 import { isNoteThumbnailImage, parseNoteThumbnailFields, sameNoteThumbnail, type NoteThumbnailFields, type NoteThumbnailMetadata } from '../../contracts/note-thumbnail'
@@ -62,8 +62,8 @@ export function InspirationThumbnail({ api, metadata, name, className }: {
   return <MaterialThumbnail read={metadata ? read : null} name={name} className={className} />
 }
 
-function MaterialThumbnail({ read, name, className }: {
-  read: (() => Promise<Result<NoteThumbnailFields>>) | null; name: string; className?: string
+export function MaterialThumbnail({ read, name, className, retryable = true, emptyIcon = 'notes' }: {
+  read: (() => Promise<Result<NoteThumbnailFields>>) | null; name: string; className?: string; retryable?: boolean; emptyIcon?: ComponentProps<typeof StudioIcon>['name']
 }) {
   const host = useRef<HTMLSpanElement>(null)
   const [value, setValue] = useState<{ read: typeof read; src?: string; alt?: string; error?: string } | null>(null)
@@ -98,8 +98,8 @@ function MaterialThumbnail({ read, name, className }: {
   }, [read, attempt])
   return <span ref={host} className={className} title={current?.error} aria-busy={Boolean(read && !current)}>
     {current?.src ? <img src={current.src} alt={current.alt || name} decoding="async" onError={() => setValue({ read, error: '缩略图无法解码。' })} />
-      : <span className={styles.thumbnailEmpty}><StudioIcon name="notes" size={24} /><small>{current?.error ? '图片暂不可用' : read ? '读取图片…' : '未配图'}</small></span>}
-    {current?.error && <button type="button" className={styles.thumbnailRetry} title={current.error} aria-label={`重试读取缩略图：${name}`}
+      : <span className={styles.thumbnailEmpty}><StudioIcon name={emptyIcon} size={24} /><small>{current?.error ? '图片暂不可用' : read ? '读取图片…' : '未配图'}</small></span>}
+    {current?.error && retryable && <button type="button" className={styles.thumbnailRetry} title={current.error} aria-label={`重试读取缩略图：${name}`}
       onClick={() => { setValue(null); setAttempt((value) => value + 1) }}>重试</button>}
   </span>
 }

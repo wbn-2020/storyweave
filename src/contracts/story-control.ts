@@ -1,6 +1,7 @@
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger } from './api'
 import { KNOWLEDGE_KINDS, type AuthorDecision, type ConflictState, type KnowledgeFreshness, type KnowledgeKind } from './knowledge'
 import type { Disclosure, ForeshadowStage, PlannedPayoff } from './story'
+import type { ForeshadowThumbnailMetadata } from './foreshadow-thumbnail'
 
 export const APPEARANCE_ENTITY_PAGE = 12
 export const APPEARANCE_CHAPTER_PAGE = 24
@@ -58,6 +59,7 @@ export interface ForeshadowRadarItem {
   actualPayoff: Disclosure
   due: RadarDue
   overdueChapters: number | null
+  thumbnail: ForeshadowThumbnailMetadata | null
   source: { sourceType: 'chapter_text' | 'author_input' | 'external'; quote: string; referenceState: 'current' | 'historical' | null } | null
 }
 export interface ForeshadowRadarPage extends ControlVersions {

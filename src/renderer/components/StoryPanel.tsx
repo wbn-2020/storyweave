@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { DomainError, type BookSnapshot, type RevisionSnapshot, type StudioApi } from '../../contracts/api'
 import { parseKnowledgeSource, type KnowledgeSourceInput, type KnowledgeStatus } from '../../contracts/knowledge'
 import { MAX_COGNITION_STATES, STORY_EVOLUTION_SCHEMA_VERSION, STORY_KINDS, cognitionStateAt, parseStoryFields, type CognitionState, type CreateStoryRecordInput, type StoryKind, type StoryRecordDetail, type StoryRecordFields, type StoryRecordPage, type StoryRevision, type UpdateStoryRecordInput } from '../../contracts/story'
+import { FORESHADOW_THUMBNAIL_SCHEMA_VERSION, matchesForeshadowThumbnail, parseForeshadowThumbnailMetadata, sameForeshadowThumbnail, type ForeshadowThumbnailFields } from '../../contracts/foreshadow-thumbnail'
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
+import { ForeshadowThumbnail } from './ForeshadowThumbnail'
+import { readNoteThumbnailFile } from './NoteThumbnail'
 import { blockText, cognitionChangeLabels, initialStoryFields, SourceEditor, stageLabels, StoryFieldsEditor, StoryFieldsView, storyKindLabels, timeLabel } from './StoryFieldsEditor'
 import shared from '../StellarShared.module.css'
 import layout from './StellarKnowledge.module.css'
@@ -24,8 +27,8 @@ interface Props {
   onClose: () => void
   onDirtyChange: (dirty: boolean) => void
   onUpgrade: (accept: (status: KnowledgeStatus) => void) => Promise<void>
-  onCreate: (input: CreateStoryRecordInput, accept: (saved: StoryRecordDetail) => void) => Promise<void>
-  onUpdate: (input: UpdateStoryRecordInput, accept: (saved: StoryRecordDetail) => void) => Promise<void>
+  onCreate: (input: CreateStoryRecordInput, accept: (saved: StoryRecordDetail) => boolean) => Promise<void>
+  onUpdate: (input: UpdateStoryRecordInput, accept: (saved: StoryRecordDetail) => boolean) => Promise<void>
   scenes?: { id: string; title: string; chapterId: string | null }[]
 }
 
@@ -69,6 +72,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
   const [mode, setMode] = useState<'view' | 'create' | 'edit'>('view')
   const [fields, setFields] = useState<StoryRecordFields>(() => initialStoryFields(initialKind))
   const [source, setSource] = useState<KnowledgeSourceInput | undefined>()
+  const [thumbnail, setThumbnail] = useState<ForeshadowThumbnailFields | null | undefined>()
   const [expectedRevision, setExpectedRevision] = useState(0)
   const [dirty, setDirty] = useState(false)
   const [reading, setReading] = useState(false)
@@ -81,6 +85,8 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
   const readLock = useRef(false)
   const writeLock = useRef(false)
   const readTicket = useRef(0)
+  const imageInput = useRef<HTMLInputElement>(null)
+  const imageEditor = useRef<HTMLFieldSetElement>(null)
   const initialOpened = useRef(false)
   const callback = useRef(onDirtyChange)
   callback.current = onDirtyChange
@@ -88,6 +94,8 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
   const archived = Boolean(book.book.archivedAt)
   const ready = status !== null && status.schemaVersion >= 4
   const evolutionReady = status !== null && status.schemaVersion >= STORY_EVOLUTION_SCHEMA_VERSION
+  const thumbnailsReady = status !== null && status.schemaVersion >= FORESHADOW_THUMBNAIL_SCHEMA_VERSION
+  const upgradeRequired = status !== null && (!evolutionReady || kind === 'foreshadow' && !thumbnailsReady)
   const unavailable = busy || reading || writing || childReading || Boolean(pendingMessage)
   const names = detail?.labels ?? {}
 
@@ -133,12 +141,12 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
     return true
   }
   async function upgrade() {
-    if (!upgradeConfirmed || !status || evolutionReady || archived || unavailable || writeLock.current) return
+    if (!upgradeConfirmed || !status || !upgradeRequired || archived || unavailable || writeLock.current || dirtyRef.current) return
     writeLock.current = true; setWriting(true); setMessage(null)
     try {
       await onUpgrade((saved) => {
         if (!mounted.current) return
-        if (saved.bookId !== book.book.id || saved.schemaVersion < STORY_EVOLUTION_SCHEMA_VERSION) { setMessage('升级回执尚未确认计划范围与认知变迁可用，请保留窗口并核对。'); return }
+        if (saved.bookId !== book.book.id || saved.schemaVersion < (kind === 'foreshadow' ? FORESHADOW_THUMBNAIL_SCHEMA_VERSION : STORY_EVOLUTION_SCHEMA_VERSION)) { setMessage('升级回执尚未确认新故事记录格式可用，请保留窗口并核对。'); return }
         setStatus(saved); setUpgradeConfirmed(false)
       })
     } catch { if (mounted.current) setMessage('升级结果尚未确认，请保留窗口并核对回执。') }
@@ -170,7 +178,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
     // 编辑期间固定知识修订号；冲突后不从列表刷新中偷偷取得覆盖新资料的基线。
     setExpectedRevision(create ? page!.knowledgeRevision : detail!.knowledgeRevision)
     if (create) setDetail(null)
-    setSource(undefined); setHistoryDetail(null); setEvidence(null); setMessage(null); setDirtyState(true)
+    setSource(undefined); setThumbnail(undefined); setHistoryDetail(null); setEvidence(null); setMessage(null); setDirtyState(true)
   }
   useEffect(() => {
     if (!initialCreate || initialId || initialOpened.current || !ready || !page || busy || pendingMessage || archived) return
@@ -193,22 +201,53 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
   }
   function discard() {
     if (unavailable || writeLock.current || readLock.current || childReads.current.size > 0) return
-    setDirtyState(false); setMode('view'); setSource(undefined); setMessage(null)
+    setDirtyState(false); setMode('view'); setSource(undefined); setThumbnail(undefined); setMessage(null)
+  }
+  async function chooseThumbnail(file: File) {
+    if (unavailable || archived || !thumbnailsReady || mode === 'view' || readLock.current || writeLock.current) return
+    const ticket = ++readTicket.current
+    imageEditor.current?.focus({ preventScroll: true })
+    readLock.current = true; setReading(true); setMessage(null)
+    try {
+      const image = await readNoteThumbnailFile(file)
+      if (!mounted.current || ticket !== readTicket.current) return
+      setThumbnail(image); setDirtyState(true)
+    } catch (caught) {
+      if (mounted.current && ticket === readTicket.current) setMessage(caught instanceof Error ? caught.message : '伏笔配图读取失败。')
+    } finally {
+      if (mounted.current && ticket === readTicket.current) { readLock.current = false; setReading(false) }
+    }
   }
   async function save(event: FormEvent) {
     event.preventDefault()
     if (unavailable || archived || mode === 'view' || readLock.current || writeLock.current || childReads.current.size > 0) return
     let input: CreateStoryRecordInput
     try {
-      input = { bookId: book.book.id, expectedKnowledgeRevision: expectedRevision, fields: parseStoryFields(fields, book.book.id), ...(source ? { source: parseKnowledgeSource(source, book.book.id) } : {}) }
+      input = { bookId: book.book.id, expectedKnowledgeRevision: expectedRevision, fields: parseStoryFields(fields, book.book.id), ...(source ? { source: parseKnowledgeSource(source, book.book.id) } : {}),
+        ...(fields.kind === 'foreshadow' && thumbnail !== undefined ? { thumbnail } : {}) }
     } catch (caught) { setMessage(caught instanceof DomainError ? caught.detail.message : '记录内容无效，请检查后保存。'); return }
     const expectedId = mode === 'edit' ? detail?.id : null
     const expectedKind = fields.kind
     writeLock.current = true; setWriting(true); setMessage(null)
     const accept = (saved: StoryRecordDetail) => {
-      if (!mounted.current) return
-      if (saved.bookId !== book.book.id || saved.fields.kind !== expectedKind || (expectedId && saved.id !== expectedId)) { setMessage('保存回执的记录身份不符，编辑内容仍保留。'); return }
-      setDirtyState(false); setDetail(saved); setHistoryDetail(null); setMode('view'); setSource(undefined); setRefresh((value) => value + 1)
+      if (!mounted.current) return false
+      try {
+        if (saved.bookId !== book.book.id || saved.fields.kind !== expectedKind || (expectedId && saved.id !== expectedId)
+          || !Number.isSafeInteger(saved.bookRevision) || saved.bookRevision < book.book.revision
+          || !Number.isSafeInteger(saved.knowledgeRevision) || saved.knowledgeRevision < expectedRevision
+          || saved.knowledgeRevision > expectedRevision + 1 || !expectedId && saved.knowledgeRevision !== expectedRevision + 1
+          || JSON.stringify(parseStoryFields(saved.fields, book.book.id)) !== JSON.stringify(input.fields)) throw new Error('wrong record')
+      } catch { setMessage('保存回执的记录身份、内容或版本不符，编辑内容仍保留。'); return false }
+      if (expectedKind === 'foreshadow') {
+        try {
+          const image = saved.thumbnail === null ? null : parseForeshadowThumbnailMetadata(saved.thumbnail)
+          if (image && (image.recordId !== saved.id || image.knowledgeRevision > (saved.revisions[0]?.knowledgeRevision ?? -1))
+            || input.thumbnail !== undefined && !matchesForeshadowThumbnail(image, input.thumbnail)
+            || input.thumbnail === undefined && !sameForeshadowThumbnail(image, mode === 'edit' ? detail?.thumbnail ?? null : null)) throw new Error('wrong thumbnail')
+        } catch { setMessage('保存回执的伏笔配图与本次提交不符，编辑内容仍保留，请核对原请求。'); return false }
+      }
+      setDirtyState(false); setDetail(saved); setHistoryDetail(null); setMode('view'); setSource(undefined); setThumbnail(undefined); setRefresh((value) => value + 1)
+      return true
     }
     try {
       if (mode === 'edit' && detail) await onUpdate({ ...input, id: detail.id }, accept)
@@ -243,7 +282,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
   }
 
   const panelError = [message, error].filter((value, index, values) => value && value !== pendingMessage && values.indexOf(value) === index).join(' ') || null
-  const draftJson = pendingMessage && mode !== 'view' ? JSON.stringify({ format: 'storyweave-story-draft', version: 1, bookId: book.book.id, operation: mode === 'edit' ? 'story.update' : 'story.create', ...(mode === 'edit' && detail ? { recordId: detail.id } : {}), expectedKnowledgeRevision: expectedRevision, fields, source }, null, 2) : null
+  const draftJson = pendingMessage && mode !== 'view' ? JSON.stringify({ format: 'storyweave-story-draft', version: 1, bookId: book.book.id, operation: mode === 'edit' ? 'story.update' : 'story.create', ...(mode === 'edit' && detail ? { recordId: detail.id } : {}), expectedKnowledgeRevision: expectedRevision, fields, source, ...(thumbnail === undefined ? {} : { thumbnail }) }, null, 2) : null
   const evidenceIndex = evidence ? evidence.revision.document.content.findIndex((block) => block.attrs.id === evidence.source.blockId) : -1
   const milestoneSources = detail?.fields.kind === 'foreshadow' ? detail.fields.milestones.filter((item) => item.source?.sourceType === 'chapter_text') : []
 
@@ -257,7 +296,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
     {archived && <p className={shared.helpText}>作品已归档，可查阅记录；解除归档后才能编辑。</p>}
     {statusLoading && <p className={layout.status} role="status">正在读取作品结构…</p>}
     {!statusLoading && !status && <button type="button" className={shared.button} disabled={unavailable} onClick={() => setStatusRefresh((value) => value + 1)}>重试读取状态</button>}
-    {status && !evolutionReady && <section className={layout.upgrade}><h3>为本书启用计划范围与认知变迁</h3><p>当前作品使用结构版本 {status.schemaVersion}。先保存独立数据库备份并核对，再升级到当前作品格式。已有故事记录仍可查阅；原稿与历史快照保留。</p><label className={`${shared.checkLabel} ${layout.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份，再升级本书结构。</label><button type="button" className={shared.primaryButton} disabled={unavailable || archived || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用新故事记录</button></section>}
+    {status && upgradeRequired && <section className={layout.upgrade}><h3>{kind === 'foreshadow' ? '为本书启用伏笔配图与计划范围' : '为本书启用计划范围与认知变迁'}</h3><p>当前作品使用结构版本 {status.schemaVersion}。先保存独立数据库备份并核对，再升级到当前作品格式。已有故事记录仍可查阅；原稿与历史快照保留。</p><label className={`${shared.checkLabel} ${layout.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived || dirty} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份，再升级本书结构。</label><button type="button" className={shared.primaryButton} disabled={unavailable || archived || dirty || !upgradeConfirmed} title={dirty ? '请先保存或放弃当前修改，再启用配图' : undefined} onClick={() => void upgrade()}>备份并启用新故事记录</button></section>}
     {status?.backupPath && <p className={layout.backupPath}>本次升级前备份：{status.backupPath}</p>}
     {ready && <><nav className={styles.tabs} aria-label="故事记录类型">{STORY_KINDS.map((value) => <button key={value} type="button" aria-pressed={kind === value} disabled={unavailable} onClick={() => switchKind(value)}>{storyKindLabels[value]}</button>)}</nav>
       <div className={`${layout.layout} ${styles.layout}`}><aside className={layout.listPane} aria-label={`${storyKindLabels[kind]}列表`}>
@@ -268,16 +307,32 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, ini
       </aside><section className={layout.detailPane} aria-label="故事记录详情">
         {reading && <p className={layout.status} role="status">正在读取固定记录…</p>}
         {mode === 'view' && !detail && !reading && <div className={layout.empty}><h3>把故事的变化留下来</h3><p>先选择记录，或新建关系、事件、伏笔与人物认知。实体来自本书知识库；所有引用按同一作品核对。</p></div>}
-        {mode === 'view' && detail && <><div className={layout.detailHeading}><div><span>{storyKindLabels[detail.fields.kind]}</span><h3>{detail.fields.title}</h3></div><button type="button" className={shared.button} disabled={unavailable || archived} onClick={() => beginEdit(false)}>{detail.fields.kind === 'cognition' ? '复核状态 / 补充来源' : '编辑记录'}</button></div><StoryFieldsView fields={detail.fields} book={book} names={names} />
+        {mode === 'view' && detail && <><div className={layout.detailHeading}><div><span>{storyKindLabels[detail.fields.kind]}</span><h3>{detail.fields.title}</h3></div><button type="button" className={shared.button} disabled={unavailable || archived} onClick={() => beginEdit(false)}>{detail.fields.kind === 'cognition' ? '复核状态 / 补充来源' : '编辑记录'}</button></div>
+          {detail.fields.kind === 'foreshadow' && detail.thumbnail && <ForeshadowThumbnail api={api} bookId={book.book.id} recordId={detail.id} metadata={detail.thumbnail} name={detail.fields.title} className={styles.thumbnail} />}
+          <StoryFieldsView fields={detail.fields} book={book} names={names} />
           {detail.fields.kind === 'cognition' && <><button type="button" className={shared.primaryButton} disabled={unavailable || archived} onClick={beginCognitionChange}>记录认知变化</button><CognitionHistoryView key={detail.id} states={detail.cognitionHistory ?? []} currentId={detail.id} disabled={unavailable} onSelect={(id) => void selectRecord(id)} /></>}
           <div className={layout.sectionHeading}><h4>记录来源</h4><span>出处可查不代表陈述已被证实</span></div><ul className={layout.sources}>{detail.sources.map((item) => <li key={item.id}><div><strong>{sourceLabels[item.sourceType]}</strong><span>{validityLabels[item.validity]}{item.referenceState && ` · ${item.referenceState === 'historical' ? '历史稿引用' : '当前稿引用'}`}</span></div><blockquote>{item.quote}</blockquote>{item.sourceType === 'chapter_text' && <><p className={layout.sourceIds}>章节 {item.chapterId} · 版本 {item.revisionId} · 段落 {item.blockId}</p><button type="button" className={shared.button} disabled={unavailable} onClick={() => void showSource(item)}>查看来源原稿</button></>}</li>)}</ul>{detail.sources.length === 0 && <p className={styles.help}>尚未追加记录来源。</p>}
           {milestoneSources.length > 0 && <><div className={layout.sectionHeading}><h4>伏笔里程碑原稿</h4></div>{milestoneSources.map((milestone) => <p key={milestone.id} className={layout.sourceIds}>{stageLabels[milestone.stage]} · {milestone.note}<button type="button" className={shared.button} disabled={unavailable} onClick={() => { if (milestone.source) void showSource(milestone.source) }}>查看里程碑来源</button></p>)}</>}
           {evidence && <section aria-label="来源版本上下文"><div className={layout.sectionHeading}><h4>来源原稿 · {displayTime(evidence.revision.createdAt)}</h4><button type="button" className={shared.button} disabled={unavailable} onClick={() => setEvidence(null)}>收起原稿</button></div><p className={layout.sourceIds}>固定版本 {evidence.revision.id} · 引用段落 {evidence.source.blockId}</p>{evidenceIndex < 0 ? <p className={styles.help}>此版本中未找到指定段落，未展示其他正文。</p> : evidence.revision.document.content.slice(Math.max(0, evidenceIndex - 1), evidenceIndex + 2).map((block) => <p key={block.attrs.id} className={block.attrs.id === evidence.source.blockId ? layout.evidenceQuote : layout.evidenceContext}>{blockText(block) || '分场线 / 空段落'}</p>)}</section>}
           <div className={layout.sectionHeading}><h4>修改历史</h4><span>最近 {detail.revisions.length} 次摘要；选中后读取单个快照，完整历史保留在本书</span></div>
           <ul className={styles.historyList}>{detail.revisions.map((revision) => <li key={revision.id}><button type="button" className={styles.historyButton} disabled={unavailable} aria-expanded={historyDetail?.id === revision.id} aria-controls="story-history-detail" onClick={() => void showHistory(revision.id)}><strong>{revision.title}</strong><span>知识版本 {revision.knowledgeRevision} · {revision.reason === 'created' ? '创建' : '更新'} · {displayTime(revision.createdAt)}</span></button></li>)}</ul>
-          {historyDetail && <section id="story-history-detail" className={styles.history} aria-label="故事记录历史快照"><div className={layout.sectionHeading}><h4>{historyDetail.fields.title} · 知识版本 {historyDetail.knowledgeRevision}</h4><button type="button" className={shared.button} disabled={unavailable} onClick={() => setHistoryDetail(null)}>收起历史</button></div><p className={styles.help}>关联名称显示当前名称，历史关联身份与内容保持原快照。</p><StoryFieldsView fields={historyDetail.fields} book={book} names={historyDetail.labels} /></section>}
+          {historyDetail && <section id="story-history-detail" className={styles.history} aria-label="故事记录历史快照"><div className={layout.sectionHeading}><h4>{historyDetail.fields.title} · 知识版本 {historyDetail.knowledgeRevision}</h4><button type="button" className={shared.button} disabled={unavailable} onClick={() => setHistoryDetail(null)}>收起历史</button></div><p className={styles.help}>关联名称显示当前名称，历史关联身份与内容保持原快照。</p>
+            {historyDetail.fields.kind === 'foreshadow' && <><ForeshadowThumbnail api={api} bookId={book.book.id} recordId={historyDetail.recordId} metadata={historyDetail.thumbnail ?? null} name={historyDetail.fields.title} className={styles.thumbnail} /><p className={styles.help}>配图取自该次修订，不随当前换图或移除改变。</p></>}
+            <StoryFieldsView fields={historyDetail.fields} book={book} names={historyDetail.labels} /></section>}
         </>}
-        {mode !== 'view' && <form className={styles.form} onSubmit={(event) => void save(event)}><div className={layout.detailHeading}><h3>{mode === 'create' ? '新建' : '编辑'}{storyKindLabels[fields.kind]}</h3><span>固定知识版本 {expectedRevision}</span></div><StoryFieldsEditor fields={fields} onChange={changeFields} api={api} book={book} disabled={unavailable || archived} names={names} savedMilestones={mode === 'edit' && detail?.fields.kind === 'foreshadow' ? detail.fields.milestones.length : 0}
+        {mode !== 'view' && <form className={styles.form} onSubmit={(event) => void save(event)}><div className={layout.detailHeading}><h3>{mode === 'create' ? '新建' : '编辑'}{storyKindLabels[fields.kind]}</h3><span>固定知识版本 {expectedRevision}</span></div>
+          {fields.kind === 'foreshadow' && <fieldset ref={imageEditor} tabIndex={-1} aria-label="伏笔配图"><legend>伏笔配图</legend><div className={styles.thumbnailEditor}>
+            {thumbnail ? <img className={styles.thumbnail} src={`data:${thumbnail.mime};base64,${thumbnail.dataBase64}`} alt={thumbnail.alt || fields.title} />
+              : <ForeshadowThumbnail api={api} bookId={book.book.id} recordId={detail?.id ?? ''} metadata={thumbnail === undefined && mode === 'edit' ? detail?.thumbnail ?? null : null} name={fields.title} className={styles.thumbnail} />}
+            <div className={styles.stack}><p className={styles.help}>{!thumbnailsReady ? '本书尚未启用配图，文字仍可保存。请先保存或放弃当前修改，再备份升级。' : thumbnail === null ? '本次保存将移除当前配图，历史原图保留。' : 'PNG、JPEG 或 WebP，单张不超过 2 MiB；随记录一起保存。'}</p>
+              <input ref={imageInput} type="file" hidden accept="image/png,image/jpeg,image/webp" disabled={unavailable || archived || !thumbnailsReady}
+                onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void chooseThumbnail(file) }} />
+              <div className={styles.thumbnailActions}><button type="button" className={shared.button} disabled={unavailable || archived || !thumbnailsReady} title={!thumbnailsReady ? '请先备份升级作品' : undefined} onClick={() => imageInput.current?.click()}>选择配图</button>
+                <button type="button" className={shared.button} disabled={unavailable || archived || !thumbnailsReady || (thumbnail === null || thumbnail === undefined && (mode !== 'edit' || !detail?.thumbnail))} onClick={() => { setThumbnail(null); setDirtyState(true) }}>移除配图</button>
+                {thumbnail !== undefined && <button type="button" className={shared.button} disabled={unavailable || archived} onClick={() => setThumbnail(undefined)}>撤销本次配图修改</button>}</div>
+              {thumbnail && <label>图片说明<input value={thumbnail.alt} maxLength={2000} disabled={unavailable || archived} onChange={(event) => { setThumbnail({ ...thumbnail, alt: event.target.value }); setDirtyState(true) }} /></label>}
+            </div></div></fieldset>}
+          <StoryFieldsEditor fields={fields} onChange={changeFields} api={api} book={book} disabled={unavailable || archived} names={names} savedMilestones={mode === 'edit' && detail?.fields.kind === 'foreshadow' ? detail.fields.milestones.length : 0}
           savedCognition={mode === 'edit' && detail?.fields.kind === 'cognition' ? detail.fields : undefined}
           previousCognition={mode === 'create' && detail?.fields.kind === 'cognition' ? detail.fields : undefined}
           scenes={scenes} onReadingChange={onReadingChange} /><SourceEditor api={api} book={book} disabled={unavailable || archived} value={source} onReadingChange={onReadingChange} onChange={(value) => { setSource(value); setDirtyState(true); setMessage(null) }} /><div className={shared.formActions}><button type="button" className={shared.button} disabled={unavailable} onClick={discard}>{dirty ? '放弃本次修改' : '返回详情'}</button><button type="submit" className={shared.primaryButton} disabled={unavailable || archived || !fields.title.trim()}>{writing || busy ? '正在保存…' : '保存记录'}</button></div></form>}

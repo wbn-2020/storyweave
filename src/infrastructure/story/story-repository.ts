@@ -11,6 +11,8 @@ import {
   type StoryRevision, type StoryRevisionInput, type StoryRevisionSummary, type StorySource, type UpdateStoryRecordInput,
 } from '../../contracts/story'
 import type { StudioRepository } from '../storage/studio-repository'
+import { matchesForeshadowThumbnail, parseReadForeshadowThumbnailInput, type ReadForeshadowThumbnailInput, type ForeshadowThumbnailImage } from '../../contracts/foreshadow-thumbnail'
+import { readForeshadowThumbnail, readForeshadowThumbnailMetadata, supportsForeshadowThumbnails, validateForeshadowThumbnailBudget, validateForeshadowThumbnailContent, writeForeshadowThumbnail } from './thumbnail-repository'
 
 interface RecordRow {
   id: string; book_id: string; kind: StoryRecordFields['kind']; title: string; description: string
@@ -197,7 +199,8 @@ export class StoryRepository {
         const fields = storedFields(row.fields_json, data.bookId)
         if (fields.kind !== current.kind) throw storageFailure()
         return { id: row.id, bookId: data.bookId, recordId: row.record_id, knowledgeRevision: row.knowledge_revision,
-          fields, reason: row.reason, createdAt: row.created_at, labels: this.readLabels(db, data.bookId, fields) }
+          fields, reason: row.reason, createdAt: row.created_at, labels: this.readLabels(db, data.bookId, fields),
+          ...(fields.kind === 'foreshadow' ? { thumbnail: readForeshadowThumbnailMetadata(db, data.bookId, data.id, row.knowledge_revision) } : {}) }
       })()
     })
   }
@@ -219,8 +222,23 @@ export class StoryRepository {
     })
   }
 
+  readThumbnail(input: ReadForeshadowThumbnailInput): ForeshadowThumbnailImage {
+    return perform(() => {
+      const data = parseReadForeshadowThumbnailInput(input), { db } = this.studio.getStoryDatabase(data.bookId)
+      return db.transaction(() => {
+        const state = readState(db, data.bookId)
+        if (data.imageRevision > state.knowledge_revision) throw new DomainError({ code: 'NOT_FOUND', message: '配图版本超过当前作品的知识版本。' })
+        return readForeshadowThumbnail(db, data)
+      })()
+    })
+  }
+
   private writeRecord(data: CreateStoryRecordInput, existingId?: string, additionalSources: readonly KnowledgeSourceInput[] = []): StoryRecordDetail {
     const { db } = this.studio.getStoryDatabase(data.bookId)
+    if (data.thumbnail !== undefined && !supportsForeshadowThumbnails(db)) {
+      throw new DomainError({ code: 'FORBIDDEN', message: '请先备份并升级作品，再保存伏笔配图；原有文字记录仍可编辑。' })
+    }
+    if (data.thumbnail) validateForeshadowThumbnailContent(data.thumbnail)
     if ((data.fields.kind === 'relation' && data.fields.layer !== undefined || data.fields.kind === 'event' && data.fields.appearanceCheck ||
         data.fields.kind === 'foreshadow' && 'targetNumber' in data.fields.plannedPayoff) && (db.pragma('user_version', { simple: true }) as number) < 17) {
       throw new DomainError({ code: 'FORBIDDEN', message: '请先备份并升级作品至 v17，再保存关系层次、整章出场核对或未建卷章序号。' })
@@ -282,7 +300,10 @@ export class StoryRepository {
         }
       }
       const fieldsJson = JSON.stringify(data.fields)
-      if (previous && JSON.stringify(previous.fields) === fieldsJson && additions.length === 0) return this.readDetail(db, data.bookId, id)
+      validateForeshadowThumbnailBudget(db)
+      const thumbnailChanged = data.thumbnail !== undefined && !matchesForeshadowThumbnail(
+        previous ? readForeshadowThumbnailMetadata(db, data.bookId, id, state.knowledge_revision) : null, data.thumbnail)
+      if (previous && JSON.stringify(previous.fields) === fieldsJson && additions.length === 0 && !thumbnailChanged) return this.readDetail(db, data.bookId, id)
       const now = new Date().toISOString()
       const values = { id, bookId: data.bookId, kind: data.fields.kind, title: data.fields.title,
         description: data.fields.description, fieldsJson, storyOrder: orderOf(data.fields), now }
@@ -307,6 +328,7 @@ export class StoryRepository {
       const knowledgeRevision = state.knowledge_revision + 1
       db.prepare(`INSERT INTO story_record_revisions (id, record_id, knowledge_revision, fields_json, reason, created_at)
         VALUES (?, ?, ?, ?, ?, ?)`).run(revisionId, id, knowledgeRevision, fieldsJson, previous ? 'updated' : 'created', now)
+      if (thumbnailChanged) writeForeshadowThumbnail(db, data.bookId, id, knowledgeRevision, data.thumbnail!, now)
       // 故事事实、固定出处、历史与待处理事件必须跟书和知识修订号在同一事务提交。
       const advanced = db.prepare(`UPDATE book_meta SET revision = ?, knowledge_revision = ?, updated_at = ?
         WHERE singleton = 1 AND id = ? AND revision = ? AND knowledge_revision = ? AND archived_at IS NULL`)
@@ -497,6 +519,7 @@ export class StoryRepository {
   private readDetail(db: Database.Database, bookId: string, id: string): StoryRecordDetail {
     const state = readState(db, bookId)
     const record = summary(readRecord(db, bookId, id))
+    validateForeshadowThumbnailBudget(db)
     const rows = db.prepare(`SELECT id, record_id, source_type, book_id, chapter_id, revision_id, block_id, quote, created_at
       FROM story_sources WHERE record_id = ? ORDER BY created_at, id LIMIT ?`).all(id, MAX_STORY_SOURCES + 1) as SourceRow[]
     if (rows.length > MAX_STORY_SOURCES) throw storageFailure()
@@ -526,6 +549,7 @@ export class StoryRepository {
     if (!revisions[0] || !latest || JSON.stringify(storedFields(latest.fields_json, bookId)) !== JSON.stringify(record.fields)) throw storageFailure()
     return { ...record, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision, sources, revisions,
       labels: this.readLabels(db, bookId, record.fields),
+      ...(record.fields.kind === 'foreshadow' ? { thumbnail: readForeshadowThumbnailMetadata(db, bookId, id, revisions[0].knowledgeRevision) } : {}),
       ...(record.fields.kind === 'cognition' ? { cognitionHistory: this.readCognitionHistory(db, bookId, id) } : {}) }
   }
 }

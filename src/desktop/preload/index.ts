@@ -128,6 +128,7 @@ const api: StudioApi = {
   readAppearanceMatrix: (input) => invoke('story.matrix', input),
   listForeshadowRadar: (input) => invoke('story.radar', input),
   getStoryRecord: (input) => invoke('story.get', input),
+  readForeshadowThumbnail: (input) => invoke('story.thumbnail', input),
   readStoryRevision: (input) => invoke('story.revision', input),
   createStoryRecord: (input) => invoke('story.create', input),
   updateStoryRecord: (input) => invoke('story.update', input),

@@ -1,4 +1,5 @@
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText } from './api'
+import { parseForeshadowThumbnailFields, type ForeshadowThumbnailFields, type ForeshadowThumbnailMetadata } from './foreshadow-thumbnail'
 import {
   AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_NATURES, parseKnowledgeSource,
   type AuthorDecision, type ConflictState, type KnowledgeFreshness, type KnowledgeNature,
@@ -118,6 +119,8 @@ export interface CreateStoryRecordInput {
   expectedKnowledgeRevision: number
   fields: StoryRecordFields
   source?: KnowledgeSourceInput
+  /** 仅伏笔支持；省略保留原图，null 明确移除，与记录同事务保存。 */
+  thumbnail?: ForeshadowThumbnailFields | null
 }
 export interface UpdateStoryRecordInput extends CreateStoryRecordInput { id: string }
 export interface ListStoryRecordsInput {
@@ -162,6 +165,7 @@ export interface StoryRevision {
   reason: 'created' | 'updated'
   createdAt: string
   labels: Record<string, string>
+  thumbnail?: ForeshadowThumbnailMetadata | null
 }
 export interface StoryRevisionSummary {
   id: string
@@ -179,6 +183,7 @@ export interface StoryRecordDetail extends StoryRecordSummary {
   /** 最近的修改记录；完整历史保留在书内数据库。 */
   revisions: StoryRevisionSummary[]
   cognitionHistory?: CognitionState[]
+  thumbnail?: ForeshadowThumbnailMetadata | null
 }
 export interface CognitionState {
   id: string
@@ -418,14 +423,17 @@ export function parseStoryRevisionInput(value: unknown): StoryRevisionInput {
 }
 
 export function parseCreateStoryRecord(value: unknown): CreateStoryRecordInput {
-  const data = record(value, ['bookId', 'expectedKnowledgeRevision', 'fields', 'source'], '新建故事记录请求')
+  const data = record(value, ['bookId', 'expectedKnowledgeRevision', 'fields', 'source', 'thumbnail'], '新建故事记录请求')
   const bookId = id(data.bookId)
-  return { bookId, expectedKnowledgeRevision: requiredInteger(data.expectedKnowledgeRevision, '知识库版本'), fields: parseStoryFields(data.fields, bookId),
+  const fields = parseStoryFields(data.fields, bookId)
+  if (data.thumbnail !== undefined && fields.kind !== 'foreshadow') return invalid('只有伏笔记录可以保存伏笔配图。')
+  return { bookId, expectedKnowledgeRevision: requiredInteger(data.expectedKnowledgeRevision, '知识库版本'), fields,
+    ...(data.thumbnail === undefined ? {} : { thumbnail: data.thumbnail === null ? null : parseForeshadowThumbnailFields(data.thumbnail) }),
     ...(data.source === undefined ? {} : { source: parseKnowledgeSource(data.source, bookId) }) }
 }
 
 export function parseUpdateStoryRecord(value: unknown): UpdateStoryRecordInput {
-  const data = record(value, ['bookId', 'id', 'expectedKnowledgeRevision', 'fields', 'source'], '更新故事记录请求')
+  const data = record(value, ['bookId', 'id', 'expectedKnowledgeRevision', 'fields', 'source', 'thumbnail'], '更新故事记录请求')
   const { id: recordId, ...input } = data
   return { ...parseCreateStoryRecord(input), id: id(recordId) }
 }

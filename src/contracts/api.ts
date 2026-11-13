@@ -12,6 +12,7 @@ import type { WorldMapInput, WorldMapPage } from './world-map'
 import type { AppearanceMatrixInput, AppearanceMatrixPage, ForeshadowRadarInput, ForeshadowRadarPage } from './story-control'
 import type { CreateNoteInput, ListNotesInput, NoteDetail, NoteInput, NotePage, PromoteNoteInput, SetNoteChaptersInput, UpdateNoteInput } from './notes'
 import type { NoteThumbnailImage, ReadNoteThumbnailInput } from './note-thumbnail'
+import type { ForeshadowThumbnailImage, ReadForeshadowThumbnailInput } from './foreshadow-thumbnail'
 import type { InspirationThumbnailImage, ReadInspirationThumbnailInput, UpgradeInspirationsInput, UpgradeInspirationsReceipt } from './inspiration-thumbnail'
 import type { MemoryBookInput, MemoryControlInput, MemoryEvidence, MemoryEvidenceInput, MemorySearchInput, MemorySearchPage, MemoryStartInput, MemoryStatus, MemoryTaskInput, MemoryTaskReceipt } from './memory'
 import type { AiAdoptInput, AiAdoptReceipt, AiBookInput, AiCheckpointInput, AiConfigureInput, AiConnection, AiConnectionPage, AiConnectionSaveInput, AiFinishInput, AiListInput, AiMemoryAdoptInput, AiMemoryAdoptReceipt, AiPrepareInput, AiPrepareServiceInput, AiRun, AiRunInput, AiRunPage, AiStartInput, AiVersionInput } from './ai'
@@ -313,6 +314,7 @@ export interface CommandMap {
   'story.matrix': { input: AppearanceMatrixInput; output: AppearanceMatrixPage }
   'story.radar': { input: ForeshadowRadarInput; output: ForeshadowRadarPage }
   'story.get': { input: StoryRecordInput; output: StoryRecordDetail }
+  'story.thumbnail': { input: ReadForeshadowThumbnailInput; output: ForeshadowThumbnailImage }
   'story.revision': { input: StoryRevisionInput; output: StoryRevision }
   'story.create': { input: CreateStoryRecordInput; output: StoryRecordDetail }
   'story.update': { input: UpdateStoryRecordInput; output: StoryRecordDetail }
@@ -458,6 +460,7 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   readAppearanceMatrix(input: AppearanceMatrixInput): Promise<Result<AppearanceMatrixPage>>
   listForeshadowRadar(input: ForeshadowRadarInput): Promise<Result<ForeshadowRadarPage>>
   getStoryRecord(input: StoryRecordInput): Promise<Result<StoryRecordDetail>>
+  readForeshadowThumbnail(input: ReadForeshadowThumbnailInput): Promise<Result<ForeshadowThumbnailImage>>
   readStoryRevision(input: StoryRevisionInput): Promise<Result<StoryRevision>>
   createStoryRecord(input: CreateStoryRecordInput): Promise<Result<StoryRecordDetail>>
   updateStoryRecord(input: UpdateStoryRecordInput): Promise<Result<StoryRecordDetail>>

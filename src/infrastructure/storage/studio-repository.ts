@@ -18,6 +18,7 @@ import { MAX_DRAFT_FILE_BYTES, parseDraftFile } from '../../contracts/draft'
 import { MAX_KNOWLEDGE_SOURCES, parseKnowledgeSource, parseKnowledgeStatusInput, parseUpgradeKnowledgeInput, type KnowledgeSourceInput, type KnowledgeStatus, type SourceValidity, type UpgradeKnowledgeInput } from '../../contracts/knowledge'
 import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
 import { STORY_SCHEMA } from '../story/schema'
+import { FORESHADOW_THUMBNAIL_SCHEMA } from '../story/thumbnail-schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
 import { AI_SCHEMA, AI_V6_TO_V7_SCHEMA } from '../ai/schema'
 import { GENERATION_BOOK_UPGRADE, STUDIO_GENERATION_SCHEMA } from '../ai/generation-schema'
@@ -999,6 +1000,7 @@ export class StudioRepository {
         if (previousVersion < 21) db.exec(SCENE_MEDIA_SCHEMA)
         if (previousVersion < 22) db.exec(NOTE_MATERIAL_SCHEMA)
         if (previousVersion < 23) db.exec(NOTE_THUMBNAIL_SCHEMA)
+        if (previousVersion < 24) db.exec(FORESHADOW_THUMBNAIL_SCHEMA)
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
         this.recordMutation(db, 'book.metadata', new Date().toISOString())

@@ -8,10 +8,12 @@ import { appearanceState, APPEARANCE_CHAPTER_PAGE, APPEARANCE_ENTITY_PAGE, FORES
   type AppearanceMatrixInput, type AppearanceMatrixPage, type ControlVersions,
   type ForeshadowRadarInput, type ForeshadowRadarItem, type ForeshadowRadarPage, type RadarDue, type RadarScope } from '../../contracts/story-control'
 import type { StoryKind, StoryRecordDetail } from '../../contracts/story'
+import { parseForeshadowThumbnailMetadata } from '../../contracts/foreshadow-thumbnail'
 import { request } from '../request'
 import { blockText, plannedPayoffLabel, stageLabels, StoryFieldsView } from './StoryFieldsEditor'
 import type { CompanionNavigateTarget } from './CompanionPanel'
 import { StudioIcon } from './StudioIcon'
+import { ForeshadowThumbnail } from './ForeshadowThumbnail'
 import shared from '../StellarShared.module.css'
 import styles from './StellarControl.module.css'
 
@@ -33,6 +35,13 @@ const snapshot = (value: ControlVersions) => ({ expectedBookRevision: value.book
 function matchesVersions(page: ControlVersions, input: { expectedBookRevision?: number; expectedKnowledgeRevision?: number }): boolean {
   return Number.isSafeInteger(page.bookRevision) && Number.isSafeInteger(page.knowledgeRevision) &&
     (input.expectedBookRevision === undefined || page.bookRevision === input.expectedBookRevision && page.knowledgeRevision === input.expectedKnowledgeRevision)
+}
+function radarThumbnailValid(item: ForeshadowRadarItem): boolean {
+  if (item.thumbnail === null) return true
+  try {
+    const thumbnail = parseForeshadowThumbnailMetadata(item.thumbnail)
+    return thumbnail.recordId === item.id && thumbnail.knowledgeRevision <= item.revision
+  } catch { return false }
 }
 
 function RecordEvidence({ api, book, disabled, id, expected, onOpenRecord, onNavigate }: Pick<Props, 'api' | 'book' | 'disabled' | 'onOpenRecord' | 'onNavigate'> & {
@@ -97,6 +106,7 @@ function RecordEvidence({ api, book, disabled, id, expected, onOpenRecord, onNav
     {loading && <p role="status">正在读取记录与来源…</p>}
     {error && <><p className={styles.error} role="alert">{error}</p>{!detail && <button type="button" className={shared.button} disabled={disabled || loading} onClick={() => { detailRoot.current?.focus({ preventScroll: true }); setRefresh((value) => value + 1) }}>重读记录</button>}</>}
     {detail && <><div className={styles.recordHeading}><h3>{detail.fields.title}</h3><button type="button" className={shared.button} disabled={disabled || reading} onClick={() => onOpenRecord(detail.fields.kind, detail.id)}>编辑记录与历程</button></div>
+      {detail.fields.kind === 'foreshadow' && detail.thumbnail && <ForeshadowThumbnail api={api} bookId={book.book.id} recordId={detail.id} metadata={detail.thumbnail} name={detail.fields.title} className={styles.evidenceThumbnail} />}
       <StoryFieldsView fields={detail.fields} book={book} names={detail.labels} />
       <p className={styles.help}>登记引文用于追溯出处，陈述本身仍需作者判断。跳转定位当前稿；固定原稿保留引用时的版本。</p>
       {/* 读取锁拦截重复操作，保留按钮焦点，避免原生禁用后 Esc 无法送达证据区。 */}
@@ -279,6 +289,7 @@ export function ForeshadowRadar(props: Props) {
           counts.reduce((total, count) => total + count, 0) !== value.total ||
           value.items.length !== Math.min(FORESHADOW_RADAR_PAGE, Math.max(0, value.total - value.offset)) ||
           new Set(value.items.map((item) => item.id)).size !== value.items.length ||
+          value.items.some((item) => !radarThumbnailValid(item)) ||
           value.nextOffset !== (value.offset + value.items.length < value.total ? value.offset + value.items.length : null)) {
         dueJump.current = false; setError('雷达的进度、范围、分页或作品版本不符，请刷新目录后重新打开。'); return
       }
@@ -388,7 +399,7 @@ export function ForeshadowRadar(props: Props) {
             return item ? <button type="button" key={segment.key} data-position={index} data-due={item.due} data-stage={item.stage} data-hovered={hovered === item.id} disabled={disabled}
               aria-label={`查看伏笔：${item.title}`} aria-pressed={selected === item.id} aria-controls={evidenceId} title={`${item.title} · ${radarDueLabels[item.due]}`}
               onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered(null)} onFocus={() => setHovered(item.id)} onBlur={() => setHovered(null)} onClick={(event) => select(item.id, event.currentTarget)}>
-              <StudioIcon name={item.due === 'overdue' ? 'warning' : item.stage === 'resolved' ? 'check' : item.stage === 'abandoned' ? 'close' : 'spark'} size={24} />
+              <ForeshadowThumbnail api={api} bookId={book.book.id} recordId={item.id} metadata={item.thumbnail} name={item.title} className={styles.radarThumbnail} retryable={false} />
               <strong>{item.title}</strong><small>{stageLabels[item.stage]} · {radarDueLabels[item.due]}</small>
             </button> : null
           })}</div>

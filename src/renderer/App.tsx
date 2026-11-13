@@ -1002,17 +1002,23 @@ export function App({ api }: Props) {
     }, false, true, false, true)
   }
 
-  async function createStory(input: CreateStoryRecordInput, accept: (saved: StoryRecordDetail) => void) {
+  async function createStory(input: CreateStoryRecordInput, accept: (saved: StoryRecordDetail) => boolean) {
     if (!api || bookRef.current?.book.id !== input.bookId) return
     await changeView(async () => {
-      await mutate('story.create', () => api.createStoryRecord(input), (saved) => acceptKnowledge(saved, accept))
+      await mutate('story.create', () => api.createStoryRecord(input), (saved) => {
+        if (!accept(saved)) return false
+        return acceptKnowledge(saved, () => {})
+      })
     }, false, false, false, true)
   }
 
-  async function updateStory(input: UpdateStoryRecordInput, accept: (saved: StoryRecordDetail) => void) {
+  async function updateStory(input: UpdateStoryRecordInput, accept: (saved: StoryRecordDetail) => boolean) {
     if (!api || bookRef.current?.book.id !== input.bookId) return
     await changeView(async () => {
-      await mutate('story.update', () => api.updateStoryRecord(input), (saved) => acceptKnowledge(saved, accept))
+      await mutate('story.update', () => api.updateStoryRecord(input), (saved) => {
+        if (!accept(saved)) return false
+        return acceptKnowledge(saved, () => {})
+      })
     }, false, false, false, true)
   }
 

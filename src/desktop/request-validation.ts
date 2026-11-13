@@ -9,6 +9,7 @@ import { parseWorldMapInput } from '../contracts/world-map'
 import { parseAppearanceMatrixInput, parseForeshadowRadarInput } from '../contracts/story-control'
 import { parseCreateNoteInput, parseListNotesInput, parseNoteInput, parsePromoteNoteInput, parseSetNoteChaptersInput, parseUpdateNoteInput } from '../contracts/notes'
 import { parseReadNoteThumbnailInput } from '../contracts/note-thumbnail'
+import { parseReadForeshadowThumbnailInput } from '../contracts/foreshadow-thumbnail'
 import { parseReadInspirationThumbnailInput, parseUpgradeInspirationsInput } from '../contracts/inspiration-thumbnail'
 import { parseMemoryBookInput, parseMemoryControlInput, parseMemoryEvidenceInput, parseMemorySearchInput, parseMemoryStartInput, parseMemoryTaskInput } from '../contracts/memory'
 import { parseAiAdoptInput, parseAiBookInput, parseAiCheckpointInput, parseAiConnectionSaveInput, parseAiFinishInput, parseAiListInput, parseAiMemoryAdoptInput, parseAiPrepareServiceInput, parseAiRunInput, parseAiStartInput, parseAiVersionInput } from '../contracts/ai'
@@ -153,6 +154,7 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'story.matrix': return { id, command, payload: parseAppearanceMatrixInput(payload) }
     case 'story.radar': return { id, command, payload: parseForeshadowRadarInput(payload) }
     case 'story.get': return { id, command, payload: parseStoryRecordInput(payload) }
+    case 'story.thumbnail': return { id, command, payload: parseReadForeshadowThumbnailInput(payload) }
     case 'story.revision': return { id, command, payload: parseStoryRevisionInput(payload) }
     case 'story.create': return { id, command, payload: parseCreateStoryRecord(payload) }
     case 'story.update': return { id, command, payload: parseUpdateStoryRecord(payload) }

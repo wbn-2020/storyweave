@@ -70,7 +70,7 @@ const rendererCommands = new Set<RendererCommand>([
   'draft.checkpoint', 'draft.list', 'draft.rotate', 'draft.select', 'draft.preview', 'draft.commit',
   'knowledge.status', 'knowledge.upgrade', 'knowledge.list', 'knowledge.get', 'knowledge.create', 'knowledge.update',
   'notes.list', 'notes.get', 'notes.thumbnail', 'notes.create', 'notes.update', 'notes.promote', 'notes.chapters',
-  'story.list', 'story.timeline', 'story.galaxy', 'story.worldMap', 'story.matrix', 'story.radar', 'story.get', 'story.revision', 'story.create', 'story.update',
+  'story.list', 'story.timeline', 'story.galaxy', 'story.worldMap', 'story.matrix', 'story.radar', 'story.get', 'story.thumbnail', 'story.revision', 'story.create', 'story.update',
   'memory.status', 'memory.start', 'memory.step', 'memory.control', 'memory.search', 'memory.evidence',
   'memory.vector.list', 'memory.vector.status', 'memory.vector.get', 'memory.vector.prepare', 'memory.vector.start', 'memory.vector.cancel', 'memory.vector.interrupt',
   'ai.connection.list', 'ai.configure', 'ai.list', 'ai.get', 'ai.prepare', 'ai.start', 'ai.cancel', 'ai.interrupt', 'ai.reject', 'ai.adopt',

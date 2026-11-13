@@ -16,6 +16,7 @@ import { parseNoteFields, parseNoteMaterial } from '../../contracts/notes'
 import { parseMemoryVectorValues } from '../../contracts/memory-vector'
 import { NotesRepository } from '../notes/notes-repository'
 import { validateNoteThumbnails } from '../notes/thumbnail-repository'
+import { validateForeshadowThumbnails } from '../story/thumbnail-repository'
 import { AiRepository } from '../ai/ai-repository'
 import { GenerationRepository } from '../ai/generation-repository'
 import { LivingRepository } from '../workbench/living-repository'
@@ -39,7 +40,7 @@ import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memor
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
-import { BOOK_APPLICATION_ID, BOOK_BASE_SCHEMA, BOOK_V14_SCHEMA, BOOK_V15_SCHEMA, BOOK_V16_SCHEMA, BOOK_V17_SCHEMA, BOOK_V18_SCHEMA, BOOK_V19_SCHEMA, BOOK_V20_SCHEMA, BOOK_V21_SCHEMA, BOOK_V22_SCHEMA, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
+import { BOOK_APPLICATION_ID, BOOK_BASE_SCHEMA, BOOK_V14_SCHEMA, BOOK_V15_SCHEMA, BOOK_V16_SCHEMA, BOOK_V17_SCHEMA, BOOK_V18_SCHEMA, BOOK_V19_SCHEMA, BOOK_V20_SCHEMA, BOOK_V21_SCHEMA, BOOK_V22_SCHEMA, BOOK_V23_SCHEMA, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
 import { ForgeRepository } from '../workbench/forge-repository'
 import { BOOK_RECOVERY_COMPLETE, BOOK_RECOVERY_PENDING, StudioRepository } from './studio-repository'
 
@@ -274,6 +275,7 @@ function expectedSchema(version: number): Map<string, SchemaObject> {
   if (version === 20) ddl = BOOK_V20_SCHEMA
   if (version === 21) ddl = BOOK_V21_SCHEMA
   if (version === 22) ddl = BOOK_V22_SCHEMA
+  if (version === 23) ddl = BOOK_V23_SCHEMA
   // 新建和备份升级采用相同追加结构，避免格式版本增加后误用新字段验证旧恢复包。
   if (version === BOOK_SCHEMA_VERSION) ddl = BOOK_SCHEMA
   // 只执行程序自带 DDL 构造私有参照库，FTS5 影子表与隐式索引由同一 SQLite 版本生成。
@@ -537,6 +539,7 @@ function verifyNonManuscriptData(db: Database.Database, version: number, book: B
   if (version >= 18) validateWeaveDatabase(db, book.id)
   if (version >= 19) validateRealmDatabase(db, book.id)
   if (version >= 23) validateNoteThumbnails(db, book.id)
+  if (version >= 24) validateForeshadowThumbnails(db, book.id)
   if (version >= 12) eachId('notes', (id) => { notes.get({ bookId: book.id, id }) })
 }
 

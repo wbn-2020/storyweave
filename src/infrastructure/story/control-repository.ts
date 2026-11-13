@@ -8,6 +8,7 @@ import {
   type ForeshadowRadarInput, type ForeshadowRadarItem, type ForeshadowRadarPage, type RadarDue,
 } from '../../contracts/story-control'
 import type { StudioRepository } from '../storage/studio-repository'
+import { readForeshadowThumbnailMetadata, validateForeshadowThumbnailBudget } from './thumbnail-repository'
 
 function failure(): DomainError { return new DomainError({ code: 'STORAGE_ERROR', message: '出场矩阵或伏笔雷达读取失败，请检查作品资料。' }) }
 function perform<T>(read: () => T): T { try { return read() } catch (error) { if (error instanceof DomainError) throw error; throw failure() } }
@@ -155,6 +156,7 @@ export class StoryControlRepository {
           counts[choice(row.due, DUE_VALUES)] = count(row.count)
         }
         const total = Object.values(counts).reduce((sum, value) => sum + value, 0)
+        validateForeshadowThumbnailBudget(db)
         // 每页最多 20 条、每条最多一段节选；只投影原登记，不把说明文本当作正文引文。
         const sourceStatement = db.prepare(`SELECT src.source_type AS sourceType, substr(src.quote, 1, 240) AS quote,
           CASE WHEN src.source_type <> 'chapter_text' THEN NULL WHEN src.revision_id = c.current_revision_id THEN 'current' ELSE 'historical' END AS referenceState
@@ -177,7 +179,8 @@ export class StoryControlRepository {
             stage: choice(row.stage, FORESHADOW_STAGES), authorDecision: choice(row.author_decision, AUTHOR_DECISIONS), freshness: choice(row.freshness, KNOWLEDGE_FRESHNESS),
             conflictState: choice(row.conflict_state, CONFLICT_STATES),
             plannedPayoff: parsePlannedPayoff(JSON.parse(row.plan_json)), actualPayoff: parseDisclosure(JSON.parse(row.actual_json)),
-            due: choice(row.due, DUE_VALUES), overdueChapters: row.overdue_chapters === null ? null : count(row.overdue_chapters), source: source ?? null }
+            due: choice(row.due, DUE_VALUES), overdueChapters: row.overdue_chapters === null ? null : count(row.overdue_chapters),
+            thumbnail: readForeshadowThumbnailMetadata(db, data.bookId, row.id, row.revision), source: source ?? null }
           })
         if (items.length !== Math.min(FORESHADOW_RADAR_PAGE, Math.max(0, total - offset))) throw failure()
         return { bookId: data.bookId, ...snapshot, asOfChapterId: data.asOfChapterId ?? null, scope, offset, items, counts, total,
