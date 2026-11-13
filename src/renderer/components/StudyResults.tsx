@@ -175,11 +175,11 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
   }
   function preview(index: number) {
     const draft = drafts[index]!
-    if (!isStudyCardKind(draft.kind)) return <p>{draft.body}</p>
+    if (!isStudyCardKind(draft.kind)) return <p tabIndex={0}>{draft.body}</p>
     try {
       const card = readStudyCard(draft.kind, draft.body, true)
-      return 'beats' in card ? <ol className={styles.beats}>{card.beats.map((beat, at) => <li key={at} title={`行动：${beat.action || '待填写'}；变化：${beat.outcome || '待填写'}`}><span>{at + 1}</span><strong>{beat.title || '待填写'}</strong></li>)}</ol>
-        : <dl className={styles.styleFacts}>{([['rhythm', '句式节奏'], ['dialogue', '对白组织'], ['senses', '感官偏好'], ['diction', '措辞与动词']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{card[key] || '尚未提供'}</dd></div>)}</dl>
+      return 'beats' in card ? <ol className={styles.beats} tabIndex={0} aria-label="节拍顺序">{card.beats.map((beat, at) => <li key={at} title={`行动：${beat.action || '待填写'}；变化：${beat.outcome || '待填写'}`}><span>{at + 1}</span><strong title={beat.title}>{beat.title || '待填写'}</strong></li>)}</ol>
+        : <dl className={styles.styleFacts}>{([['rhythm', '句式节奏'], ['dialogue', '对白组织'], ['senses', '感官偏好'], ['diction', '措辞与动词']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd tabIndex={0}>{card[key] || '尚未提供'}</dd></div>)}</dl>
     } catch { return <p className={ui.warning}>当前编辑需要核对格式，完整内容保留在审阅详情。</p> }
   }
 
@@ -204,22 +204,22 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
     {(tool.pending || tool.error || changedRun || changed(drafts)) && <details className={ui.details} open={Boolean(tool.pending || changedRun)}><summary>复制当前审阅记录留存</summary><textarea readOnly rows={8} value={snapshot} aria-label="拆书审阅内容与固定入库标识" /></details>}
     {parsed.error && <details className={ui.details}><summary>查看完整模型原输出</summary><pre className={styles.original}>{source.outputText}</pre></details>}
     {parsed.proposal && !parsed.proposal.items.length && <p className={ui.empty}>这次没有可入库的建议。可补充参考原文或调整拆书要求后重新生成。</p>}
-    {parsed.proposal && <><div className={styles.workspace}>
+    {parsed.proposal && <div className={styles.workspace}>
       <aside className={styles.reference} aria-label="固定参考片段">
         <header><StudioIcon name="read" size={24} /><h3>参考片段 · 授权文本</h3><button type="button" className={ui.button} disabled={!sourceItems.length} title={!sourceItems.length ? '该参考暂无拆解条目' : '审阅该参考的拆解条目'} onClick={() => {
           const index = parsed.proposal!.items.findIndex((item) => item.sourceId === reference?.id)
           if (index >= 0) openEditor(index)
-        }}>拆解</button></header>
+        }}><StudioIcon name="layers" size={20} />拆解</button></header>
         {references.length > 1 && <label>固定参考<select value={reference?.id ?? ''} onChange={(event) => setSourceId(event.target.value)}>{references.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>}
-        <p className={ui.muted}>来源：{reference?.title ?? '固定来源缺失'} · v{reference?.revision ?? '未知'}</p>
-        <div className={styles.referenceText}>{highlightedReference()}</div>
+        <p className={`${ui.muted} ${styles.sourceMeta}`} title={reference?.title}>来源：{reference?.title ?? '固定来源缺失'} · v{reference?.revision ?? '未知'}</p>
+        <div className={styles.referenceText} tabIndex={0} role="region" aria-label="固定参考原文">{highlightedReference()}</div>
       </aside>
       <div className={styles.analysis}>{categories.map((category) => {
         const indexes = parsed.proposal!.items.flatMap((item, index) => category.kinds.includes(item.kind) ? [index] : [])
         return <section className={styles.analysisSection} data-kind={category.key} key={category.key} aria-label={category.label}>
           <h3><i aria-hidden="true" />{category.label}</h3>
           {!indexes.length && <p className={ui.muted}>本次未提供{category.label}。</p>}
-          {indexes.map((index) => <div className={styles.analysisItem} key={index}><button type="button" className={styles.analysisTitle} onClick={() => openEditor(index)}>{drafts[index]!.title}<StudioIcon name="chevron" size={16} /></button>{preview(index)}
+          {indexes.map((index) => <div className={styles.analysisItem} key={index}><button type="button" className={styles.analysisTitle} title={drafts[index]!.title} onClick={() => openEditor(index)}><span>{drafts[index]!.title}</span><StudioIcon name="chevron" size={16} /></button>{preview(index)}
             <div className={styles.analysisActions}>{drafts[index]!.saved ? <label className={ui.check}><input type="checkbox" checked={useIds.includes(drafts[index]!.id)} disabled={locked || drafts[index]!.archived || (!useIds.includes(drafts[index]!.id) && useIds.length >= MAX_CREATIVE_RESOURCES)}
               title={useIds.length >= MAX_CREATIVE_RESOURCES && !useIds.includes(drafts[index]!.id) ? `最多选入 ${MAX_CREATIVE_RESOURCES} 项资料` : undefined}
               onChange={(event) => setUseIds((previous) => event.target.checked ? [...previous, drafts[index]!.id].slice(0, MAX_CREATIVE_RESOURCES) : previous.filter((id) => id !== drafts[index]!.id))} />{drafts[index]!.archived ? '已归档' : '选入创作'}</label>
@@ -227,8 +227,19 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
           </div>)}
         </section>
       })}</div>
-    </div>
-    <ol className={styles.results}>{parsed.proposal.items.map((item, index) => {
+    </div>}
+    {Boolean(parsed.proposal?.items.length) && <div className={styles.footer}><p className={ui.muted}>已选择 {selected} 项。入库时会再次核对参考原文是否仍为当前版本。</p>
+      <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={locked || !selected} onClick={() => void adopt()}>确认将所选 {selected} 项保存至全局方法库</button>
+        <button className={ui.button} type="button" disabled={tool.locked || !changed(drafts)} onClick={discardChanges}>{discard ? '确认放弃本次编辑与选择' : '放弃本次审阅更改'}</button>
+        {discard && <button className={ui.button} type="button" disabled={tool.locked} onClick={() => setDiscard(false)}>继续审阅</button>}
+      </div>
+    </div>}
+    {onUse && savedResources.length > 0 && <div className={styles.applyBar}><label>套用目标章节<select value={targetChapter} disabled={locked} onChange={(event) => setTargetChapter(event.target.value)}>{book.chapters.map((chapter) => <option value={chapter.id} key={chapter.id}>第 {chapter.position + 1} 章 · {chapter.title}</option>)}</select></label>
+      <button type="button" className={ui.primaryButton} disabled={locked || changed(drafts) || !targetChapter || !useIds.length}
+        title={changed(drafts) ? '请先保存或明确放弃未入库的编辑与选择' : !useIds.length ? '请先选入已入库的方法' : '把所选方法带入目标章的创作预览'}
+        onClick={() => { const refs = savedResources.filter((item) => useIds.includes(item.id)); if (refs.length && !locked && !changed(drafts)) { setExpanded(false); onUse(targetChapter, refs) } }}><StudioIcon name="spark" />套用到所选章 · 生成节拍<StudioIcon name="chevron" size={24} /></button>
+    </div>}
+    {parsed.proposal && <ol className={styles.results}>{parsed.proposal.items.map((item, index) => {
       const draft = drafts[index]!
       const reference = source.context.creativeResources!.items.find((resource) => resource.source === 'inspiration' && resource.id === item.sourceId)!
       const titleInvalid = !draft.title.trim() || draft.title.length > MAX_STUDY_TITLE
@@ -249,18 +260,7 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
           </fieldset>
         </div>
       </details></li>
-    })}</ol></>}
-    {Boolean(parsed.proposal?.items.length) && <div className={styles.footer}><p className={ui.muted}>已选择 {selected} 项。入库时会再次核对参考原文是否仍为当前版本。</p>
-      <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={locked || !selected} onClick={() => void adopt()}>确认将所选 {selected} 项保存至全局方法库</button>
-        <button className={ui.button} type="button" disabled={tool.locked || !changed(drafts)} onClick={discardChanges}>{discard ? '确认放弃本次编辑与选择' : '放弃本次审阅更改'}</button>
-        {discard && <button className={ui.button} type="button" disabled={tool.locked} onClick={() => setDiscard(false)}>继续审阅</button>}
-      </div>
-    </div>}
-    {onUse && savedResources.length > 0 && <div className={styles.applyBar}><label>套用目标章节<select value={targetChapter} disabled={locked} onChange={(event) => setTargetChapter(event.target.value)}>{book.chapters.map((chapter) => <option value={chapter.id} key={chapter.id}>第 {chapter.position + 1} 章 · {chapter.title}</option>)}</select></label>
-      <button type="button" className={ui.primaryButton} disabled={locked || changed(drafts) || !targetChapter || !useIds.length}
-        title={changed(drafts) ? '请先保存或明确放弃未入库的编辑与选择' : !useIds.length ? '请先选入已入库的方法' : '把所选方法带入目标章的创作预览'}
-        onClick={() => { const refs = savedResources.filter((item) => useIds.includes(item.id)); if (refs.length && !locked && !changed(drafts)) { setExpanded(false); onUse(targetChapter, refs) } }}><StudioIcon name="spark" />套用到所选章 · 生成节拍</button>
-    </div>}
+    })}</ol>}
     </Dialog></DialogDisplayContext.Provider>, document.body)}
   </section>
 }
