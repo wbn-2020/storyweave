@@ -7,7 +7,7 @@ export type DialogDisplayMode = 'modal' | 'canvas' | 'drawer'
 export const DialogDisplayContext = createContext<DialogDisplayMode>('modal')
 
 interface Props {
-  title: string
+  title: ReactNode
   children: ReactNode
   onClose: () => void
   busy?: boolean

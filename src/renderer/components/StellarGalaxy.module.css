@@ -145,7 +145,22 @@
 .controlPage .intro > div:first-child { display: none; }
 .controlPage .viewSwitch { margin-block: var(--space-2); }
 .controlPage .viewSwitch > button { min-height: var(--control-compact); padding-block: var(--space-2); }
+.radarPage { isolation: isolate; }
+.radarPage::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(1px 1px at 19px 31px,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 83px 127px,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 157px 67px,var(--stellar-star),transparent),
+    radial-gradient(2px 2px at 211px 173px,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 47px 229px,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 307px 109px,var(--stellar-star),transparent),
+    radial-gradient(ellipse at 43% 47%,var(--stellar-ai-haze),transparent 66%),
+    linear-gradient(132deg,transparent 25%,var(--stellar-ai-haze) 44%,var(--stellar-haze) 49%,transparent 65%);
+  background-size: 149px 181px,263px 239px,337px 293px,421px 367px,379px 433px,503px 419px,100% 100%,100% 100%;
+}
 .radarPage > header { margin-bottom: var(--space-2); }
+.radarPage > header h2 { display: flex; align-items: center; gap: var(--space-3); }
+.radarPage > header h2 > svg { flex: 0 0 auto; color: var(--color-accent); fill: var(--color-accent); filter: drop-shadow(0 0 8px var(--stellar-haze)); }
 .radarPage .intro { position: static; padding: 0 0 var(--space-3); }
 .radarPage .intro > div:first-child { display: block; }
 .radarPage .intro p { color: var(--color-muted); font-size: var(--text-lg); font-weight: 400; }
