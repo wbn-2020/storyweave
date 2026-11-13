@@ -242,10 +242,11 @@ export function AppearanceMatrix(props: Props) {
 }
 
 const radarSegments = [
-  { key: 'planned', label: '计划埋设', angle: -80 }, { key: 'planted', label: '已埋设', angle: -40 },
-  { key: 'progress', label: '推进提及', angle: 0 }, { key: 'overdue', label: '逾期告警', angle: 40 },
-  { key: 'closed', label: '已结束', angle: 80 },
+  { key: 'planned', label: '计划埋设', angle: -62 }, { key: 'planted', label: '已埋设', angle: -44 },
+  { key: 'progress', label: '推进提及', angle: -24 }, { key: 'overdue', label: '逾期告警', angle: -4 },
+  { key: 'closed', label: '已结束', angle: 32 },
 ] as const
+const radarArcAngles = [-90,-53,-34,-14,14,90] as const
 function radarSegment(item: ForeshadowRadarItem): typeof radarSegments[number]['key'] {
   return item.due === 'closed' ? 'closed' : item.due === 'overdue' ? 'overdue'
     : item.stage === 'planned' ? 'planned' : item.stage === 'planted' ? 'planted' : 'progress'
@@ -366,22 +367,23 @@ export function ForeshadowRadar(props: Props) {
       <aside className={styles.radarOrbit} aria-label="本页伏笔历程分布">
         <h3>伏笔历程</h3>
         <div className={styles.radarCanvas}>
-          <svg viewBox="0 0 480 640" role="group" aria-label={`本页 ${page.items.length} 条伏笔的历程分布`}>
-            <g className={styles.radarGrid} aria-hidden="true">{[80,140,200,260].map((radius) => <path key={radius} d={`M32 ${320 - radius} A${radius} ${radius} 0 0 1 32 ${320 + radius}`} />)}
-              {[-90,-60,-30,0,30,60,90].map((degrees) => <line key={degrees} x1={32} y1={320} x2={32 + Math.cos(degrees * Math.PI / 180) * 260} y2={320 + Math.sin(degrees * Math.PI / 180) * 260} />)}</g>
+          <svg viewBox="0 0 530 735" role="group" aria-label={`本页 ${page.items.length} 条伏笔的历程分布`}>
+            <defs><radialGradient id={`${arcId}-origin`}><stop offset="0" className={styles.radarGlowCore} /><stop offset=".15" className={styles.radarStop} /><stop offset="1" className={styles.radarGlowEdge} /></radialGradient></defs>
+            <g className={styles.radarGrid} aria-hidden="true">{[80,110,140,170,200,230,260,290,330,370,410].map((radius) => <path key={radius} d={`M0 ${417 - radius} A${radius} ${radius} 0 0 1 0 ${417 + radius}`} />)}
+              {[-90,-75,-60,-45,-30,-15,0,15,30,45,60,75,90].map((degrees) => <line key={degrees} x1={0} y1={417} x2={Math.cos(degrees * Math.PI / 180) * 410} y2={417 + Math.sin(degrees * Math.PI / 180) * 410} />)}</g>
             {radarSegments.map((segment, index) => {
-              const start = (-90 + index * 36) * Math.PI / 180, end = start + 36 * Math.PI / 180
-              const x1 = 32 + Math.cos(start) * 260, y1 = 320 + Math.sin(start) * 260
-              const x2 = 32 + Math.cos(end) * 260, y2 = 320 + Math.sin(end) * 260
+              const start = radarArcAngles[index]! * Math.PI / 180, end = radarArcAngles[index + 1]! * Math.PI / 180
+              const x1 = Math.cos(start) * 410, y1 = 417 + Math.sin(start) * 410
+              const x2 = Math.cos(end) * 410, y2 = 417 + Math.sin(end) * 410
               return <g key={segment.key} aria-hidden="true"><defs><linearGradient id={`${arcId}-${segment.key}`} gradientUnits="userSpaceOnUse" x1={x1} y1={y1} x2={x2} y2={y2}>
                 <stop offset="0" className={styles.radarStop} data-segment={segment.key} />
                 <stop offset="1" className={styles.radarStop} data-segment={radarSegments[Math.min(index + 1, radarSegments.length - 1)]!.key} />
-              </linearGradient></defs><path className={styles.radarArc} stroke={`url(#${arcId}-${segment.key})`} d={`M${x1} ${y1} A260 260 0 0 1 ${x2} ${y2}`} /></g>
+              </linearGradient></defs><path className={styles.radarArc} stroke={`url(#${arcId}-${segment.key})`} d={`M${x1} ${y1} A410 410 0 0 1 ${x2} ${y2}`} /></g>
             })}
-            <circle className={styles.radarOrigin} cx={32} cy={320} r={7} />
+            <g aria-hidden="true"><circle cx={0} cy={417} r={64} fill={`url(#${arcId}-origin)`} /><path className={styles.radarOriginRay} d="M0 365V469M0 417H104M0 417L58 359M0 417L58 475" /><circle className={styles.radarOrigin} cx={0} cy={417} r={5} /></g>
             {radarSegments.map((segment) => {
               const matches = page.items.filter((item) => radarSegment(item) === segment.key), first = matches[0]
-              const angle = segment.angle * Math.PI / 180, x = 32 + Math.cos(angle) * 260, y = 320 + Math.sin(angle) * 260
+              const angle = segment.angle * Math.PI / 180, x = Math.cos(angle) * 410, y = 417 + Math.sin(angle) * 410
               return <g key={segment.key} className={styles.radarSegment} data-segment={segment.key} data-empty={!matches.length} data-highlighted={matches.some((item) => item.id === hovered || item.id === selected)} role="button"
                 aria-label={`${segment.label}，本页 ${matches.length} 条`} aria-disabled={disabled || !first} aria-controls={evidenceId} aria-expanded={matches.some((item) => item.id === selected)} tabIndex={disabled || !first ? -1 : 0}
                 onPointerEnter={() => setHovered(first?.id ?? null)} onPointerLeave={() => setHovered(null)}
@@ -389,18 +391,20 @@ export function ForeshadowRadar(props: Props) {
                 onKeyDown={(event) => { if (first && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(first.id, event.currentTarget) } }}>
                 <title>{first ? `${segment.label} · 本页${matches.length}条` : `本页暂无${segment.label}记录`}</title>
                 <circle className={styles.radarSegmentHalo} cx={x} cy={y} r={14} /><circle cx={x} cy={y} r={6} />
-                <text x={x + 48} y={y + 5}>{segment.label} {matches.length}</text>
+                <text x={x + 36} y={y + 5}>{segment.label} {matches.length}</text>
               </g>
             })}
           </svg>
           <div className={styles.radarCards}>{radarSegments.map((segment, index) => {
             const matches = page.items.filter((item) => radarSegment(item) === segment.key)
             const item = matches.find((entry) => entry.id === hovered) ?? matches.find((entry) => entry.id === selected) ?? matches[0]
+            const targetChapterId = item && 'chapterId' in item.plannedPayoff ? item.plannedPayoff.chapterId : null
+            const targetChapter = book.chapters.find((chapter) => chapter.id === targetChapterId)
             return item ? <button type="button" key={segment.key} data-position={index} data-due={item.due} data-stage={item.stage} data-hovered={hovered === item.id} disabled={disabled}
-              aria-label={`查看伏笔：${item.title}`} aria-pressed={selected === item.id} aria-controls={evidenceId} title={`${item.title} · ${radarDueLabels[item.due]}`}
+              aria-label={`查看伏笔：${item.title}`} aria-pressed={selected === item.id} aria-controls={evidenceId} title={`${item.title} · ${stageLabels[item.stage]} · ${radarDueLabels[item.due]}`}
               onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered(null)} onFocus={() => setHovered(item.id)} onBlur={() => setHovered(null)} onClick={(event) => select(item.id, event.currentTarget)}>
               <ForeshadowThumbnail api={api} bookId={book.book.id} recordId={item.id} metadata={item.thumbnail} name={item.title} className={styles.radarThumbnail} retryable={false} />
-              <strong>{item.title}</strong><small>{stageLabels[item.stage]} · {radarDueLabels[item.due]}</small>
+              <strong>{item.title}</strong><small title={plannedPayoffLabel(item.plannedPayoff, book)}>{targetChapter ? `第 ${targetChapter.position + 1} 章` : plannedPayoffLabel(item.plannedPayoff, book)}</small>
             </button> : null
           })}</div>
         </div>
@@ -411,7 +415,7 @@ export function ForeshadowRadar(props: Props) {
           <tbody>{page.items.map((item) => <tr key={item.id} data-due={item.due} data-selected={selected === item.id} data-hovered={hovered === item.id}
             onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered(null)}
             onFocus={() => setHovered(item.id)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHovered(null) }}>
-            <th scope="row"><div className={styles.radarTitleLine}><button type="button" className={styles.radarTitle} data-due={item.due} data-stage={item.stage} disabled={disabled} aria-controls={evidenceId} aria-expanded={selected === item.id} onClick={(event) => select(item.id, event.currentTarget)}><StudioIcon name="spark" size={20} />{item.title}</button>
+            <th scope="row"><div className={styles.radarTitleLine}><button type="button" className={styles.radarTitle} data-due={item.due} data-stage={item.stage} disabled={disabled} aria-controls={evidenceId} aria-expanded={selected === item.id} title={item.title} onClick={(event) => select(item.id, event.currentTarget)}><StudioIcon name="spark" size={20} /><span>{item.title}</span></button>
               <div className={styles.radarRowActions}>
                 <button type="button" className={styles.radarIconButton} disabled={disabled} aria-label={`查看历程与原文证据：${item.title}`} aria-controls={evidenceId} aria-expanded={selected === item.id} title="查看历程与原文证据" onClick={(event) => select(item.id, event.currentTarget)}><StudioIcon name="read" size={16} /></button>
                 <button type="button" className={styles.radarIconButton} disabled={disabled} aria-label={`编辑回收计划：${item.title}`} title="编辑回收计划" onClick={() => props.onOpenRecord('foreshadow', item.id)}><StudioIcon name="pen" size={16} /></button>

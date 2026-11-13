@@ -541,10 +541,10 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const jumpSource = detail?.value.sources.find((source) => source.sourceType === 'chapter_text')
   const positionChapter = book.chapters[Math.min(chapterPosition, Math.max(0, book.chapters.length - 1))]
 
-  return <Dialog title={view === 'relationships' ? '关系星网' : view === 'galaxy' ? '记忆星图' : view === 'matrix' ? '章节出场矩阵' : '伏笔雷达'} className={view === 'relationships' ? styles.relationshipPage : view === 'galaxy' ? styles.galaxyPage : styles.controlPage} wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}>
+  return <Dialog title={view === 'relationships' ? '关系星网' : view === 'galaxy' ? '记忆星图' : view === 'matrix' ? '章节出场矩阵' : '伏笔雷达'} className={view === 'relationships' ? styles.relationshipPage : view === 'galaxy' ? styles.galaxyPage : view === 'radar' ? `${styles.controlPage} ${styles.radarPage}` : styles.controlPage} wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}>
     <div className={styles.panel} data-view={view}>
       <div className={styles.intro}>
-        <div><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 星海与关系画布</span></div>
+        <div>{view === 'radar' ? <p>全生命周期 · 精准追踪每一条伏笔</p> : <><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 星海与关系画布</span></>}</div>
         <div className={styles.actions}>
           <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenKnowledge())}>知识条目</button>
           <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords())}>故事记录</button>

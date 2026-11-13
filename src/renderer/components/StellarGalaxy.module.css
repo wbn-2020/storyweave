@@ -145,9 +145,15 @@
 .controlPage .intro > div:first-child { display: none; }
 .controlPage .viewSwitch { margin-block: var(--space-2); }
 .controlPage .viewSwitch > button { min-height: var(--control-compact); padding-block: var(--space-2); }
+.radarPage > header { margin-bottom: var(--space-2); }
+.radarPage .intro { position: static; padding: 0 0 var(--space-3); }
+.radarPage .intro > div:first-child { display: block; }
+.radarPage .intro p { color: var(--color-muted); font-size: var(--text-lg); font-weight: 400; }
+.radarPage .intro .actions { position: absolute; top: 0; right: 88px; }
 @media (max-width:1199px) { .graphWorkspace { grid-template-columns: minmax(0,1fr) 280px; } .filters { grid-template-columns: repeat(3,minmax(0,1fr)); } .search { grid-column: 1 / -1; } }
 @media (width < 1200px) { .panel[data-view='galaxy'] .graphWorkspace { grid-template-columns: minmax(0,1fr) 280px; } .chapterProgress { flex-wrap: wrap; } .chapterProgress output { flex: 1 1 100%; max-width: none; } }
 @media (max-width:799px) { .graphWorkspace { display: flex; flex-direction: column; } .overview,.listPane,.detailPane { width: 100%; } .detailPane { padding: var(--space-4) 0; border-left: 0; border-top: 1px solid var(--color-line); max-height: none; } }
 @media (width < 1000px) { .galaxyPage .intro { position: static; margin-bottom: var(--space-2); } .galaxyPage .viewModes { right: 88px; } .panel[data-view='galaxy'] .graphWorkspace { display: flex; flex-direction: column; } .panel[data-view='galaxy'] .detailPane { max-height: 600px; } }
 @media (width < 1000px) { .relationshipPage .intro { position: static; padding-bottom: var(--space-2); } .relationshipPage .viewModes { right: 88px; } .relationshipPage .canvasActions { justify-content: flex-end; } }
 @media (max-width:499px) { .filters,.nodes { grid-template-columns: minmax(0,1fr); } }
+@media (max-width:699px) { .radarPage .intro .actions { position: static; }.radarPage .intro { align-items: flex-start; flex-direction: column; gap: var(--space-3); } }
