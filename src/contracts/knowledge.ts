@@ -87,6 +87,8 @@ export interface ListKnowledgeItemsInput {
   search?: string
   limit?: number
   offset?: number
+  reviewOnly?: boolean
+  includeOverview?: boolean
 }
 export interface KnowledgeItemPage {
   bookId: string
@@ -95,6 +97,12 @@ export interface KnowledgeItemPage {
   items: KnowledgeItemSummary[]
   total: number
   nextOffset: number | null
+  overview?: {
+    counts: Record<KnowledgeKind, number>
+    total: number
+    reviewTotal: number
+    sourceChapterCounts: Record<string, number>
+  }
 }
 
 export interface KnowledgeStatus {
@@ -207,12 +215,15 @@ export function parseUpdateKnowledgeItem(value: unknown): UpdateKnowledgeItemInp
 }
 
 export function parseListKnowledgeItems(value: unknown): ListKnowledgeItemsInput {
-  const data = record(value, ['bookId', 'kind', 'nature', 'search', 'limit', 'offset'], '知识列表请求')
+  const data = record(value, ['bookId', 'kind', 'nature', 'search', 'limit', 'offset', 'reviewOnly', 'includeOverview'], '知识列表请求')
   const limit = data.limit === undefined ? 50 : requiredInteger(data.limit, '每页数量', 100)
   if (limit === 0) return invalid('每页数量必须在 1 到 100 之间。')
+  if (['reviewOnly', 'includeOverview'].some((key) => data[key] !== undefined && typeof data[key] !== 'boolean')) return invalid('知识列表筛选开关必须为布尔值。')
   return { bookId: requiredId(data.bookId).toLowerCase(), limit,
     offset: data.offset === undefined ? 0 : requiredInteger(data.offset, '列表位置', MAX_KNOWLEDGE_ITEMS),
     ...(data.kind === undefined ? {} : { kind: choice(data.kind, KNOWLEDGE_KINDS, '知识类型') }),
     ...(data.nature === undefined ? {} : { nature: choice(data.nature, KNOWLEDGE_NATURES, '知识性质') }),
+    ...(data.reviewOnly === undefined ? {} : { reviewOnly: data.reviewOnly as boolean }),
+    ...(data.includeOverview === undefined ? {} : { includeOverview: data.includeOverview as boolean }),
     ...(data.search === undefined ? {} : { search: optionalText(data.search, '搜索内容', 200) }) }
 }

@@ -28,6 +28,8 @@ export interface ForgeSnapshot {
   bookId: string; bookRevision: number; knowledgeRevision: number; schemaVersion: number; requiresUpgrade: boolean
   entities: { id: string; name: string; kind: KnowledgeKind }[]; entityTotal: number; person: ForgePerson | null
   runs: { id: string; kind: ForgeKind; state: AiRunState; createdAt: string }[]
+  /** 当前人物最近两份已完成试戏，独立于全书最近任务窗口。 */
+  auditionRuns: { id: string; state: AiRunState; createdAt: string }[]
 }
 export interface ForgeReadInput extends BookInput { personId: string | null; storyOrder: number | null }
 export interface ForgePrepareInput extends BookMutationInput {

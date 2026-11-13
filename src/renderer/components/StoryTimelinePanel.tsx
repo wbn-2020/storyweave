@@ -6,8 +6,9 @@ import { MAX_TIMELINE_ITEMS, MAX_TIMELINE_PAGE_SIZE, TIMELINE_TRACKS, timelineIt
 import { request } from '../request'
 import { Dialog } from './Dialog'
 import { blockText, StoryFieldsView, timeLabel } from './StoryFieldsEditor'
-import shared from '../App.module.css'
-import styles from './StoryTimelinePanel.module.css'
+import { StudioIcon } from './StudioIcon'
+import shared from '../StellarShared.module.css'
+import styles from './StellarTimeline.module.css'
 
 export interface StoryTimelinePanelProps {
   api: StudioApi
@@ -15,7 +16,7 @@ export interface StoryTimelinePanelProps {
   busy: boolean
   error?: string | null
   onClose: () => void
-  onOpenRecords: (kind: StoryKind) => void
+  onOpenRecords: (kind: StoryKind, create?: boolean) => void
 }
 
 interface Filters {
@@ -106,6 +107,20 @@ function groupFor(item: StoryTimelineItem, order: TimelineOrder): { key: string;
   return { key: disclosure.state, label: disclosure.state === 'undisclosed' ? '尚未披露' : '披露位置未知' }
 }
 
+function columnFor(item: StoryTimelineItem, order: TimelineOrder) {
+  if (order === 'story') {
+    return item.time.kind !== 'unknown' && item.time.order !== null
+      ? { key: `story:${item.time.order}`, label: `排序值 ${item.time.order}`, unknown: false }
+      : { key: 'unknown', label: '故事顺序未知', unknown: true }
+  }
+  const disclosure = item.disclosure
+  if (disclosure.state === 'located' && disclosure.chapterPosition !== null) {
+    return { key: `${disclosure.referenceState}:${disclosure.chapterId}`,
+      label: `第 ${disclosure.chapterPosition + 1} 章 · ${referenceLabels[disclosure.referenceState]}`, unknown: false }
+  }
+  return { key: `unknown:${disclosure.state}`, label: disclosureText(disclosure), unknown: true }
+}
+
 export function StoryTimelinePanel(props: StoryTimelinePanelProps) {
   // 切换作品时独立卸载读取会话，不把上一部作品的列表、原稿或请求带入新作品。
   return <TimelineContent key={props.book.book.id} {...props} />
@@ -126,6 +141,8 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
   const [pending, setPending] = useState<PendingRead | null>(null)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [checkingRequest, setCheckingRequest] = useState(false)
+  const [layout, setLayout] = useState<'board' | 'list'>('board')
+  const [columnWidth, setColumnWidth] = useState(240)
   const mounted = useRef(false)
   const listLock = useRef(true)
   const readLock = useRef(false)
@@ -136,6 +153,7 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
   const statusLock = useRef(false)
   const detailHeading = useRef<HTMLHeadingElement>(null)
   const originalHeading = useRef<HTMLHeadingElement>(null)
+  const originalTrigger = useRef<HTMLButtonElement | null>(null)
   const readErrorElement = useRef<HTMLParagraphElement>(null)
   const pendingButton = useRef<HTMLButtonElement>(null)
   const detailId = useId()
@@ -144,6 +162,7 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
 
   const clearReading = useCallback(() => {
     readTicket.current += 1; readLock.current = false
+    originalTrigger.current = null
     setSelectedId(null); setDetail(null); setOriginal(null); setReadError(null); setReading(null)
   }, [])
 
@@ -193,7 +212,10 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
       const data = result.data
       if (data.bookId !== bookId || data.order !== listing.order || JSON.stringify(data.tracks) !== JSON.stringify(listing.tracks) ||
           data.items.some((item) => item.bookId !== bookId || !listing.tracks.includes(item.kind) ||
-            item.id !== timelineItemId(item.sourceRecordId, item.point, item.milestoneId)) ||
+            item.id !== timelineItemId(item.sourceRecordId, item.point, item.milestoneId) ||
+            !Array.isArray(item.people) || item.people.length > 200 ||
+            new Set(item.people.map((person) => person.id)).size !== item.people.length ||
+            item.people.some((person) => typeof person.id !== 'string' || typeof person.name !== 'string' || !person.name.trim())) ||
           new Set(data.items.map((item) => item.id)).size !== data.items.length) {
         invalidateSnapshot('时间线返回的作品、轨道、条目身份或排序方式不符。'); return
       }
@@ -292,9 +314,10 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
     setDetail(data)
   }
 
-  async function showOriginal(target: OriginalTarget) {
+  async function showOriginal(target: OriginalTarget, trigger: HTMLButtonElement) {
     if (busy || listLock.current || readLock.current || pendingRead.current || !page || !detail) return
     if (target.bookId !== bookId) { invalidateSnapshot('原稿引用的作品身份不符。'); return }
+    originalTrigger.current = trigger
     const ticket = ++readTicket.current
     readLock.current = true
     setOriginal(null); setReadError(null); setReading('original')
@@ -327,6 +350,11 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
   function closeOriginal() {
     if (busy || readLock.current || pendingRead.current) return
     readTicket.current += 1; setOriginal(null); setReading(null); setReadError(null)
+    // 同一条记录可从来源、披露或里程碑打开原稿，收起时回到实际入口，避免焦点随按钮卸载丢失。
+    const trigger = originalTrigger.current
+    originalTrigger.current = null
+    if (trigger?.isConnected && !trigger.disabled) trigger.focus()
+    else detailHeading.current?.focus()
   }
 
   const selected = detail ? page?.items.find((item) => item.id === selectedId && item.sourceRecordId === detail.id) : undefined
@@ -344,9 +372,48 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
     if (last?.key === group.key) last.items.push(item)
     else groups.push({ ...group, items: [item] })
   }
+  const people = [...new Map((page?.items ?? []).flatMap((item) => item.people.map((person) => [person.id, person] as const))).values()]
+  const conflicts = (page?.items ?? []).filter((item) => item.conflictState === 'candidate')
+  const laneTone = (item: StoryTimelineItem) => {
+    const personIndex = people.findIndex((person) => item.people.some((entry) => entry.id === person.id))
+    return personIndex < 0 ? 'unknown' : String(personIndex % 3)
+  }
+  const inverted = new Set((page?.items ?? []).filter((item) => item.time.kind !== 'unknown' && item.time.order !== null &&
+    item.disclosure.state === 'located' && item.disclosure.referenceState === 'current' &&
+    page?.items.some((earlier) => earlier.time.kind !== 'unknown' && earlier.time.order !== null &&
+      item.time.kind !== 'unknown' && item.time.order !== null && earlier.time.order > item.time.order &&
+      earlier.disclosure.state === 'located' && earlier.disclosure.referenceState === 'current' &&
+      item.disclosure.state === 'located' && earlier.disclosure.chapterPosition !== null && item.disclosure.chapterPosition !== null &&
+      earlier.disclosure.chapterPosition < item.disclosure.chapterPosition)).map((item) => item.id))
+  // 等距列仅表达后端给定的排序；不将相对时间推成日期，也不按间距推断时长。
+  const columns = new Map<string, { label: string; unknown: boolean; items: StoryTimelineItem[] }>()
+  for (const item of page?.items ?? []) {
+    const position = columnFor(item, listing.order)
+    const column = columns.get(position.key)
+    if (column) column.items.push(item)
+    else columns.set(position.key, { ...position, items: [item] })
+  }
 
-  return <Dialog title="故事时间线" wide busy={busy} onClose={() => leave(onClose)} error={error}>
+  return <Dialog title="故事年表" wide busy={busy} onClose={() => leave(onClose)} error={error}>
     <div className={styles.panel}>
+      <div className={styles.toolbar}>
+        <div className={styles.orders} role="group" aria-label="时间线排序方式">
+          <button type="button" disabled={disabled} aria-pressed={listing.order === 'story'} onClick={() => refreshSnapshot({ order: 'story' })}>故事时间</button>
+          <button type="button" disabled={disabled} aria-pressed={listing.order === 'disclosure'} onClick={() => refreshSnapshot({ order: 'disclosure' })}>章节顺序</button>
+        </div>
+        {layout === 'board' && <div className={styles.zoom}>
+          <button type="button" className={styles.iconButton} aria-label="缩小年表" title="缩小" disabled={columnWidth <= 160} onClick={() => setColumnWidth((value) => Math.max(160, value - 40))}><StudioIcon name="minus" size={20} /></button>
+          <input aria-label="年表缩放" type="range" min={160} max={320} step={40} value={columnWidth} onChange={(event) => setColumnWidth(Number(event.target.value))} />
+          <output>{Math.round(columnWidth / 240 * 100)}%</output>
+          <button type="button" className={styles.iconButton} aria-label="放大年表" title="放大" disabled={columnWidth >= 320} onClick={() => setColumnWidth((value) => Math.min(320, value + 40))}><StudioIcon name="plus" size={20} /></button>
+        </div>}
+        <div className={styles.viewModes} role="group" aria-label="年表显示方式">
+          <button type="button" className={styles.iconButton} aria-label="轨道年表" title="轨道年表" aria-pressed={layout === 'board'} onClick={() => setLayout('board')}><StudioIcon name="timeline" size={20} /></button>
+          <button type="button" className={styles.iconButton} aria-label="详细清单" title="详细清单" aria-pressed={layout === 'list'} onClick={() => setLayout('list')}><StudioIcon name="list" size={20} /></button>
+        </div>
+        <button type="button" className={styles.newEvent} disabled={disabled || Boolean(book.book.archivedAt)} onClick={() => leave(() => onOpenRecords('event', true))}><StudioIcon name="spark" size={20} />新增事件</button>
+      </div>
+      <details className={styles.advanced}><summary>筛选与资料范围</summary>
       <div className={styles.intro}>
         <div><p>《{book.book.title}》的故事时间线</p><span>作者全知视图 · 只读查阅</span></div>
         <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords(manageKind))}>管理{trackLabels[manageKind]}记录</button>
@@ -361,20 +428,14 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
         </label>)}</div>
         <p className={styles.help}>至少保留一条轨道；所选轨道合并排序，条目仍保留各自的来源记录。</p>
       </fieldset>
-      <div className={styles.toolbar}>
-        <div className={styles.orders} role="group" aria-label="时间线排序方式">
-          <button type="button" disabled={disabled} aria-pressed={listing.order === 'story'} onClick={() => refreshSnapshot({ order: 'story' })}>故事时间顺序</button>
-          <button type="button" disabled={disabled} aria-pressed={listing.order === 'disclosure'} onClick={() => refreshSnapshot({ order: 'disclosure' })}>披露章节顺序</button>
-        </div>
-        <button type="button" className={shared.button} disabled={disabled} onClick={() => refreshSnapshot()} title="清除旧快照，按已提交的搜索与筛选重新读取第一页">从第一页刷新</button>
-      </div>
-      <p className={styles.sortNote}>{listing.order === 'story'
+      <button type="button" className={shared.button} disabled={disabled} onClick={() => refreshSnapshot()} title="按已提交的搜索与筛选重新读取第一页"><StudioIcon name="refresh" size={16} />从第一页刷新</button>
+      <details><summary>排序与资料范围</summary><p className={styles.sortNote}>{listing.order === 'story'
         ? '按作者填写的故事排序值排列；排序值未知的条目单独列出，日期和相对时间标签不推导顺序，同值不推断先后。'
         : '依次分为当前稿登记、历史稿登记、登记缺失、尚未披露、位置未知；有目录位置的组内按章节目录位置排列，同章不推断段落顺序。'} 分组可跨页延续。</p>
       <p className={styles.help}>披露位置只核对章节与版本登记；原文待核对。打开固定版本后才检查目标段落，来源引文另行逐字匹配。</p>
       {listing.tracks.includes('relation') && <p className={styles.help}>关系按生效登记及显式结束时间／结束事件登记展开；未知结束时间不代表仍然有效或已经结束。结束变化没有独立披露登记，保持未知，不沿用关系首次披露。</p>}
       {listing.tracks.includes('foreshadow') && <p className={styles.help}>伏笔登记和每条里程碑独立计数；里程碑只使用自身故事时间与披露位置，登记条目的当前阶段不代表该阶段发生时间。</p>}
-      <div className={styles.filters}>
+      </details><div className={styles.filters}>
         <form className={styles.search} onSubmit={search}>
           <label>搜索记录名称、说明与里程碑<input type="search" value={query} maxLength={200} disabled={disabled} placeholder="输入后提交搜索" onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault() }} /></label>
           <button type="submit" className={shared.button} disabled={disabled}>搜索</button>
@@ -383,14 +444,49 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
         <label>作者决定<select value={listing.authorDecision} disabled={disabled} onChange={(event) => refreshSnapshot({ authorDecision: event.target.value as Filters['authorDecision'] })}><option value="">全部决定（含否决）</option>{AUTHOR_DECISIONS.map((value) => <option key={value} value={value}>{decisionLabels[value]}</option>)}</select></label>
       </div>
       {listing.search && <p className={styles.help}>已提交搜索：{listing.search}</p>}
+      </details>
       {pending && <section className={styles.pending} aria-label="查询超时的只读请求"><h3>等待读取结果</h3><p role="status">{pendingMessage}</p><p className={styles.ids}>请求 {pending.requestId} · {pending.command}</p><button ref={pendingButton} type="button" className={shared.button} disabled={busy || checkingRequest} onClick={() => void queryOriginalRequest()}>{checkingRequest ? '正在查询原请求…' : '查询原请求'}</button></section>}
       {listError && <div className={styles.notice}><p className={shared.formError} role="alert">{listError}</p><p className={styles.help}>若提示旧库或结构未启用，可通过上方管理入口进入故事记录升级或维护。</p></div>}
       <div className={styles.layout}>
         <section className={styles.listPane} aria-label="时间线条目列表" aria-busy={listLoading}>
           {listLoading && <div className={styles.loading} role="status"><p>正在读取时间线…</p><div className={styles.skeleton} aria-hidden="true" /><div className={styles.skeleton} aria-hidden="true" /><div className={styles.skeleton} aria-hidden="true" /></div>}
           {page && <>
-            <p className={styles.snapshot}>{page.tracks.map((track) => trackLabels[track]).join(' · ')}<br />共 {page.total} 个时间线条目 · 每页 {MAX_TIMELINE_PAGE_SIZE} 条<br />作品版本 {page.bookRevision} · 知识版本 {page.knowledgeRevision}</p>
-            {groups.map((group) => <section key={group.key} className={styles.group} aria-label={group.label}><h3>{group.label}</h3><ul className={styles.records}>{group.items.map((item) => <li key={item.id}>
+            {layout === 'board' && page.items.length > 0 && <>
+              <div className={styles.boardScroll} role="region" aria-label="故事轨道年表" tabIndex={0}>
+                <div className={styles.chronicle} style={{ width: 104 + columns.size * columnWidth }}>
+                  <div className={styles.swimlanes} aria-label="本页人物关联泳道">
+                    {people.map((person, index) => <div className={styles.swimlane} data-tone={index % 3} key={person.id}>
+                      <div className={styles.personLabel}><StudioIcon name={index % 3 === 0 ? 'bolt' : index % 3 === 1 ? 'orbit' : 'sword'} size={20} /><span>{person.name}</span></div>
+                      <div className={styles.lanePoints} style={{ gridTemplateColumns: `repeat(${columns.size}, minmax(0, 1fr))` }}>
+                        {[...columns].map(([key, column]) => <div key={key}>{column.items.filter((item) => item.people.some((entry) => entry.id === person.id)).map((item) =>
+                          <button key={item.id} type="button" className={styles.lanePoint} disabled={disabled} aria-label={`${person.name} · ${item.title}`} title={item.title} onClick={() => void selectRecord(item.id)}><StudioIcon name="spark" size={16} /></button>)}</div>)}
+                      </div>
+                    </div>)}
+                    {!people.length && <p className={styles.help}>本页记录尚未关联人物；事件卡仍按已登记顺序显示。</p>}
+                  </div>
+                  <div className={styles.timeColumns} style={{ gridTemplateColumns: `repeat(${columns.size}, minmax(0, 1fr))` }}>
+                    {[...columns].map(([key, column], columnIndex) => <section key={key} className={styles.timeColumn} data-unknown={column.unknown}>
+                      <h3>{listing.order === 'story' && !column.unknown ? [...new Set(column.items.map((item) => timeLabel(item.time)))].join(' · ') : column.label}<small>{column.unknown ? '未确定顺序' : listing.order === 'story' ? column.label : '已登记披露位置'}</small></h3>
+                      <div className={styles.timeAxis} aria-hidden="true"><span /></div>
+                      <div className={styles.eventStack} data-stagger={columnIndex % 2}>
+                        {column.items.map((item) => <button type="button" key={item.id} className={styles.eventCard} data-tone={laneTone(item)} data-unknown={column.unknown}
+                          disabled={disabled} aria-pressed={selectedId === item.id} aria-controls={detailId} data-conflict={item.conflictState === 'candidate'} data-inverted={inverted.has(item.id)}
+                          onClick={() => void selectRecord(item.id)}>
+                          <span className={styles.eventHeading}><StudioIcon name={item.kind === 'event' ? 'spark' : item.kind === 'cognition' ? 'bulb' : item.kind === 'relation' ? 'workflow' : 'notes'} size={24} /><strong>{item.title}</strong></span>
+                          {inverted.has(item.id) && <span className={styles.invertedTag} title="同页较早披露的条目具有更大的故事排序值">章序倒置</span>}
+                          <span className={styles.description}>{item.description || pointLabel(item)}</span>
+                          <span className={styles.peopleTags}>{item.people.map((person) => <span key={person.id}>{person.name}</span>)}</span>
+                          <span className={styles.eventFooter}>{item.disclosure.state === 'located' && item.disclosure.chapterPosition !== null ? `第 ${item.disclosure.chapterPosition + 1} 章` : disclosureText(item.disclosure)}</span>
+                          <small>{natureLabels[item.nature]} · {decisionLabels[item.authorDecision]}{item.freshness !== 'current' ? ` · ${freshnessLabels[item.freshness]}` : ''}</small>
+                        </button>)}
+                      </div>
+                    </section>)}
+                  </div>
+                </div>
+              </div>
+              <p className={styles.help}>本页最多 {MAX_TIMELINE_PAGE_SIZE} 条，等距仅表示排序；人物泳道来自登记关联，事件只取参与者。虚线表示同页已登记章序与故事顺序倒置，不推断未知时间。</p>
+            </>}
+            {layout === 'list' && groups.map((group) => <section key={group.key} className={styles.group} aria-label={group.label}><h3>{group.label}</h3><ul className={styles.records}>{group.items.map((item) => <li key={item.id}>
               <button type="button" className={styles.record} disabled={disabled} aria-pressed={selectedId === item.id} aria-controls={detailId} onClick={() => void selectRecord(item.id)}>
                 <strong>{item.title}</strong>
                 <span className={styles.trackLine}><span className={styles.trackBadge}>{trackLabels[item.kind]}</span>{pointLabel(item)}</span>
@@ -411,12 +507,17 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
               <span role="status">{page.total === 0 ? '0 条' : `第 ${listing.offset + 1}–${listing.offset + page.items.length} 条 / ${page.total} 条`}</span>
               <button type="button" className={shared.button} disabled={disabled || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) movePage(page.nextOffset) }}>下一页</button>
             </nav>
+            <p className={styles.snapshot}>{page.tracks.map((track) => trackLabels[track]).join(' · ')} · 作品版本 {page.bookRevision} · 知识版本 {page.knowledgeRevision}</p>
           </>}
         </section>
         <section id={detailId} className={styles.detailPane} aria-label="故事记录详情">
+          <section className={styles.conflictPanel} aria-label="时间冲突提醒"><h3><span>时间冲突</span><StudioIcon name="bolt" size={20} /></h3>
+            {conflicts.length ? <ul>{conflicts.map((item, index) => <li key={item.id}><h4><StudioIcon name="spark" size={20} />候选冲突 {index + 1}</h4><strong>{item.title}</strong><p>{item.description || '已有候选冲突标记，请核对来源记录。'}</p><button type="button" className={styles.conflictJump} disabled={disabled} onClick={() => void selectRecord(item.id)}>跳转</button></li>)}</ul> : <p className={styles.help}>本页没有标记为候选冲突的记录。</p>}
+            <button type="button" className={styles.allConflicts} disabled={disabled} onClick={() => leave(() => onOpenRecords(manageKind))}>管理故事记录<StudioIcon name="chevron" size={20} /></button>
+          </section>
           {reading === 'detail' && <p className={styles.help} role="status">正在核对来源记录、选中条目与页面双版本…</p>}
           {readError && <p ref={readErrorElement} tabIndex={-1} className={shared.formError} role="alert">{readError}</p>}
-          {page && !detail && !reading && !readError && <div className={styles.empty}><h3>选择条目查看来源记录</h3><p>详情与列表使用同一作品版本和知识版本。点击披露位置或正文来源时，才读取该引用的固定原稿。</p></div>}
+          {page && !detail && !reading && !readError && <p className={styles.help}>选择事件卡查看同版本详情与固定原稿。</p>}
           {detail && <>
             <h3 ref={detailHeading} tabIndex={-1} className={styles.detailTitle}>{detail.fields.title}</h3>
             {selected && <div className={styles.selectedEntry}>
@@ -429,7 +530,7 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
                 <span>里程碑来源 · {sourceLabels[milestone.source.sourceType]} · 登记内容待核对</span>
                 <blockquote>{milestone.source.quote}</blockquote>
                 {milestone.source.sourceType === 'chapter_text' && <button type="button" className={shared.button} disabled={disabled} aria-controls={originalId}
-                  onClick={() => { const source = milestone.source; if (source?.sourceType === 'chapter_text') void showOriginal({ bookId: source.bookId, chapterId: source.chapterId, revisionId: source.revisionId, blockId: source.blockId, quote: source.quote, label: '记录来源' }) }}>核对里程碑原稿与引文</button>}
+                  onClick={(event) => { const source = milestone.source; if (source?.sourceType === 'chapter_text') void showOriginal({ bookId: source.bookId, chapterId: source.chapterId, revisionId: source.revisionId, blockId: source.blockId, quote: source.quote, label: '记录来源' }, event.currentTarget) }}>核对里程碑原稿与引文</button>}
               </div>}
               <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords(selected.kind))}>在故事记录中管理{trackLabels[selected.kind]}</button>
             </div>}
@@ -440,14 +541,14 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
             <StoryFieldsView fields={detail.fields} book={detailBook} names={detail.labels} />
             {disclosure && <section className={styles.disclosureDetail} aria-label="读者披露登记">
               <h4>选中条目的读者披露登记</h4><p>{disclosureText(disclosure)}</p>
-              {disclosure.state === 'located' && <><p className={styles.help}>仅章节与版本登记，原文待核对；披露位置不包含来源引文。</p><p className={styles.ids}>章节 {disclosure.chapterId}<br />版本 {disclosure.revisionId}<br />段落 {disclosure.blockId}</p><button type="button" className={shared.button} disabled={disabled} aria-controls={originalId} onClick={() => void showOriginal({ bookId, chapterId: disclosure.chapterId, revisionId: disclosure.revisionId, blockId: disclosure.blockId, label: '披露位置' })}>查看披露位置原稿</button></>}
+              {disclosure.state === 'located' && <><p className={styles.help}>仅章节与版本登记，原文待核对；披露位置不包含来源引文。</p><p className={styles.ids}>章节 {disclosure.chapterId}<br />版本 {disclosure.revisionId}<br />段落 {disclosure.blockId}</p><button type="button" className={shared.button} disabled={disabled} aria-controls={originalId} onClick={(event) => void showOriginal({ bookId, chapterId: disclosure.chapterId, revisionId: disclosure.revisionId, blockId: disclosure.blockId, label: '披露位置' }, event.currentTarget)}>查看披露位置原稿</button></>}
             </section>}
             <section className={styles.sources} aria-label="故事记录来源"><h4>记录来源</h4><p className={styles.help}>有效性与版本登记分别显示；出处可查不代表陈述已被证实，登记引文需要打开原稿核对。</p>
               {detail.sources.length === 0 ? <p className={styles.help}>尚未登记来源，可在故事记录中维护。</p> : <ul>{detail.sources.map((source) => <li key={source.id}>
                 <strong>{sourceLabels[source.sourceType]}</strong>
                 <p className={styles.help}>有效性：{validityLabels[source.validity]} · 版本登记：{source.sourceType === 'chapter_text' ? (source.referenceState ? referenceLabels[source.referenceState] : '未知（未返回登记状态）') : '不适用（非正文来源）'}</p>
                 <blockquote>{source.quote}</blockquote>
-                {source.sourceType === 'chapter_text' && <><p className={styles.ids}>章节 {source.chapterId}<br />版本 {source.revisionId}<br />段落 {source.blockId}</p><button type="button" className={shared.button} disabled={disabled} aria-controls={originalId} onClick={() => void showOriginal({ bookId: source.bookId, chapterId: source.chapterId, revisionId: source.revisionId, blockId: source.blockId, quote: source.quote, label: '记录来源' })}>核对来源原稿与引文</button></>}
+                {source.sourceType === 'chapter_text' && <><p className={styles.ids}>章节 {source.chapterId}<br />版本 {source.revisionId}<br />段落 {source.blockId}</p><button type="button" className={shared.button} disabled={disabled} aria-controls={originalId} onClick={(event) => void showOriginal({ bookId: source.bookId, chapterId: source.chapterId, revisionId: source.revisionId, blockId: source.blockId, quote: source.quote, label: '记录来源' }, event.currentTarget)}>核对来源原稿与引文</button></>}
               </li>)}</ul>}
             </section>
             <section id={originalId} className={styles.original} aria-label="固定原稿核对">

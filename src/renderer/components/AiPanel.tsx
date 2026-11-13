@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useContext, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { DomainError, requiredId, requiredText, type BookSnapshot, type ChapterSnapshot, type CompletedRequest, type Result, type StudioApi } from '../../contracts/api'
 import { AI_OUTPUT_LIMIT, isAiAdoptReceiptFor, isAiMemoryAdoptReceiptFor, isAiMemoryTask, parseAiConnectionConfig, parseAiMemoryAdoptInput, parseAiPrepareInput, type AiAdoptInput, type AiAdoptReceipt, type AiConnection, type AiConnectionConfig, type AiConnectionPage, type AiContextPacket, type AiContextPerspective, type AiMemoryAdoptInput, type AiMemoryAdoptReceipt, type AiPrepareInput, type AiRun, type AiRunPage, type AiRunState, type AiRunSummary, type AiTaskKind } from '../../contracts/ai'
 import { AI_CONTEXT_SUMMARY_LIMIT, AI_CONTEXT_SUMMARY_PAGE, contextSummaryRef, parseAiContextSummaryInput, parseAiContextSummarySnapshots, type AiContextSummaryCursor, type AiContextSummaryPage, type AiContextSummarySnapshot } from '../../contracts/ai-context-summary'
@@ -9,25 +9,30 @@ import type { CognitionAttitude } from '../../contracts/story'
 import type { ManuscriptBlock } from '../../contracts/manuscript'
 import type { MemorySearchHit, MemorySearchPage } from '../../contracts/memory'
 import { displayTime, request } from '../request'
-import { Dialog } from './Dialog'
+import { Dialog, DialogDisplayContext } from './Dialog'
+import { StudioIcon } from './StudioIcon'
 import { AiMemoryReview, aiMemoryReviewEntries, createAiMemoryDrafts, type AiMemoryDraft } from './AiMemoryReview'
 import { AiTextDiff } from './AiTextDiff'
 import { CreativeResourcePicker } from './CreativeResourcePicker'
 import { StudyResults } from './StudyResults'
 import { ReviewResults } from './ReviewResults'
-import { REVIEW_PROMPT_VERSION } from '../../contracts/review'
+import { isReviewPromptVersion } from '../../contracts/review'
 import { AiPresetsPanel } from './AiPresetsPanel'
 import { aiPresetComposerTask, isAiPresetsSnapshot, type AiPreset, type AiPresetKind, type AiPresetsSnapshot } from '../../contracts/ai-presets'
 import { MAX_CREATIVE_RESOURCES, creativeRef, parseCreativeResources, type CreativeResourceRef, type CreativeSelection } from '../../contracts/creative-resources'
 import { ForeshadowDueNotice } from './StoryControlPanel'
 import { LIVING_SCHEMA_VERSION, parseLivingWritingContext } from '../../contracts/living'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './AiPanel.module.css'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarAi.module.css'
 
 interface Props {
+  initialRunId?: string
+  initialPreset?: AiPreset
   initialInstruction?: string
+  initialRewrite?: { firstBlockId: string; lastBlockId: string }
   initialPurpose?: 'review' | 'study'
+  initialTask?: AiTaskKind
   initialLivingContext?: boolean
   initialResources?: CreativeResourceRef[]
   api: StudioApi
@@ -46,6 +51,9 @@ interface Props {
   onAdopt: (input: AiAdoptInput, source: AiRun, accept: (receipt: AiAdoptReceipt) => boolean) => Promise<void>
   onAdoptMemory: (input: AiMemoryAdoptInput, source: AiRun, accept: (receipt: AiMemoryAdoptReceipt) => boolean) => Promise<void>
   onRegisterReview?: (run: AiRun) => void
+  onRegisterClose?: (close: (() => void) | null) => void
+  onUseStudy?: (chapterId: string, refs: CreativeResourceRef[]) => void
+  onOpenReviewChecklist?: (issueId?: string) => void
 }
 
 interface PendingWrite {
@@ -85,7 +93,7 @@ function scopeFromContext(context: AiContextPacket): AiCharacterScope | undefine
     if (context.characterContext !== undefined) throw new Error('Unexpected character context')
     return undefined
   }
-  if ((!isAiCharacterContextPromptVersion(context.promptVersion) && !(context.purpose === 'review' && context.promptVersion === REVIEW_PROMPT_VERSION)) || isAiMemoryTask(context.kind) || context.summary !== undefined || context.contextSummaries?.length) throw new Error('Invalid character context')
+  if ((!isAiCharacterContextPromptVersion(context.promptVersion) && !(context.purpose === 'review' && isReviewPromptVersion(context.promptVersion))) || isAiMemoryTask(context.kind) || context.summary !== undefined || context.contextSummaries?.length) throw new Error('Invalid character context')
   const fixed = parseAiCharacterContext(context.characterContext)
   const scope = characterScopeOf(fixed)
   if (fixed.cognitions.length !== context.evidence.length || new Set(context.evidence.map((item) => item.chunkId)).size !== context.evidence.length) throw new Error('Invalid cognition identities')
@@ -200,7 +208,11 @@ export function AiPanel(props: Props) {
   return <AiPanelSession key={`${props.book.book.id}:${props.chapter.id}`} {...props} />
 }
 
-function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialPurpose, initialLivingContext, initialResources, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onBookChange, onUpgrade, onAdopt, onAdoptMemory, onRegisterReview }: Props) {
+function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset, initialInstruction, initialRewrite, initialPurpose, initialTask, initialLivingContext, initialResources, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onBookChange, onUpgrade, onAdopt, onAdoptMemory, onRegisterReview, onRegisterClose, onUseStudy, onOpenReviewChecklist }: Props) {
+  const compact = useContext(DialogDisplayContext) === 'drawer'
+  const composerDetails = useRef<HTMLDetailsElement>(null)
+  const connectionDetails = useRef<HTMLDetailsElement>(null)
+  const [composerOpen, setComposerOpen] = useState(Boolean(initialPreset || initialInstruction || initialRewrite || initialResources?.length))
   const [connections, setConnections] = useState<AiConnectionPage | null>(null)
   const [knowledge, setKnowledge] = useState<KnowledgeStatus | null>(null)
   const [history, setHistory] = useState<AiRunPage | null>(null)
@@ -209,13 +221,13 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   const [config, setConfig] = useState<AiConnectionConfig>(freshConnection)
   const [configDirty, setConfigDirty] = useState(false)
   const [apiKey, setApiKey] = useState('')
-  const [kind, setKind] = useState<AiTaskKind>(initialPurpose ? 'plan' : 'continue')
-  const [purpose, setPurpose] = useState<'review' | 'study' | undefined>(initialPurpose)
+  const [kind, setKind] = useState<AiTaskKind>(initialPreset ? aiPresetComposerTask(initialPreset.kind).kind : initialPurpose ? 'plan' : initialRewrite ? 'rewrite' : initialTask ?? 'continue')
+  const [purpose, setPurpose] = useState<'review' | 'study' | undefined>(initialPreset ? aiPresetComposerTask(initialPreset.kind).purpose : initialPurpose)
   const [studyDirty, setStudyDirty] = useState(false)
   const [presetsDirty, setPresetsDirty] = useState(false)
   const [reviewDirty, setReviewDirty] = useState(false)
   const [toolRecoveryRequested, setToolRecoveryRequested] = useState(false)
-  const [instruction, setInstruction] = useState(initialInstruction ?? '')
+  const [instruction, setInstruction] = useState(initialPreset?.instruction ?? initialInstruction ?? '')
   const [contextScope, setContextScope] = useState<'chapter' | 'nearby'>('chapter')
   const [useLivingContext, setUseLivingContext] = useState(initialLivingContext ?? false)
   const [perspective, setPerspective] = useState<AiContextPerspective>('author')
@@ -223,9 +235,9 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   const [personQuery, setPersonQuery] = useState('')
   const [personPage, setPersonPage] = useState<CharacterPersonPage | null>(null)
   const perspectiveHintId = useId()
-  const [firstBlock, setFirstBlock] = useState('')
-  const [lastBlock, setLastBlock] = useState('')
-  const [composeDirty, setComposeDirty] = useState(Boolean(initialResources?.length))
+  const [firstBlock, setFirstBlock] = useState(initialRewrite?.firstBlockId ?? '')
+  const [lastBlock, setLastBlock] = useState(initialRewrite?.lastBlockId ?? '')
+  const [composeDirty, setComposeDirty] = useState(Boolean(initialResources?.length || initialRewrite || initialPreset || initialInstruction))
   const [memoryQuery, setMemoryQuery] = useState('')
   const [memoryPage, setMemoryPage] = useState<MemorySearchPage | null>(null)
   const [memoryPageScope, setMemoryPageScope] = useState<string | null>(null)
@@ -252,6 +264,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   const [upgradeConfirmed, setUpgradeConfirmed] = useState(false)
   const [backupPath, setBackupPath] = useState<string | null>(null)
   const [discard, setDiscard] = useState<DiscardAction | null>(null)
+  const discardNotice = useRef<HTMLElement>(null)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
   const mounted = useRef(false)
   const epoch = useRef(0)
@@ -259,7 +272,8 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   const lock = useRef(false)
   const runRef = useRef<AiRun | null>(null)
   const configDirtyRef = useRef(false)
-  const composeDirtyRef = useRef(false)
+  const composeDirtyRef = useRef(Boolean(initialResources?.length || initialRewrite || initialPreset || initialInstruction))
+  const presetConnectionPending = useRef(initialPreset?.connectionId ?? null)
   const perspectiveRef = useRef(perspectiveKey(perspective, character))
   const callback = useRef(onDirtyChange)
   callback.current = onDirtyChange
@@ -271,6 +285,8 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   scopeRef.current = scope
   const archived = Boolean(book.book.archivedAt)
   const generating = run?.state === 'running'
+  // 主进程已确认没有活动请求时，记录和部分输出都已落盘，允许离开而不替作者改写任务终态。
+  const activeGeneration = generating && run?.active !== false
   const blocked = busy || loading || reading || studyDirty || reviewDirty || presetsDirty || Boolean(operation || pending || pendingMessage)
   const ready = knowledge !== null && knowledge.schemaVersion >= 6 && connections !== null && !connections.requiresUpgrade && history !== null && !history.requiresUpgrade
   const memoryTask = isAiMemoryTask(kind)
@@ -287,7 +303,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   const characterMemoryBlocked = characterMode && selectedMemory.some((hit) => unusableMemory(hit, perspective) || !characterSelection.scope || !sameCharacterScope(hit.characterScope, characterSelection.scope))
   const memoryRequiresUpgrade = memoryTask && (!knowledge || knowledge.schemaVersion < 7)
   const edited = configDirty || composeDirty || outputDirty
-  const dirty = blocked || generating || edited
+  const dirty = blocked || activeGeneration || edited
   const selectedConnection = connections?.connections.find((item) => item.id === config.id)
   const prepareForm = useMemo(() => ({ kind, purpose, instruction, useLivingContext, contextScope, perspective, character, firstBlock, lastBlock,
     selectedMemory, selectedSummaries, creativeSelection, config, configDirty, selectedConnection, knowledge, book, chapter, acceptedText }),
@@ -357,8 +373,11 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     if (value.bookId !== book.book.id) { setMessage('连接列表的作品身份不符。'); return false }
     setConnections(value)
     if (!configDirtyRef.current) {
-      const saved = value.connections.find((item) => item.id === config.id) ?? value.connections[0]
-      if (saved) setConfig(connectionConfig(saved))
+      const wanted = presetConnectionPending.current
+      const saved = value.connections.find((item) => item.id === (wanted ?? config.id)) ?? (wanted ? undefined : value.connections[0])
+      // 失效绑定持续保留到作者明确改选；重复刷新不能悄悄换成列表首项。
+      if (wanted && !saved) setMessage('预设绑定的连接已不可用，请明确选择连接后再发送。')
+      if (saved) { setConfig(connectionConfig(saved)); presetConnectionPending.current = null }
     }
     return true
   }
@@ -419,11 +438,23 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     setCharacter(emptyCharacterDraft()); setPersonQuery(''); perspectiveRef.current = perspectiveKey('author', emptyCharacterDraft()); clearSearchPages()
   }
   function close() {
-    if (blocked || lock.current) return
-    if (generating) { setMessage('本次生成仍未结束。请先取消生成，或核对状态后显式标记中断。'); return }
+    if (blocked || lock.current) { setMessage('当前操作正在处理或尚未确认，请先核对状态后再关闭。'); return }
+    if (activeGeneration) { setMessage('本次生成仍未结束。请先取消生成，或核对状态后显式标记中断。'); return }
     if (edited) { setDiscard({ label: '放弃本页尚未保存的连接、创作要求与改稿，并关闭？已经保存的提议和部分输出会保留。', proceed: () => { clearLocalEdits(); callback.current(false); onClose() } }); return }
     callback.current(false); onClose()
   }
+  const closeRequest = useRef(close)
+  closeRequest.current = close
+  useEffect(() => {
+    // 外壳的关闭、Esc 和遮罩共用面板原有的放弃确认，不能绕过未保存改稿保护。
+    onRegisterClose?.(() => closeRequest.current())
+    return () => onRegisterClose?.(null)
+  }, [onRegisterClose])
+  useEffect(() => {
+    if (!discard) return
+    discardNotice.current?.scrollIntoView({ block: 'nearest' })
+    discardNotice.current?.focus({ preventScroll: true })
+  }, [discard])
   function begin(label: string): number | null {
     if (lock.current || blocked) return null
     lock.current = true; ticket.current += 1; setOperation(label); setMessage(null); setDiscard(null); callback.current(true)
@@ -456,7 +487,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     if (historyResult.status === 'fulfilled' && historyResult.value.ok && historyResult.value.data.bookId === book.book.id) {
       setHistory(historyResult.value.data); setBefore(undefined)
       const running = historyResult.value.data.runs.find((item) => item.state === 'running')
-      if (running && !runRef.current) setRequestedRunId(running.id)
+      if (!runRef.current && (initialRunId || running)) setRequestedRunId(initialRunId ?? running!.id)
     } else setMessage(historyResult.status === 'fulfilled' && !historyResult.value.ok ? historyResult.value.error.message : '读取提议记录失败，请重试。')
   }
   useEffect(() => {
@@ -530,6 +561,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
   function editConfig(patch: Partial<AiConnectionConfig>) { setConfig((value) => ({ ...value, ...patch })); setConfigDirty(true); configDirtyRef.current = true }
   function resetConfig(id?: string) {
     const saved = connections?.connections.find((item) => item.id === (id ?? config.id))
+    if (id && saved) presetConnectionPending.current = null
     setConfig(saved ? connectionConfig(saved) : freshConnection()); setConfigDirty(false); configDirtyRef.current = false; setApiKey(''); setMessage(null)
   }
   async function saveConnection(event: FormEvent) {
@@ -542,7 +574,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     try {
       await write('保存连接', () => api.configureAiConnection({ bookId: book.book.id, connection: value, expectedVersion, ...(secret ? { apiKey: secret } : {}) }), (page) => {
         if (page.bookId !== book.book.id || !page.connections.some((item) => item.id === value.id)) { setMessage('连接保存回执不符，请核对原记录。'); return false }
-        setConfigDirty(false); configDirtyRef.current = false; setConfig(value)
+        setConfigDirty(false); configDirtyRef.current = false; setConfig(value); presetConnectionPending.current = null
         acceptConnections(page); setMessage('连接已保存；会话密钥仅在桌面进程内存中使用。'); return true
       }, (response) => {
         if (response.command === 'ai.connection.list') {
@@ -553,7 +585,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
         if (response.command !== 'ai.connection.save') return false
         if (!response.result.ok) { setMessage(response.result.error.message); return true }
         if (response.result.data.id !== value.id) return false
-        setConfigDirty(false); configDirtyRef.current = false; setConfig(value); setRefreshRequested(true)
+        setConfigDirty(false); configDirtyRef.current = false; setConfig(value); presetConnectionPending.current = null; setRefreshRequested(true)
         setMessage('原连接请求已确认。重新读取连接与会话密钥状态；不会再次提交密钥或配置。'); return true
       })
     } finally { secret = '' }
@@ -846,6 +878,41 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     if (!current || current.state !== 'running' || current.active !== false) return
     await write('标记中断', () => api.interruptAiRun({ bookId: book.book.id, runId: current.id, expectedVersion: current.version }), (value) => acceptRun(value, current.id), (response) => runReceipt(response, ['ai.interrupt'], current.id))
   }
+  function retryDraft() {
+    const current = runRef.current
+    if (!current || blocked || lock.current || archived || current.chapterId !== chapter.id ||
+      !['failed', 'cancelled', 'interrupted'].includes(current.state) || current.context.summary ||
+      current.context.purpose === 'living' || current.context.purpose === 'forge') return
+    const connection = connections?.connections.find((item) => item.id === current.context.connection.id)
+    if (!connection) { setMessage('原提议使用的连接已不可用，请先配置连接，再明确准备新的创作要求。'); return }
+    const basis = prepareFormRef.current
+    const apply = () => {
+      // 放弃确认只授权这份输入；确认期间发生的新编辑或记录切换必须保留。
+      if (runRef.current !== current || prepareFormRef.current !== basis) { setMessage('提议或本页输入已变化，请重新核对后准备。'); return }
+      const context = current.context
+      try {
+        const characterScope = scopeFromContext(context)
+        const summaries = context.contextSummaries ? parseAiContextSummarySnapshots(context.contextSummaries) : []
+        const fixed = context.characterContext
+        const person: CharacterDraft = fixed ? { person: { id: fixed.personId, name: fixed.personName }, storyOrder: String(fixed.storyOrder), readerLimited: fixed.readerLimited } : emptyCharacterDraft()
+        const resources = context.creativeResources ? parseCreativeResources(context.creativeResources) : null
+        setKind(current.kind); setPurpose(context.purpose === 'review' || context.purpose === 'study' ? context.purpose : undefined)
+        setInstruction(context.instruction); setContextScope(context.contextScope); setPerspective(context.perspective ?? 'author')
+        setCharacter(person); perspectiveRef.current = perspectiveKey(context.perspective ?? 'author', person)
+        setFirstBlock(context.selectedBlockIds[0] ?? ''); setLastBlock(context.selectedBlockIds.at(-1) ?? '')
+        setSelectedMemory(context.evidence.map((item) => ({ sourceKind: item.sourceKind, sourceId: item.sourceId, revisionId: item.revisionId,
+          title: item.title, nature: item.nature, authorDecision: item.authorDecision, freshness: item.freshness, conflictState: item.conflictState,
+          ...(item.readerDisclosure ? { readerDisclosure: item.readerDisclosure } : {}), chunkId: item.chunkId, blockId: item.blockId,
+          excerpt: item.text, dependencyState: item.dependencyState, reasons: [], ...(characterScope ? { characterScope } : {}) })))
+        setSelectedSummaries(summaries); setCreativeSelection({ refs: resources?.items.map(creativeRef) ?? [], application: resources?.application ?? '' })
+        setUseLivingContext(Boolean(context.livingContext)); setConfig(connectionConfig(connection)); setConfigDirty(false); configDirtyRef.current = false
+        presetConnectionPending.current = null; setApiKey(''); clearSearchPages(); setComposeDirty(true); composeDirtyRef.current = true; setOutputDirty(false)
+        setMessage('已带回本次要求与资料选择，尚未发送。请核对当前正文、连接和资料版本，保存新预览后再确认生成。'); openComposer()
+      } catch { setMessage('原提议的范围或资料无法完整恢复，请保留原输出并手工准备新的要求。') }
+    }
+    if (edited) setDiscard({ label: '用这次提议的要求与资料选择替换本页未保存内容？原提议与输出继续保留，不会自动重新发送。', proceed: apply })
+    else apply()
+  }
   async function rejectRun(target: { bookId: string; runId: string; expectedVersion: number }) {
     const current = runRef.current
     // 确认只授权当时那份提议；切换记录或版本变化后必须重新确认。
@@ -935,6 +1002,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     if (preset.connectionId && !connection) { setMessage('预设绑定的连接已不可用，请刷新连接后再应用。'); return }
     const apply = () => {
       const task = aiPresetComposerTask(preset.kind)
+      presetConnectionPending.current = null
       invalidateRecommendations(); setKind(task.kind); setPurpose(task.purpose); setInstruction(preset.instruction)
       if (connection) { setConfig(connectionConfig(connection)); setConfigDirty(false); configDirtyRef.current = false; setApiKey('') }
       setComposeDirty(true); composeDirtyRef.current = true; setMessage('预设已填入。请核对资料范围，保存预览后再发送。')
@@ -967,6 +1035,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
       const connection = preset.connectionId ? connections?.connections.find((item) => item.id === preset.connectionId) : undefined
       if (preset.connectionId && !connection) { setMessage('默认预设绑定的连接不可用，请先编辑预设。'); return }
       const apply = () => {
+        presetConnectionPending.current = null
         setInstruction(preset.instruction); invalidateRecommendations()
         if (connection) { setConfig(connectionConfig(connection)); setConfigDirty(false); configDirtyRef.current = false; setApiKey('') }
         setComposeDirty(true); composeDirtyRef.current = true; setMessage(`已载入“${preset.title}”及其模型选择，请核对固定预览后发送。`)
@@ -1003,9 +1072,20 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     && Boolean(run.context.livingContext) === useLivingContext
     && JSON.stringify(run.context.creativeResources?.items.map(creativeRef) ?? []) === JSON.stringify(creativeSelection.refs)
     && (run.context.creativeResources?.application ?? '') === creativeSelection.application)
-  return <Dialog title="AI 创作协作" wide busy={blocked} onClose={close} error={panelError}>
-    <div className={layout.intro}><p>《{book.book.title}》 · {chapter.title}</p><span>预览 → 明确发送 → 作者审阅 → 采用</span></div>
-    <p className={styles.note}>你决定章节方向与定稿。规划存入章节备注，续写追加到章尾，改写替换选中的连续段落。章节摘要与知识建议需逐条审阅、核对引文后，另行选择入库。</p>
+  function openComposer() {
+    setComposerOpen(true)
+    // 折叠表单仍保留原状态；只展开和定位，不重新挂载编辑内容。
+    if (composerDetails.current) {
+      composerDetails.current.open = true
+      composerDetails.current.scrollIntoView({ block: 'start', behavior: 'instant' })
+      composerDetails.current.querySelector('summary')?.focus()
+    }
+  }
+  return <Dialog title="AI 创作协作" className={styles.panel} wide busy={blocked} onClose={close} error={panelError}>
+    <details className={styles.guide} open={!compact}><summary>协作与采用说明</summary>
+      <div className={layout.intro}><p>《{book.book.title}》 · {chapter.title}</p><span>预览 → 明确发送 → 作者审阅 → 采用</span></div>
+      <p className={styles.note}>你决定章节方向与定稿。规划存入章节备注，续写追加到章尾，改写替换选中的连续段落。章节摘要与知识建议需逐条审阅、核对引文后，另行选择入库。</p>
+    </details>
     {operation && <p className={styles.note} role="status">{operation}…</p>}
     {toolRecoveryRequested && edited && <section className={layout.pending} role="alert"><h3>留存本页协作内容</h3><p>子工具的内容已确认留存。本页还含有创作要求、连接修改或改稿，请一并留存后进入恢复。</p><textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} aria-label="本页协作内容副本" /><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已留存本页内容</label><button className={shared.button} type="button" disabled={!recoveryConfirmed || checkingLocal || checkingReceipt || Boolean(operation)} onClick={recover}>进入草稿与恢复</button></section>}
     {(localUnknown || pendingMessage) && <section className={layout.pending} role="alert"><h3>本次操作结果未确认</h3><p>{pendingMessage ?? `${pending?.label}尚未收到确定结果。新的写入已暂停，请查询原请求。`}</p><p>不会自动重发生成、密钥或采用请求。恢复后请先核对提议记录与磁盘正文。</p>{edited && <><label>需要留存的本页内容<textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} onFocus={(event) => event.target.select()} /></label><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已留存需要的创作要求与改稿，允许进入恢复</label></>}<div className={styles.actions}><button className={shared.button} type="button" disabled={checkingLocal || checkingReceipt} onClick={pendingMessage ? onCheckReceipt : () => void checkLocalReceipt()}>{checkingLocal || checkingReceipt ? '正在核对…' : '查询原回执'}</button><button className={shared.button} type="button" disabled={checkingLocal || checkingReceipt || (edited && !recoveryConfirmed)} onClick={recover}>进入草稿与恢复</button></div></section>}
@@ -1014,12 +1094,27 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
     {!loading && knowledge && (knowledge.schemaVersion < LIVING_SCHEMA_VERSION || connections?.requiresUpgrade || history?.requiresUpgrade) && <section className={layout.upgrade}><h3>为本书启用完整创作工具</h3><p>当前作品格式 v{knowledge.schemaVersion}。先建立独立数据库备份，再升级到 v{LIVING_SCHEMA_VERSION}，启用演进大纲、定稿记忆及已有创作工具。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意创建本书数据库备份并升级</label><button className={shared.primaryButton} type="button" disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
     {backupPath && <p className={layout.backupPath}>升级前数据库副本：{backupPath}</p>}
     {ready && <>
+      {compact && <section className={styles.carried} aria-label="本次携带">
+        <header><h3>本次携带</h3><button type="button" onClick={openComposer}>管理<StudioIcon name="chevron" size={16} /></button></header>
+        <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="read" size={20} /><span><strong>创作要求</strong><small>{instruction.trim() ? '已填写 · 发送前核对' : '尚未填写'}</small></span></button>
+        <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="list" size={20} /><span><strong>前情摘要</strong><small>已选 {selectedSummaries.length} 份</small></span></button>
+        <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="user" size={20} /><span><strong>本书资料</strong><small>已选 {selectedMemory.length} 个片段</small></span></button>
+        <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="spark" size={20} /><span><strong>章纲与定稿记忆</strong><small>{useLivingContext ? '已选择 · 准备预览时核验' : '未选择'}</small></span></button>
+        <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="layers" size={20} /><span><strong>场景与写作方法</strong><small>已选 {creativeSelection.refs.length} 项</small></span></button>
+      </section>}
+      {compact && !run && <section className={styles.draftEmpty} aria-label="AI 流式草稿">
+        <h3><StudioIcon name="spark" size={20} />AI 流式草稿</h3><p>尚未生成草稿</p>
+        <button className={shared.primaryButton} type="button" disabled={blocked || archived} onClick={() => {
+          if (!selectedConnection && connectionDetails.current) { connectionDetails.current.open = true; connectionDetails.current.scrollIntoView({ block: 'start' }); connectionDetails.current.querySelector('summary')?.focus() }
+          else openComposer()
+        }}><StudioIcon name="pen" size={16} />{selectedConnection ? '准备创作协作' : '配置模型'}</button>
+      </section>}
       <details className={styles.connection}><summary>任务预设与累计用量</summary><AiPresetsPanel api={api} bookId={book.book.id} bookRevision={knowledge.bookRevision}
         disabled={busy || loading || reading || studyDirty || reviewDirty || generating || archived || Boolean(operation || pending || pendingMessage)} onDirtyChange={setPresetsDirty}
         connections={connections.connections} initialTitle={`${taskName(kind, purpose)}预设`} initialKind={purpose ?? (memoryTask ? 'continue' : kind as 'plan' | 'continue' | 'rewrite')}
         initialInstruction={instruction} initialConnectionId={selectedConnection?.id ?? null} onApply={applyPreset} onChanged={syncPresetBook}
         onUnknown={(failure) => setMessage(failure.message)} onRecover={recoverTool} /></details>
-      <details className={styles.connection} open={!selectedConnection || configDirty}><summary>模型连接 · {selectedConnection?.name ?? '请先配置'}</summary><form className={layout.editorForm} onSubmit={(event) => void saveConnection(event)}>
+      <details ref={connectionDetails} className={styles.connection} open={!compact && !selectedConnection || configDirty}><summary>模型连接 · {selectedConnection?.name ?? '请先配置'}</summary><form className={layout.editorForm} onSubmit={(event) => void saveConnection(event)}>
         <div className={styles.connectionChoice}><label>已保存连接<select value={selectedConnection?.id ?? ''} disabled={blocked || generating || configDirty} onChange={(event) => resetConfig(event.target.value)}><option value="" disabled>选择连接</option>{connections?.connections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><button className={shared.button} type="button" disabled={blocked || generating || configDirty || archived} onClick={() => { setConfig(freshConnection()); setConfigDirty(true); configDirtyRef.current = true; setApiKey('') }}>新建连接</button></div>
         <div className={layout.twoColumns}><label>连接名称<input value={config.name} required maxLength={80} disabled={blocked || generating || archived} onChange={(event) => editConfig({ name: event.target.value })} /></label><label>模型名称<input value={config.model} required maxLength={200} disabled={blocked || generating || archived} placeholder="填写接口支持的模型名" onChange={(event) => editConfig({ model: event.target.value })} /></label></div>
         <label>接口基础地址<input value={config.baseUrl} required maxLength={2000} disabled={blocked || generating || archived} placeholder="https://api.example.com/v1" autoCapitalize="none" spellCheck={false} onChange={(event) => editConfig({ baseUrl: event.target.value })} /></label>
@@ -1028,7 +1123,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
         <p className={styles.note}>使用兼容 Chat Completions 的接口。密钥不回显、不写入作品文件；退出桌面进程后需重新填写。本机无鉴权接口可留空。修改配置后须先保存。</p>
         <div className={styles.actions}><button className={shared.primaryButton} type="submit" disabled={blocked || generating || archived}>保存连接</button>{configDirty && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => resetConfig()}>放弃连接修改</button>}</div>
       </form></details>
-      <section className={styles.composer} aria-label="创作要求"><div className={styles.heading}><h3>准备一次创作协作</h3><span>先在本地保存预览</span></div><div className={layout.twoColumns}><label>任务<select value={purpose ?? kind} disabled={blocked || generating || archived} onChange={(event) => {
+      <details ref={composerDetails} className={styles.composer} aria-label="创作要求" open={!compact || composerOpen} onToggle={(event) => { if (compact) setComposerOpen(event.currentTarget.open) }}><summary>创作要求与资料</summary><div className={styles.composerBody}><div className={styles.heading}><h3>准备一次创作协作</h3><span>先在本地保存预览</span></div><div className={layout.twoColumns}><label>任务<select value={purpose ?? kind} disabled={blocked || generating || archived} onChange={(event) => {
         invalidateRecommendations(); const next = event.target.value; const usage = next === 'review' || next === 'study' ? next : undefined
         setKind(usage ? 'plan' : next as AiTaskKind); setPurpose(usage)
         if (!instruction.trim() && usage) setInstruction(usage === 'review' ? '审阅本章的结构、因果、人物知情、伏笔、语言与对白。逐项提供固定段落引文、理由、反证与修改建议；证据不足时明确说明。' : '拆解选定参考文本的场景结构、人物动机、冲突与表达手法，给出逐字证据，提炼可迁移的写作方法。只分析实际选定的文本。')
@@ -1137,17 +1232,20 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
         }} />}
         <CreativeResourcePicker api={api} bookId={book.book.id} chapterId={chapter.id} bookRevision={knowledge.bookRevision} disabled={blocked || generating || archived} limited={perspective !== 'author' || memoryTask} studyOnly={purpose === 'study'} value={creativeSelection} onChange={(value) => { setCreativeSelection(value); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null) }} />
         <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || generating || archived || configDirty || !selectedConnection || !instruction.trim() || Boolean(selection.error) || memoryRequiresUpgrade || summaryBlocked || characterTaskBlocked || characterMemoryBlocked || (characterMode && (!characterSelection.scope || characterRequiresUpgrade))} onClick={() => void prepare()}>保存并预览发送内容</button><span className={styles.note}>这一步只在本地保存，不发起模型调用。</span></div>
-      </section>
+      </div></details>
       {run && <section className={styles.run} aria-label="当前提议"><div className={styles.heading}><h3>{taskName(run.kind, run.context.purpose)} · {stateLabels[run.state]}</h3><span>{run.chapterTitle} · {displayTime(run.updatedAt)}</span></div>{!taskCurrent && <p className={styles.note}>这是其他章节的记录。回到对应章节后才能发送或采用。</p>}{run.error && <p className={shared.formError}>{run.error}</p>}<ContextPreview context={run.context} />
         {run.state === 'prepared' && <><p className={styles.note}>{composeDirty || configDirty || !runScopeMatches ? '要求、人物范围或配置已有修改，请保存新的预览后再发送。' : '确认上面的接口、模型与实际内容后，再发送这份固定预览。'}</p><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || composeDirty || configDirty || !runScopeMatches || characterRequiresUpgrade || characterTaskBlocked || summaryBlocked || characterMemoryBlocked} onClick={() => void sendRun()}>确认发送并开始生成</button></>}
         {run.state !== 'prepared' && (isAiMemoryTask(run.kind)
-          ? <AiMemoryReview api={api} run={run} drafts={memoryDrafts} disabled={blocked || archived || !taskCurrent} onChange={(value) => { setMemoryDrafts(value); setOutputDirty(true) }} onAdopt={() => void adoptMemory()} />
+          ? <AiMemoryReview api={api} run={run} drafts={memoryDrafts} disabled={blocked || archived || !taskCurrent} error={pendingMessage ?? panelError} onChange={(value) => { setMemoryDrafts(value); setOutputDirty(true) }} onAdopt={adoptMemory} />
           : <OutputReview run={run} text={acceptedText} disabled={blocked || archived} onChange={(value) => { setAcceptedText(value); setOutputDirty(value !== (run.acceptedText ?? run.outputText)) }} />)}
         {run.state === 'running' && <div className={styles.actions}>{run.active === false ? <><p className={styles.note}>本次记录仍显示生成中，但桌面进程已无活动请求。已停止自动查询；不会重发。核对后可明确标记中断并保留输出。</p><button className={shared.button} type="button" disabled={blocked} onClick={() => void interruptRun()}>标记中断并保留输出</button></> : <button className={shared.button} type="button" disabled={blocked} onClick={() => void stopRun()}>取消生成并保留输出</button>}{pollStopped && <button className={shared.button} type="button" disabled={blocked} onClick={() => setRequestedRunId(run.id)}>重新读取生成状态</button>}</div>}
-        {run.state === 'succeeded' && run.context.purpose === 'review' && run.context.promptVersion === REVIEW_PROMPT_VERSION && <ReviewResults key={run.id} api={api} run={run} bookRevision={knowledge.bookRevision}
-          disabled={busy || loading || reading || studyDirty || presetsDirty || generating || archived || Boolean(operation || pending || pendingMessage)} onDirtyChange={setReviewDirty} onChanged={syncPresetBook} onRecover={recoverTool} />}
-        {run.state === 'succeeded' && run.context.purpose === 'review' && run.context.promptVersion !== REVIEW_PROMPT_VERSION && <><p className={styles.note}>这份历史候选可保留原文，在审稿清单中手工登记并核对固定段落。</p>{onRegisterReview && <button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || edited} onClick={() => onRegisterReview(run)}>登记审稿问题</button>}</>}
-        {run.state === 'succeeded' && run.context.purpose === 'study' && <StudyResults key={run.id} api={api} run={run} disabled={busy || loading || reading || generating || archived || reviewDirty || presetsDirty || Boolean(operation || pending || pendingMessage)} onDirtyChange={setStudyDirty} onUnknown={(failure) => setMessage(failure.message)} onRecover={recoverTool} />}
+        {['failed', 'cancelled', 'interrupted'].includes(run.state) && run.context.purpose !== 'living' && run.context.purpose !== 'forge' && <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent} onClick={retryDraft}>重新准备本次要求</button><span className={styles.note}>保留这份记录，核对新预览后再发送。</span></div>}
+        {run.state !== 'prepared' && run.context.purpose === 'review' && isReviewPromptVersion(run.context.promptVersion) && <ReviewResults key={run.id} api={api} run={run} bookRevision={knowledge.bookRevision}
+          disabled={busy || loading || reading || studyDirty || presetsDirty || archived || Boolean(operation || pending || pendingMessage)} error={pendingMessage ?? panelError} onDirtyChange={setReviewDirty} onChanged={syncPresetBook} onRecover={recoverTool} onOpenChecklist={onOpenReviewChecklist}
+          taskControls={{ disabled: blocked, onCancel: () => void stopRun(), onInterrupt: () => void interruptRun(), onRefresh: () => setRequestedRunId(run.id),
+            onRetry: !archived && taskCurrent ? retryDraft : undefined }} />}
+        {run.state === 'succeeded' && run.context.purpose === 'review' && !isReviewPromptVersion(run.context.promptVersion) && <><p className={styles.note}>这份历史候选可保留原文，在审稿清单中手工登记并核对固定段落。</p>{onRegisterReview && <button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || edited} onClick={() => onRegisterReview(run)}>登记审稿问题</button>}</>}
+        {run.state === 'succeeded' && run.context.purpose === 'study' && <StudyResults key={run.id} api={api} run={run} book={book} chapterId={chapter.id} onUse={onUseStudy} disabled={busy || loading || reading || generating || archived || reviewDirty || presetsDirty || Boolean(operation || pending || pendingMessage)} error={pendingMessage ?? panelError} onDirtyChange={setStudyDirty} onUnknown={(failure) => setMessage(failure.message)} onRecover={recoverTool} />}
         {run.state === 'succeeded' && run.context.purpose === undefined && !isAiMemoryTask(run.kind) && <><p className={styles.note}>{run.kind === 'plan' ? '采用后将规划追加至本章备注。' : run.kind === 'continue' ? '采用后将新稿追加至本章末尾，并保留原稿历史。' : '采用后将替换预览中选定的连续段落，并保留原稿历史。'}{outputDirty ? ' 当前改稿尚未保存；采用时会一并记录。' : ''}</p><div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent || !acceptedText.trim()} onClick={() => void adopt()}>{run.kind === 'plan' ? '采用为章节备注' : run.kind === 'continue' ? '采用并追加至章尾' : '采用并替换所选段落'}</button>{outputDirty && <button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard({ label: '放弃尚未采用的输出修改，恢复模型原提议？', proceed: () => { setAcceptedText(run.outputText); setOutputDirty(false) } })}>放弃改稿</button>}</div></>}
         {!['running', 'adopted', 'rejected'].includes(run.state) && <button className={`${shared.textButton} ${styles.reject}`} type="button" disabled={blocked || archived} onClick={() => {
           const target = { bookId: run.bookId, runId: run.id, expectedVersion: run.version }
@@ -1157,7 +1255,7 @@ function AiPanelSession({ api, book, chapter, busy, initialInstruction, initialP
       <details className={styles.history}><summary>本书提议记录 · 每页最多 30 条</summary><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage()}>最新记录</button>{history?.nextBefore && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage(history.nextBefore!)}>更早记录</button>}{before && <span className={styles.note}>正在查看历史分页</span>}</div>{history?.runs.length ? <ul>{history.runs.map((item) => <li key={item.id}><button className={styles.historyItem} type="button" disabled={blocked || generating} aria-current={run?.id === item.id ? 'true' : undefined} onClick={() => openHistory(item)}><span><strong>{item.chapterTitle} · {taskName(item.kind, item.purpose)}</strong><small>{item.connectionName} · {item.model} · {displayTime(item.createdAt)}</small></span><span>{stateLabels[item.state]}<small>{item.outputCharacters.toLocaleString()} 字符</small></span></button></li>)}</ul> : <p className={styles.note}>保存一次发送预览后，这里会留下输入、输出和作者决定。</p>}</details>
       {archived && <p className={styles.note}>作品已归档，可查看已有记录；解除归档后再配置、生成或采用。</p>}
     </>}
-    {discard && <section className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard(null)}>继续保留</button><button className={shared.button} type="button" disabled={blocked} onClick={() => { const action = discard.proceed; setDiscard(null); action() }}>确认放弃并继续</button></div></section>}
+    {discard && <section ref={discardNotice} tabIndex={-1} className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard(null)}>继续保留</button><button className={shared.button} type="button" disabled={blocked} onClick={() => { const action = discard.proceed; setDiscard(null); action() }}>确认放弃并继续</button></div></section>}
     <div className={styles.footer}><button className={shared.button} type="button" disabled={blocked} onClick={close}>{edited ? '关闭并处理未保存内容' : '关闭'}</button></div>
   </Dialog>
 }

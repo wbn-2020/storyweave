@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { requiredId, type StudioApi } from '../../contracts/api'
 import { parseKnowledgeFields, type KnowledgeItemDetail, type KnowledgeItemPage, type KnowledgeKind } from '../../contracts/knowledge'
 import { request } from '../request'
-import shared from '../App.module.css'
-import styles from './AiPanel.module.css'
+import shared from '../StellarShared.module.css'
+import styles from './StellarAi.module.css'
 
 interface Props {
   api: StudioApi

@@ -27,7 +27,8 @@ export function useDisplayPreferences() {
   // 将工作室主题同步到根元素 data-studio-theme，保证主画布与所有浮层/对话框共享同一套色彩体系。
   useLayoutEffect(() => {
     document.documentElement.dataset.studioTheme = state.preferences.studioTheme
-  }, [state.preferences.studioTheme])
+    document.documentElement.dataset.genre = state.preferences.genreAccent ?? 'stellar'
+  }, [state.preferences.studioTheme, state.preferences.genreAccent])
 
   const save = useCallback((preferences: DisplayPreferences) => {
     let warning: string | null = null

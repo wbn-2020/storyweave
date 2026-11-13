@@ -1,6 +1,7 @@
 import { DomainError, isRecord, requiredId, requiredInteger, type Result } from './api'
 
 export const MEDIA_SCHEMA_VERSION = 14
+export const SCENE_MEDIA_SCHEMA_VERSION = 21
 export const MAX_BOOK_MEDIA_ITEMS = 100
 export const MAX_BOOK_MEDIA_ITEM_BYTES = 2 * 1024 * 1024
 export const MAX_BOOK_MEDIA_BYTES = 64 * 1024 * 1024
@@ -8,11 +9,13 @@ export const MAX_BOOK_MEDIA_BASE64_LENGTH = Math.ceil(MAX_BOOK_MEDIA_ITEM_BYTES 
 export const MAX_BOOK_MEDIA_SNAPSHOT_BYTES = 1024 * 1024
 export const BOOK_MEDIA_MIMES = ['image/png', 'image/jpeg', 'image/webp'] as const
 export type BookMediaMime = typeof BOOK_MEDIA_MIMES[number]
-export type BookMediaKind = 'cover' | 'portrait'
+export type BookMediaKind = 'cover' | 'portrait' | 'scene'
 
 export interface BookMediaFields {
   kind: BookMediaKind
   personId: string | null
+  /** 仅地点场景图携带；封面和立绘保持原有字段形状。 */
+  placeId?: string
   title: string
   /** 图片备注，同时用作无法显示图片时的替代文本。 */
   alt: string
@@ -22,6 +25,16 @@ export interface BookMediaFields {
 export interface GetBookMediaInput { bookId: string }
 export interface ReadBookMediaInput extends GetBookMediaInput { id: string }
 export interface SaveBookMediaInput extends ReadBookMediaInput { expectedBookRevision: number; fields: BookMediaFields }
+export interface ExportBookMediaInput extends ReadBookMediaInput { expectedSha256: string; mime: BookMediaMime }
+export interface ExportBookMediaServiceInput extends ExportBookMediaInput { filePath: string }
+export interface BookMediaExportReceipt { bookId: string; id: string; filePath: string; bytes: number; sha256: string }
+export interface BookMediaPerson {
+  id: string
+  name: string
+  /** 仅唯一同名且章节明确登记为视角的人物成立，不从立绘顺序推测主配角。 */
+  isViewpoint: boolean
+  needsReview: boolean
+}
 export interface BookMediaMetadata extends Omit<BookMediaFields, 'dataBase64'> {
   id: string
   bookRevision: number
@@ -36,8 +49,10 @@ export interface BookMediaSnapshot {
   archived: boolean
   schemaVersion: number
   requiresUpgrade: boolean
-  /** 包含全部旧资产，按创建时作品版本倒序；封面和每位人物的第一张为当前图。 */
+  /** 包含全部旧资产，按创建时作品版本倒序；每种用途及关联对象的第一张为当前图。 */
   items: BookMediaMetadata[]
+  /** 只投影已有立绘的关联人物，不携带人物正文或档案。 */
+  people: BookMediaPerson[]
   activeCoverId: string | null
   totalBytes: number
   totalBase64Bytes: number
@@ -47,6 +62,7 @@ export interface BookMediaApi {
   getBookMedia(input: GetBookMediaInput): Promise<Result<BookMediaSnapshot>>
   readBookMedia(input: ReadBookMediaInput): Promise<Result<BookMediaImage>>
   saveBookMedia(input: SaveBookMediaInput): Promise<Result<BookMediaSnapshot>>
+  exportBookMedia(input: ExportBookMediaInput): Promise<Result<BookMediaExportReceipt | null>>
 }
 
 function invalid(message: string): never { throw new DomainError({ code: 'INVALID_INPUT', message }) }
@@ -60,11 +76,12 @@ function text(value: unknown, label: string, maximum: number, required = false):
 }
 function identity(value: unknown): string { return requiredId(value).toLowerCase() }
 function parseLabels(value: Record<string, unknown>): Omit<BookMediaFields, 'dataBase64'> {
-  if (value.kind !== 'cover' && value.kind !== 'portrait') return invalid('图片用途只能是封面或人物立绘。')
+  if (value.kind !== 'cover' && value.kind !== 'portrait' && value.kind !== 'scene') return invalid('图片用途只能是封面、人物立绘或地点场景。')
   if (!BOOK_MEDIA_MIMES.includes(value.mime as BookMediaMime)) return invalid('只接受 PNG、JPEG 或 WebP 图片。')
   const personId = value.personId === null ? null : identity(value.personId)
-  if ((value.kind === 'cover' && personId !== null) || (value.kind === 'portrait' && personId === null)) return invalid('封面不关联人物；立绘必须关联本书已有的人物。')
-  return { kind: value.kind, personId, title: text(value.title, '图片名称', 120, true), alt: text(value.alt, '备注 / 替代文本', 2000), mime: value.mime as BookMediaMime }
+  if ((value.kind !== 'portrait' && personId !== null) || (value.kind === 'portrait' && personId === null)) return invalid('只有立绘关联人物；场景必须关联本书已有的地点。')
+  return { kind: value.kind, personId, ...(value.kind === 'scene' ? { placeId: identity(value.placeId) } : {}),
+    title: text(value.title, '图片名称', 120, true), alt: text(value.alt, '备注 / 替代文本', 2000), mime: value.mime as BookMediaMime }
 }
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -99,7 +116,7 @@ export function validateBookMediaPayload(mime: BookMediaMime, value: unknown): n
 }
 
 export function parseBookMediaFields(value: unknown): BookMediaFields {
-  const data = record(value, ['kind', 'personId', 'title', 'alt', 'mime', 'dataBase64'])
+  const data = record(value, ['kind', 'personId', 'title', 'alt', 'mime', 'dataBase64', ...(isRecord(value) && value.kind === 'scene' ? ['placeId'] : [])])
   const labels = parseLabels(data)
   validateBookMediaPayload(labels.mime, data.dataBase64)
   return { ...labels, dataBase64: data.dataBase64 as string }
@@ -116,13 +133,25 @@ export function parseSaveBookMediaInput(value: unknown): SaveBookMediaInput {
   const data = record(value, ['bookId', 'expectedBookRevision', 'id', 'fields'])
   return { bookId: identity(data.bookId), expectedBookRevision: requiredInteger(data.expectedBookRevision, '作品版本', Number.MAX_SAFE_INTEGER - 1), id: identity(data.id), fields: parseBookMediaFields(data.fields) }
 }
+function exportFields(data: Record<string, unknown>): ExportBookMediaInput {
+  if (typeof data.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(data.expectedSha256)
+    || !BOOK_MEDIA_MIMES.includes(data.mime as BookMediaMime)) return invalid('请按所选原图的固定摘要和格式导出。')
+  return { bookId: identity(data.bookId), id: identity(data.id), expectedSha256: data.expectedSha256, mime: data.mime as BookMediaMime }
+}
+export function parseExportBookMediaInput(value: unknown): ExportBookMediaInput {
+  return exportFields(record(value, ['bookId', 'id', 'expectedSha256', 'mime']))
+}
+export function parseExportBookMediaServiceInput(value: unknown): ExportBookMediaServiceInput {
+  const data = record(value, ['bookId', 'id', 'expectedSha256', 'mime', 'filePath'])
+  return { ...exportFields(data), filePath: text(data.filePath, '导出路径', 32767, true) }
+}
 
 const META_KEYS = ['id', 'bookRevision', 'kind', 'personId', 'title', 'alt', 'mime', 'byteLength', 'sha256', 'createdAt']
 export function parseBookMediaMetadata(value: unknown): BookMediaMetadata {
-  const data = record(value, META_KEYS), labels = parseLabels(data)
+  const data = record(value, [...META_KEYS, ...(isRecord(value) && value.kind === 'scene' ? ['placeId'] : [])]), labels = parseLabels(data)
   const id = identity(data.id), bookRevision = requiredInteger(data.bookRevision, '图片创建版本')
   const byteLength = requiredInteger(data.byteLength, '图片大小', MAX_BOOK_MEDIA_ITEM_BYTES)
-  if (id !== data.id || labels.personId !== data.personId || bookRevision < 1 || byteLength < 4
+  if (id !== data.id || labels.personId !== data.personId || labels.placeId !== data.placeId || bookRevision < 1 || byteLength < 4
     || typeof data.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(data.sha256)
     || typeof data.createdAt !== 'string' || data.createdAt.length !== 24 || !Number.isFinite(Date.parse(data.createdAt))
     || new Date(data.createdAt).toISOString() !== data.createdAt) return invalid('图片元信息无效。')
@@ -130,7 +159,7 @@ export function parseBookMediaMetadata(value: unknown): BookMediaMetadata {
 }
 export function isBookMediaSnapshot(value: unknown, bookId: string): value is BookMediaSnapshot {
   try {
-    const data = record(value, ['bookId', 'bookRevision', 'archived', 'schemaVersion', 'requiresUpgrade', 'items', 'activeCoverId', 'totalBytes', 'totalBase64Bytes', 'savedMedia'])
+    const data = record(value, ['bookId', 'bookRevision', 'archived', 'schemaVersion', 'requiresUpgrade', 'items', 'people', 'activeCoverId', 'totalBytes', 'totalBase64Bytes', 'savedMedia'])
     if (data.bookId !== bookId || identity(data.bookId) !== bookId || typeof data.archived !== 'boolean' || typeof data.requiresUpgrade !== 'boolean') return false
     const revision = requiredInteger(data.bookRevision, '作品版本'), schema = requiredInteger(data.schemaVersion, '作品格式')
     if (schema < 1 || data.requiresUpgrade !== (schema < MEDIA_SCHEMA_VERSION) || !Array.isArray(data.items) || data.items.length > MAX_BOOK_MEDIA_ITEMS) return false
@@ -138,11 +167,22 @@ export function isBookMediaSnapshot(value: unknown, bookId: string): value is Bo
     const ids = new Set<string>()
     const items = data.items.map(parseBookMediaMetadata)
     for (const item of items) {
-      if (ids.has(item.id) || item.bookRevision > revision || item.bookRevision >= previous) return false
+      if (ids.has(item.id) || item.bookRevision > revision || item.bookRevision >= previous ||
+        item.kind === 'scene' && schema < SCENE_MEDIA_SCHEMA_VERSION) return false
       ids.add(item.id); previous = item.bookRevision; bytes += item.byteLength; encoded += Math.ceil(item.byteLength / 3) * 4
     }
     if (bytes > MAX_BOOK_MEDIA_BYTES || data.totalBytes !== bytes || data.totalBase64Bytes !== encoded || data.activeCoverId !== (items.find((item) => item.kind === 'cover')?.id ?? null)) return false
-    if (data.requiresUpgrade && (items.length !== 0 || data.savedMedia !== null)) return false
+    if (!Array.isArray(data.people) || data.people.length > MAX_BOOK_MEDIA_ITEMS) return false
+    const owners = new Set(items.flatMap((item) => item.personId ? [item.personId] : [])), peopleIds = new Set<string>()
+    for (const raw of data.people) {
+      const person = record(raw, ['id', 'name', 'isViewpoint', 'needsReview'])
+      const id = identity(person.id)
+      if (id !== person.id || !owners.has(id) || peopleIds.has(id) || typeof person.isViewpoint !== 'boolean' || typeof person.needsReview !== 'boolean') return false
+      text(person.name, '人物名称', 200, true)
+      peopleIds.add(id)
+    }
+    if (peopleIds.size !== owners.size) return false
+    if (data.requiresUpgrade && (items.length !== 0 || data.people.length !== 0 || data.savedMedia !== null)) return false
     if (data.savedMedia !== null) {
       const saved = parseBookMediaMetadata(data.savedMedia), match = items.find((item) => item.id === saved.id)
       if (!match || JSON.stringify(match) !== JSON.stringify(saved)) return false
@@ -152,7 +192,7 @@ export function isBookMediaSnapshot(value: unknown, bookId: string): value is Bo
 }
 export function isBookMediaImage(value: unknown, bookId: string, id: string): value is BookMediaImage {
   try {
-    const data = record(value, [...META_KEYS, 'bookId', 'dataBase64'])
+    const data = record(value, [...META_KEYS, 'bookId', 'dataBase64', ...(isRecord(value) && value.kind === 'scene' ? ['placeId'] : [])])
     const { bookId: owner, dataBase64, ...rest } = data
     const meta = parseBookMediaMetadata(rest)
     return owner === bookId && identity(owner) === owner && meta.id === id && validateBookMediaPayload(meta.mime, dataBase64) === meta.byteLength

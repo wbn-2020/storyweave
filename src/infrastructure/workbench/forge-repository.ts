@@ -157,13 +157,19 @@ export class ForgeRepository {
       return db.transaction(() => {
         const book = bookState(db, data.bookId), schemaVersion = db.pragma('user_version', { simple: true }) as number
         const result: ForgeSnapshot = { bookId: data.bookId, bookRevision: book.revision, knowledgeRevision: book.knowledge_revision, schemaVersion, requiresUpgrade: schemaVersion < 17,
-          entities: [], entityTotal: 0, person: null, runs: [] }
+          entities: [], entityTotal: 0, person: null, runs: [], auditionRuns: [] }
         if (schemaVersion < 17) return result
         result.entityTotal = (db.prepare('SELECT COUNT(*) AS count FROM knowledge_items').get() as { count: number }).count
         result.entities = db.prepare('SELECT id, name, kind FROM knowledge_items ORDER BY kind, name, id LIMIT 200').all() as ForgeSnapshot['entities']
         if (data.personId) result.person = readForgePerson(db, data.bookId, data.personId, data.storyOrder, book.knowledge_revision)
         result.runs = db.prepare(`SELECT f.run_id AS id, f.kind, a.state, f.created_at AS createdAt FROM forge_runs f JOIN ai_runs a ON a.id = f.run_id
           WHERE a.book_id = ? ORDER BY a.sequence DESC LIMIT 30`).all(data.bookId) as ForgeSnapshot['runs']
+        // 人物台词不受全书任务历史窗口影响，身份以不可变的准备请求为准。
+        if (data.personId) result.auditionRuns = db.prepare(`SELECT f.run_id AS id, a.state, f.created_at AS createdAt
+          FROM forge_runs f JOIN ai_runs a ON a.id = f.run_id
+          WHERE a.book_id = ? AND f.kind = 'audition' AND a.state IN ('succeeded', 'adopted')
+            AND json_extract(f.request_json, '$.personId') = ?
+          ORDER BY a.sequence DESC LIMIT 2`).all(data.bookId, data.personId) as ForgeSnapshot['auditionRuns']
         return result
       })()
     })

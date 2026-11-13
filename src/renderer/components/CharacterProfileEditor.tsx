@@ -4,7 +4,7 @@ import {
   CHARACTER_ABILITIES, CHARACTER_ABILITY_LABELS,
   type CharacterProfile, type CharacterProfileField,
 } from '../../contracts/character-profile'
-import styles from './KnowledgePanel.module.css'
+import styles from './StellarKnowledge.module.css'
 
 const hints: Record<CharacterProfileField, string> = {
   motivation: '什么原因推动人物行动？（如：找回失踪的妹妹 / 守护安全区）',
@@ -50,9 +50,9 @@ export function CharacterProfileEditor({ profile, disabled, abilitiesDisabled = 
   </details>
 }
 
-export function CharacterProfileView({ profile }: { profile?: CharacterProfile }) {
+export function CharacterProfileView({ profile, details = true, compact = false }: { profile?: CharacterProfile; details?: boolean; compact?: boolean }) {
   const keys = CHARACTER_PROFILE_FIELDS.filter((key) => profile?.[key]?.trim())
-  const cx = 110, cy = 105, radius = 68
+  const cx = compact ? 120 : 110, cy = compact ? 100 : 105, radius = compact ? 76 : 68
   const points = CHARACTER_ABILITIES.map((axis, idx) => {
     const angle = -Math.PI / 2 + (idx * 2 * Math.PI) / CHARACTER_ABILITIES.length
     const value = profile?.abilities?.[axis]
@@ -61,20 +61,21 @@ export function CharacterProfileView({ profile }: { profile?: CharacterProfile }
       label: CHARACTER_ABILITY_LABELS[axis], value,
       x: cx + Math.cos(angle) * radius * score,
       y: cy + Math.sin(angle) * radius * score,
-      lx: cx + Math.cos(angle) * (radius + 22),
-      ly: cy + Math.sin(angle) * (radius + 18),
+      lx: cx + Math.cos(angle) * (radius + (compact ? 14 : 22)),
+      ly: cy + Math.sin(angle) * (radius + (compact ? 14 : 18)),
     }
   })
   const polygonPoints = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
 
-  return <div className={styles.characterDashboard}>
+  return <div className={`${styles.characterDashboard} ${compact ? styles.radarCompact : ''}`}>
     <div className={styles.radarCard}>
       <div className={styles.radarHeader}>
         <strong>角色六维能力</strong>
         <span>作者设定 · 0–100</span>
       </div>
       <div className={styles.radarBody}>
-        <svg className={styles.radarSvg} viewBox="0 0 220 210" aria-label="角色六维属性雷达图">
+        <svg className={styles.radarSvg} viewBox={compact ? '0 0 240 200' : '0 0 220 210'} role="img" aria-label="角色六维属性雷达图">
+          <title>作者设定 · 0–100，未填写的能力显示未知</title>
           {[0.35, 0.68, 1].map((scale) => {
             const ring = CHARACTER_ABILITIES.map((_, idx) => {
               const angle = -Math.PI / 2 + (idx * 2 * Math.PI) / CHARACTER_ABILITIES.length
@@ -82,12 +83,16 @@ export function CharacterProfileView({ profile }: { profile?: CharacterProfile }
             }).join(' ')
             return <polygon key={scale} points={ring} className={styles.radarGrid} />
           })}
+          {compact && points.map((_, idx) => {
+            const angle = -Math.PI / 2 + (idx * 2 * Math.PI) / CHARACTER_ABILITIES.length
+            return <line key={idx} x1={cx} y1={cy} x2={cx + Math.cos(angle) * radius} y2={cy + Math.sin(angle) * radius} className={styles.radarGrid} />
+          })}
           {points.every((point) => point.value !== undefined) && <polygon points={polygonPoints} className={styles.radarArea} />}
           {points.map((p, idx) => (
             <g key={idx}>
               {p.value !== undefined && <circle cx={p.x} cy={p.y} r="3.5" className={styles.radarDot} />}
               <text x={p.lx} y={p.ly} textAnchor="middle" dominantBaseline="middle" className={styles.radarLabel}>
-                {p.label} {p.value ?? '未知'}
+                {p.label} <tspan className={compact ? styles.radarScore : undefined}>{p.value ?? '未知'}</tspan>
               </text>
             </g>
           ))}
@@ -104,7 +109,7 @@ export function CharacterProfileView({ profile }: { profile?: CharacterProfile }
       </div>
     </div>
 
-    {keys.length === 0 ? (
+    {details && (keys.length === 0 ? (
       <p className={styles.profileHelp}>尚未填写详细角色档案，可点击右上角「编辑条目」补充动机、外貌、口头禅与技能限制。</p>
     ) : (
       <dl className={styles.profileValues}>
@@ -115,6 +120,6 @@ export function CharacterProfileView({ profile }: { profile?: CharacterProfile }
           </div>
         ))}
       </dl>
-    )}
+    ))}
   </div>
 }

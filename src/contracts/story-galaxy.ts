@@ -34,6 +34,8 @@ export interface GalaxyNode extends GalaxyTarget {
   conflictState: ConflictState
   relationLayer?: 'surface' | 'hidden'
   relationTime?: { from: StoryTime; until: StoryTime }
+  relationType?: string
+  relationDirection?: 'directed' | 'mutual'
 }
 /** 连线记录显式引用角色；不推断因果、人物知情或关系是否仍有效。 */
 export interface GalaxyEdge { id: string; from: GalaxyTarget; to: GalaxyTarget; role: GalaxyRole }

@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { DomainError, type BookSnapshot, type ChapterSnapshot, type StudioApi } from '../../contracts/api'
 import type { AiConnection, AiRun } from '../../contracts/ai'
 import { parseLivingAdoptInput, parseLivingPrepareInput, parseOutlineFields, type LivingKind, type LivingOutline,
-  type LivingProposal, type LivingRunDetail, type LivingSnapshot, type OutlineFields, type OutlineHistoryPage, type MemoryArchivePage } from '../../contracts/living'
+  type LivingProposal, type LivingRunDetail, type LivingSnapshot, type OutlineFields, type OutlineHistoryPage, type MemoryArchivePage, type OutlineProposal } from '../../contracts/living'
 import { useToolSession } from './workbench-ui'
 import { displayTime } from '../request'
-import shared from '../App.module.css'
-import styles from './LivingPanel.module.css'
+import shared from '../StellarShared.module.css'
+import styles from './StellarLiving.module.css'
 import { BeatCardPicker } from './BeatCardPicker'
+import { Dialog, DialogDisplayContext } from './Dialog'
+import { StudioIcon } from './StudioIcon'
 
 interface Props {
   api: StudioApi; book: BookSnapshot; chapter: ChapterSnapshot | null; disabled: boolean
@@ -33,6 +35,12 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   const [locked, setLocked] = useState(false)
   const [outlineDirty, setOutlineDirty] = useState(false)
   const [history, setHistory] = useState<OutlineHistoryPage | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [chapterPage, setChapterPage] = useState(0)
+  const [confirmAdopt, setConfirmAdopt] = useState(false)
+  const [reviewingRebase, setReviewingRebase] = useState(true)
+  const generationPanel = useRef<HTMLElement>(null)
+  const outlineEditor = useRef<HTMLDetailsElement>(null)
   const [connections, setConnections] = useState<AiConnection[]>([])
   const [connectionId, setConnectionId] = useState('')
   const [kind, setKind] = useState<LivingKind>(initialTab === 'memory' ? 'memory' : 'expand')
@@ -78,6 +86,8 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   }, [])
   useEffect(() => { if (!disabled && initialRead.current) { initialRead.current = false; void load() } }, [disabled])
   useEffect(() => { guard.current.running = run?.state === 'running'; report() }, [run?.state])
+  useEffect(() => { setConfirmAdopt(false) }, [proposal, snapshot?.bookRevision, run?.id, run?.version])
+  useEffect(() => { if (proposal?.kind === 'rebase') setReviewingRebase(true) }, [run?.id, proposal?.kind])
   useEffect(() => {
     if (run?.state !== 'running' || tool.locked || pollStopped) return
     const timer = window.setTimeout(() => { void refreshRun() }, 1200)
@@ -116,9 +126,11 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
       callbacks.current.onBookChange(value)
     })
   }
-  function selectNode(value: LivingOutline) {
+  function selectNode(value: LivingOutline, edit = false) {
     if (blocked || outlineDirty || proposalDirty) { tool.setError('请先保存或放弃当前改动。'); return }
     setSelectedId(value.id); setFields(value.fields); setLocked(value.locked); setHistory(null)
+    setEditorOpen(edit)
+    if (edit) window.requestAnimationFrame(() => outlineEditor.current?.scrollIntoView({ block: 'nearest' }))
   }
   function editFields(value: OutlineFields) { setFields(value); setGuard('outline', true) }
   function editRequest(action: () => void) { action(); setGuard('request', true) }
@@ -233,7 +245,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     const adopted = await tool.write('living.adopt', () => api.adoptLiving(input),
       (value) => value.bookId === book.book.id && value.runId === run.id && value.book.book.id === book.book.id && value.snapshot.bookId === book.book.id && value.refs.length === (proposal.kind === 'memory' ? 1 : proposal.chapters.length),
       (value) => { setGuard('proposal', false); receiveSnapshot(value.snapshot, true); callbacks.current.onBookChange(value.book); setDetail((previous) => previous ? { ...previous, adopted: true } : previous) }, '采用已确认，来源与回执已在同一事务保存。')
-    if (adopted) await refreshRun()
+    if (adopted) { setConfirmAdopt(false); await refreshRun() }
   }
   function discard() {
     if (blocked) return
@@ -249,10 +261,17 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   }
 
   const chapterNodes = snapshot?.outlines.filter((item) => item.scope === 'chapter') ?? []
+  const bookNode = snapshot?.outlines.find((item) => item.scope === 'book')
+  const volumeNodes = snapshot?.outlines.filter((item) => item.scope === 'volume') ?? []
+  const volumeId = node?.scope === 'volume' ? node.id : node?.scope === 'chapter' ? node.parentId : volumeNodes[0]?.id ?? null
+  const volumeNode = volumeNodes.find((item) => item.id === volumeId)
+  const volumeChapters = chapterNodes.filter((item) => item.parentId === volumeId)
+  const chapterPages = Math.max(1, Math.ceil(volumeChapters.length / 18))
+  const visibleChapterPage = Math.min(chapterPage, chapterPages - 1)
+  useEffect(() => { setChapterPage(0) }, [volumeId])
   const archiveCurrent = archive?.chapterId === memoryChapterId && archive.page.bookRevision === snapshot?.bookRevision
   const visibleMemories = archiveCurrent ? archive!.page.items : snapshot?.memories ?? []
-  const plotted = chapterNodes.filter((item) => item.parentId === (node?.scope === 'volume' ? node.id : node?.parentId)).slice(-120)
-  const points = plotted.map((item, index) => item.fields.tension === null ? null : `${plotted.length < 2 ? 300 : 12 + index * 576 / (plotted.length - 1)},${112 - item.fields.tension}`)
+  const plotted = volumeChapters.slice(-120)
   let low = 0, high = 0, rhythmParent: string | null = null
   const rhythmWarnings = chapterNodes.flatMap((item) => {
     if (rhythmParent !== item.parentId) { low = 0; high = 0; rhythmParent = item.parentId }
@@ -294,12 +313,32 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
       <label className={styles.check}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />确认先备份，再升级这部作品</label>
       <button className={shared.primaryButton} type="button" disabled={blocked || !upgradeConfirmed} onClick={() => void upgrade()}>备份并升级</button></section>}
     {backupPath && <p className={styles.note}>本次备份：{backupPath}</p>}
-    {snapshot && !snapshot.requiresUpgrade && <>
+    {proposal?.kind === 'rebase' && tab === 'outline' && <div className={styles.actions}><button type="button" className={shared.button} onClick={() => setReviewingRebase((value) => !value)}><StudioIcon name={reviewingRebase ? 'arrow' : 'workflow'} size={20} />{reviewingRebase ? '返回大纲沙盘' : '查看修纲三栏对照'}</button></div>}
+    {snapshot && !snapshot.requiresUpgrade && <div className={styles.workspace} data-view={tab} data-review={tab === 'outline' && reviewingRebase && proposal?.kind === 'rebase' ? 'rebase' : undefined}>
       {tab === 'outline' ? <div className={styles.outlineLayout}>
-        <nav className={styles.tree} aria-label="总纲、分卷与章纲">{snapshot.outlines.map((item) => <button key={item.id} type="button" className={`${styles.treeItem} ${item.id === selectedId ? styles.selected : ''}`} aria-current={item.id === selectedId ? 'true' : undefined} data-scope={item.scope} disabled={blocked} onClick={() => selectNode(item)}>
-          <span>{item.scope === 'book' ? '总纲' : item.scope === 'volume' ? '卷纲' : String(item.position + 1).padStart(2, '0')}</span><strong>{item.fields.title}</strong><small>{item.stale ? item.locked ? '锁定 · 待复核' : '待复核' : item.locked ? '锁定' : item.manual ? '手改' : ''}</small></button>)}</nav>
-        <section className={styles.editor} aria-label="当前大纲编辑">{node && fields && <>
-          <div className={styles.editorHeading}><div><h2>{node.scope === 'book' ? '全书方向' : node.scope === 'volume' ? '这一卷要抵达哪里' : '这一章如何推进'}</h2><p>修订 {node.version || '尚未保存'} · {node.manual ? '作者内容' : '生成计划'}</p></div>
+        <nav className={styles.tree} aria-label="总纲与分卷">
+          {bookNode && <button type="button" className={`${styles.treeItem} ${selectedId === bookNode.id ? styles.selected : ''}`} aria-current={selectedId === bookNode.id ? 'true' : undefined} disabled={blocked} onClick={() => selectNode(bookNode)}><StudioIcon name="compass" size={24} /><strong>全书总纲</strong><small>{bookNode.locked ? '已锁定' : bookNode.stale ? '待复核' : bookNode.version ? `修订 ${bookNode.version}` : '尚未保存'}</small></button>}
+          {volumeNodes.map((item, index) => {
+            const chapters = chapterNodes.filter((entry) => entry.parentId === item.id)
+            return <button key={item.id} type="button" className={`${styles.treeItem} ${item.id === volumeId ? styles.selected : ''}`} aria-current={item.id === selectedId ? 'true' : undefined} data-scope="volume" data-tone={index % 3} disabled={blocked} onClick={() => selectNode(item)}>
+              <StudioIcon name="orbit" size={32} /><strong>{item.fields.title}</strong><span>{chapters.length ? `第 ${chapters[0]!.position + 1}–${chapters.at(-1)!.position + 1} 章` : '尚无章纲'}</span><small>{item.stale ? '待复核' : item.locked ? '已锁定' : item.manual ? '作者手改' : `${chapters.length} 章`}</small>
+            </button>
+          })}
+          {chapterNodes.some((item) => item.parentId === null) && <button type="button" className={`${styles.treeItem} ${volumeId === null && node?.scope === 'chapter' ? styles.selected : ''}`} disabled={blocked} onClick={() => selectNode(chapterNodes.find((item) => item.parentId === null)!)}><StudioIcon name="list" size={24} /><strong>未分卷章节</strong><small>{chapterNodes.filter((item) => item.parentId === null).length} 章</small></button>}
+        </nav>
+        <section className={styles.editor} aria-label="大纲沙盘">
+          <OutlineTensionChart outlines={plotted} disabled={blocked || outlineDirty || proposalDirty} onSelect={(item) => selectNode(item, true)} />
+          {rhythmWarnings.length > 0 && <details className={styles.rhythmNotes}><summary>节奏提醒 · {rhythmWarnings.length} 条</summary><ul>{rhythmWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
+          {bookNode && <div className={styles.overviewCards} aria-label="总纲四卡">{([
+            ['summary', '大纲内容', 'compass'], ['goal', '目标', 'orbit'], ['conflict', '核心冲突', 'bolt'], ['hook', '高潮与收束', 'spark'],
+          ] as const).map(([key, label, icon]) => <button key={key} type="button" className={styles.outlineCard} data-field={key} disabled={blocked} onClick={() => selectNode(bookNode, true)}>
+            <StudioIcon name={bookNode.locked ? 'lock' : icon} size={32} /><strong>{label}</strong><p>{bookNode.fields[key] || '尚未填写'}</p><small>{bookNode.locked ? '已锁定' : bookNode.stale ? '待复核' : bookNode.version ? `修订 ${bookNode.version}` : '待建立'}</small>
+          </button>)}</div>}
+          {volumeNode && <button type="button" className={styles.volumeLine} disabled={blocked} onClick={() => selectNode(volumeNode, true)}><StudioIcon name={volumeNode.locked ? 'lock' : 'spark'} size={32} /><span><strong>{volumeNode.fields.title}</strong><small>{volumeNode.fields.goal || volumeNode.fields.summary || '填写本卷推进方向'}</small></span><StudioIcon name="chevron" size={20} /></button>}
+          {node && fields && <details ref={outlineEditor} className={styles.outlineEditor} open={editorOpen} onToggle={(event) => setEditorOpen(event.currentTarget.open)}>
+            <summary>编辑{node.scope === 'book' ? '全书总纲' : node.scope === 'volume' ? '本卷主线' : '本章大纲'} · {fields.title}{outlineDirty ? ' · 未保存修改' : ''}</summary>
+            <div className={styles.section}>
+          <div className={styles.editorHeading}><div><h2>{node.scope === 'book' ? '总纲' : node.scope === 'volume' ? '分卷主线' : '章节大纲'}</h2><p>修订 {node.version || '尚未保存'} · {node.manual ? '作者内容' : '生成计划'}</p></div>
             <label className={styles.check}><input type="checkbox" checked={locked} disabled={blocked} onChange={(event) => { setLocked(event.target.checked); setGuard('outline', true) }} />锁定内容</label></div>
           {node.stale && <p className={styles.warning}>{node.staleReason} 请比较当前来源；确认内容仍适用后保存新修订。</p>}
           <OutlineFieldsEditor fields={fields} chapter={node.scope === 'chapter'} disabled={!canEdit} onChange={editFields} />
@@ -307,9 +346,17 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
           {fields.beatSource && <details className={styles.note}><summary>本章引用的节拍来源 · {fields.beatSource.title} · v{fields.beatSource.revision}</summary><p>固定来源 {fields.beatSource.id}；采用时的卡片正文随大纲修订保留。</p><pre>{fields.beatSource.body}</pre></details>}
           <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || !outlineDirty} onClick={() => void save()}>保存大纲新修订</button>{node.stale && !outlineDirty && <button className={shared.button} type="button" disabled={blocked || proposalDirty} onClick={() => void save()}>确认内容仍适用，保存复核修订</button>}<button className={shared.button} type="button" disabled={blocked} onClick={() => void readHistory()}>查看版本历史</button>{node.scope === 'chapter' && <button type="button" className={shared.button} disabled={blocked || outlineDirty || proposalDirty} onClick={() => onNavigate(node.id)}>进入本章写作</button>}</div>
           {history && <div className={styles.history}><h3>大纲修订历史</h3>{history.items.length === 0 && <p>保存一次大纲后，这里会记录可追溯的版本。</p>}{history.items.map((item) => <details key={item.id}><summary>版本 {item.version} · {item.origin === 'manual' ? '作者保存' : item.origin === 'restored' ? '历史恢复' : 'AI 采纳'} · {displayTime(item.createdAt)}</summary><pre>{JSON.stringify(item.fields, null, 2)}</pre><button type="button" className={shared.button} disabled={blocked || outlineDirty || node.locked || item.version === node.version} onClick={() => void restore(item.id)}>以此版本建立新修订</button></details>)}{history.nextBeforeVersion !== null && <button className={shared.button} type="button" disabled={blocked} onClick={() => void readHistory(history.nextBeforeVersion!)}>读取更早版本</button>}</div>}
-          {plotted.length > 0 && <figure className={styles.rhythm}><figcaption>本卷节奏参考 · 最近 {plotted.length} 章，空值保持未评估</figcaption><svg viewBox="0 0 600 124" role="img" aria-label="章节紧张度曲线"><path d="M12 12H588M12 62H588M12 112H588" className={styles.gridLines} />{points.map((point, index) => point && <g key={plotted[index]!.id}>{index > 0 && points[index - 1] && <polyline points={`${points[index - 1]} ${point}`} className={styles.curve} />}<circle cx={point.split(',')[0]} cy={point.split(',')[1]} r="3"><title>{plotted[index]!.fields.title}：{plotted[index]!.fields.tension}</title></circle></g>)}</svg><p>分值和阈值仅供作者判断，不影响写作或定稿。</p></figure>}
-          {rhythmWarnings.length > 0 && <ul className={styles.note}>{rhythmWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
-        </>}</section>
+            </div>
+          </details>}
+        </section>
+        <section className={styles.chapterBoard} aria-label="本卷章纲卡片">
+          <div className={styles.editorHeading}><h3>{volumeNode ? '本卷章纲' : '章节大纲'}</h3><small>{volumeChapters.length} 章</small></div>
+          {volumeChapters.length ? <div className={styles.chapterCards}>{volumeChapters.slice(visibleChapterPage * 18, (visibleChapterPage + 1) * 18).map((item) => <article key={item.id} className={styles.chapterCard} data-selected={item.id === selectedId}>
+            <button type="button" className={styles.chapterSelect} disabled={blocked} onClick={() => selectNode(item, true)}><StudioIcon name={item.locked ? 'lock' : 'spark'} size={20} /><small>第 {item.position + 1} 章</small><strong>{item.fields.title}</strong><span data-state={item.stale ? 'stale' : item.locked ? 'locked' : 'ready'}>{item.stale ? '待复核' : item.locked ? '已锁定' : item.manual ? '作者手改' : '生成计划'}</span></button>
+            <button type="button" className={styles.chapterWrite} disabled={blocked || outlineDirty || proposalDirty} title="进入本章写作" onClick={() => onNavigate(item.id)}><StudioIcon name="pen" size={16} />写作</button>
+          </article>)}</div> : <div className={styles.empty}><StudioIcon name="list" size={32} /><p>尚无章纲。可先填写总纲，再选择参考章节补纲。</p><button type="button" className={shared.button} onClick={() => generationPanel.current?.scrollIntoView({ block: 'nearest' })}>前往 AI 续推</button></div>}
+          {chapterPages > 1 && <div className={styles.actions}><button type="button" className={shared.button} disabled={visibleChapterPage === 0} onClick={() => setChapterPage(visibleChapterPage - 1)}>上一页</button><small>{visibleChapterPage + 1} / {chapterPages}</small><button type="button" className={shared.button} disabled={visibleChapterPage + 1 === chapterPages} onClick={() => setChapterPage(visibleChapterPage + 1)}>下一页</button></div>}
+        </section>
       </div> : <section className={styles.memoryList}><div><h2>定稿记忆归档与来源</h2><p>摘要、事件和状态由作者确认后发布。修改来源后会提示待复核，旧批次保留。正文陈述、人物信念与模型推断分别核对。</p></div>
         <div className={styles.fieldGrid}><label>归档章节<select value={memoryChapterId} onChange={(event) => setMemoryChapterId(event.target.value)}><option value="">全部已加载章节</option>{book.chapters.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label>批次状态<select value={memoryState} onChange={(event) => setMemoryState(event.target.value as typeof memoryState)}><option value="all">全部状态</option><option value="published">当前有效</option><option value="stale">待复核</option><option value="superseded">历史批次</option></select></label><label>事件与状态性质<select value={memoryNature} onChange={(event) => setMemoryNature(event.target.value as typeof memoryNature)}><option value="all">全部性质及摘要</option>{Object.entries(natureLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
         <div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={() => void readArchive()}>查询所选章节的全部归档</button>
@@ -327,7 +374,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         {!archiveCurrent && <p className={styles.note}>默认载入最近 {snapshot.memories.length} 个批次，共 {snapshot.memoryTotal} 个；查询所选章节可分页读取更早批次。</p>}
       </section>}
 
-      <section className={styles.generation}><div className={styles.editorHeading}><div><h2>让 AI 推进下一步</h2><p>先固定来源和范围，再确认发送；生成结果经审阅后采纳。</p></div><button type="button" className={shared.button} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={onConfigure}>模型配置与副驾驶</button></div>
+      <section ref={generationPanel} className={styles.generation}><div className={styles.editorHeading}><div><h2><StudioIcon name="spark" size={20} />{tab === 'outline' ? 'AI 滚动续推' : '整理定稿记忆'}</h2><p>先固定来源和范围，再确认发送；生成结果经审阅后采纳。</p></div><button type="button" className={shared.button} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={onConfigure}>模型配置与副驾驶</button></div>
         <div className={styles.fieldGrid}><label>本次任务<select value={kind} disabled={blocked} onChange={(event) => editRequest(() => setKind(event.target.value as LivingKind))}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>模型连接<select value={connectionId} disabled={blocked} onChange={(event) => editRequest(() => setConnectionId(event.target.value))}><option value="">请选择已保存连接</option>{connections.map((connection) => <option value={connection.id} key={connection.id}>{connection.name} · {connection.model}</option>)}</select></label></div>
         <div className={styles.fieldGrid}><label>{kind === 'memory' ? '固定定稿章节' : '当前参考章节'}<select value={anchorId} disabled={blocked} onChange={(event) => editRequest(() => setAnchorId(event.target.value))}><option value="">请选择章节</option>{book.chapters.map((item) => <option key={item.id} value={item.id}>{item.position + 1}. {item.title}{item.status === 'finalized' ? ' · 已定稿' : ''}</option>)}</select></label>{kind === 'expand' && <label>末章后新增章纲数量<select value={count} disabled={blocked} onChange={(event) => editRequest(() => setCount(Number(event.target.value)))}>{[1, 2, 3].map((value) => <option key={value} value={value}>{value} 章</option>)}</select></label>}</div>
         {kind === 'rebase' && <fieldset className={styles.range}><legend>明确本次修纲范围（最多十章）</legend>{chapterNodes.map((item) => {
@@ -347,7 +394,8 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         {proposal?.kind === 'memory' && <><label>本章摘要<textarea rows={4} value={proposal.summary.text} maxLength={8000} disabled={!editableProposal} onChange={(event) => editProposal({ ...proposal, summary: { ...proposal.summary, text: event.target.value } })} /></label><p className={styles.note}>摘要作为整理资料保存。下方事件和状态可修改性质、编辑说明或取消采用，引文保持原样。</p>
           {proposal.events.map((event, index) => <fieldset className={styles.reviewItem} key={`event-${index}`}><legend>{event.title}</legend><select aria-label={`${event.title}的知识性质`} value={event.nature} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, events: proposal.events.map((item, at) => at === index ? { ...item, nature: value.target.value as typeof event.nature } : item) })}>{Object.entries(natureLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><textarea aria-label={`${event.title}的说明`} value={event.text} rows={3} maxLength={8000} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, events: proposal.events.map((item, at) => at === index ? { ...item, text: value.target.value } : item) })} />{event.citations.map((citation, at) => <blockquote key={at}>{citation.quote}</blockquote>)}<button type="button" className={shared.button} disabled={!editableProposal} onClick={() => editProposal({ ...proposal, events: proposal.events.filter((_, at) => at !== index) })}>本次不采用此事件</button></fieldset>)}
           {proposal.states.map((state, index) => <fieldset className={styles.reviewItem} key={`state-${index}`}><legend>{snapshot.entities.find((entity) => entity.id === state.entityId)?.name ?? state.entityId} · {state.attribute}</legend><select aria-label={`${state.attribute}的知识性质`} value={state.nature} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, states: proposal.states.map((item, at) => at === index ? { ...item, nature: value.target.value as typeof state.nature } : item) })}>{Object.entries(natureLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><textarea aria-label={`${state.attribute}的说明`} value={state.text} rows={3} maxLength={8000} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, states: proposal.states.map((item, at) => at === index ? { ...item, text: value.target.value } : item) })} />{state.citations.map((citation, at) => <blockquote key={at}>{citation.quote}</blockquote>)}<button type="button" className={shared.button} disabled={!editableProposal} onClick={() => editProposal({ ...proposal, states: proposal.states.filter((_, at) => at !== index) })}>本次不采用此状态</button></fieldset>)}</>}
-        {proposal && proposal.kind !== 'memory' && proposal.chapters.map((entry, index) => {
+        {proposal?.kind === 'rebase' && <OutlineRebaseReview proposal={proposal} targets={detail?.targets ?? []} current={snapshot.outlines} sourceTitle={book.chapters.find((item) => item.id === run.chapterId)?.title ?? '固定来源章节'} adopted={detail?.adopted ?? false} disabled={!editableProposal} onChange={editProposal} />}
+        {proposal?.kind === 'expand' && proposal.chapters.map((entry, index) => {
           const original = detail?.targets.find((item) => item.id === entry.chapterId)
           return <section className={styles.outlineDiff} key={entry.chapterId ?? index}>
             <h3>{entry.chapterId ? `修整：${original?.fields.title ?? ''}` : `新增章纲 ${index + 1}`}</h3>
@@ -358,11 +406,103 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
             </div>
           </section>
         })}
-        {proposal && run.state === 'succeeded' && !detail?.adopted && <button type="button" className={shared.primaryButton} disabled={!editableProposal || outlineDirty} onClick={() => void adopt()}>{proposal.kind === 'memory' ? '确认发布所选记忆' : '确认采纳本次章纲'}</button>}
+        {proposal && run.state === 'succeeded' && !detail?.adopted && <div className={styles.adoptBar}><button type="button" className={shared.primaryButton} disabled={!editableProposal || outlineDirty} onClick={() => proposal.kind === 'memory' ? void adopt() : setConfirmAdopt(true)}><StudioIcon name="check" size={20} />{proposal.kind === 'memory' ? '确认发布所选记忆' : `采纳 ${proposal.chapters.length} 项章纲`}</button>{proposal.kind === 'rebase' && <button type="button" className={shared.button} disabled={blocked} onClick={() => { setReviewingRebase(false); window.requestAnimationFrame(() => generationPanel.current?.scrollIntoView({ block: 'start' })) }}>返回核对手改与修纲范围</button>}<span>作品修订 {snapshot.bookRevision} · 提案修订 {run.version}</span></div>}
         <details open={run.state === 'running' || Boolean(detail?.parseError)}><summary>保留的模型原始输出（{run.outputText.length.toLocaleString()} 字符）</summary><pre>{run.outputText || '等待模型输出…'}</pre></details>
       </section>}
       {snapshot.runs.length > 0 && <section className={styles.runHistory}><h3>最近的整理与修纲提案</h3>{snapshot.runs.map((item) => <button className={shared.button} type="button" key={item.id} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={() => void refreshRun(item.id)}>{kindLabels[item.kind]} · {item.state} · {displayTime(item.createdAt)}</button>)}</section>}
-    </>}
+    </div>}
+    {confirmAdopt && proposal && proposal.kind !== 'memory' && run && snapshot && <DialogDisplayContext.Provider value="modal"><Dialog title="采纳本次章纲？" onClose={() => setConfirmAdopt(false)} busy={tool.busy}>
+      <div className={styles.section}><p>{proposal.kind === 'expand' ? `将新增 ${proposal.chapters.length} 章。` : `将替换明确选择的 ${proposal.chapters.length} 项章纲；范围外的手改保持原样。`}</p>
+        <p className={styles.note}>作品修订 {snapshot.bookRevision} · 提案修订 {run.version}。采用时继续核对来源、锁定状态和作者授权；版本变化会停止写入。</p>
+        {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
+        <div className={styles.actions}><button type="button" className={shared.button} disabled={tool.busy} onClick={() => setConfirmAdopt(false)}>返回审阅</button><button type="button" className={shared.primaryButton} disabled={!editableProposal || outlineDirty} onClick={() => void adopt()}>确认采纳</button></div>
+      </div>
+    </Dialog></DialogDisplayContext.Provider>}
+  </div>
+}
+
+function OutlineTensionChart({ outlines, disabled, onSelect }: {
+  outlines: LivingOutline[]; disabled: boolean; onSelect: (outline: LivingOutline) => void
+}) {
+  const gradient = useId()
+  const [focusedId, setFocusedId] = useState<string | null>(null)
+  const x = (index: number) => outlines.length < 2 ? 492 : 48 + index * 888 / (outlines.length - 1)
+  const y = (value: number) => 208 - value * 1.68
+  const segments: { node: LivingOutline; x: number; y: number }[][] = []
+  const bands: { start: number; end: number; kind: 'low' | 'high' }[] = []
+  let segment: typeof segments[number] = []
+  // 未评估章纲必须断开曲线；预警范围只覆盖实际连续达到阈值的章节。
+  outlines.forEach((node, index) => {
+    if (node.fields.tension === null) { if (segment.length) segments.push(segment); segment = []; return }
+    segment.push({ node, x: x(index), y: y(node.fields.tension) })
+  })
+  if (segment.length) segments.push(segment)
+  for (const kind of ['low', 'high'] as const) {
+    let start = -1
+    for (let index = 0; index <= outlines.length; index += 1) {
+      const value = outlines[index]?.fields.tension
+      const matches = value !== undefined && value !== null && (kind === 'low' ? value < 50 : value > 85)
+      if (matches && start < 0) start = index
+      if (!matches && start >= 0) {
+        if (index - start >= (kind === 'low' ? 4 : 5)) bands.push({ start, end: index - 1, kind })
+        start = -1
+      }
+    }
+  }
+  const focused = outlines.find((item) => item.id === focusedId)
+  return <figure className={styles.rhythm}>
+    <figcaption><span><StudioIcon name="spark" size={20} />大纲沙盘</span><small>本卷最近 {outlines.length} 章 · 紧张度 0–100</small></figcaption>
+    {outlines.length ? <svg viewBox="0 0 960 244" role="group" aria-label="章节紧张度曲线，选择节点编辑对应章纲">
+      <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1"><stop offset="0" className={styles.curveFillTop} /><stop offset="1" className={styles.curveFillBottom} /></linearGradient></defs>
+      {bands.map((band) => <g key={`${band.kind}:${band.start}`} className={styles.warningBand} data-kind={band.kind}><rect x={x(band.start)} y="40" width={Math.max(8, x(band.end) - x(band.start))} height="168" /><title>{band.kind === 'low' ? '连续四章以上紧张度低于 50' : '连续五章以上紧张度高于 85'}</title></g>)}
+      {[0, 25, 50, 75, 100].map((value) => <g key={value}><path d={`M48 ${y(value)}H936`} className={styles.gridLines} /><text x="34" y={y(value) + 4} textAnchor="end">{value}</text></g>)}
+      {outlines.map((item, index) => (index === 0 || index === outlines.length - 1 || (index + 1) % 5 === 0) && <g key={item.id}><path d={`M${x(index)} 40V208`} className={styles.gridLines} /><text x={x(index)} y="232" textAnchor="middle">{item.position + 1}</text></g>)}
+      {segments.map((items) => <g key={items[0]!.node.id}>
+        {items.length > 1 && <><polygon points={`${items[0]!.x},208 ${items.map((item) => `${item.x},${item.y}`).join(' ')} ${items.at(-1)!.x},208`} fill={`url(#${gradient})`} /><polyline points={items.map((item) => `${item.x},${item.y}`).join(' ')} className={styles.curve} /></>}
+        {items.map(({ node, x: cx, y: cy }) => <g key={node.id} className={styles.curvePoint} tabIndex={disabled ? -1 : 0} role="button" aria-disabled={disabled} aria-label={`${node.fields.title}，紧张度 ${node.fields.tension}，编辑章纲`} onMouseEnter={() => setFocusedId(node.id)} onMouseLeave={() => setFocusedId(null)} onFocus={() => setFocusedId(node.id)} onBlur={() => setFocusedId(null)} onClick={() => { if (!disabled) onSelect(node) }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(node) } }}>
+          <circle cx={cx} cy={cy} r="16" className={styles.pointTarget} /><circle cx={cx} cy={cy} r={focusedId === node.id ? 5 : 3.5} /><title>{node.fields.title}：{node.fields.tension}</title>
+        </g>)}
+      </g>)}
+    </svg> : <div className={styles.empty}><p>本卷尚无章纲，建立后在这里查看节奏。</p></div>}
+    <div className={styles.rhythmLegend}>{bands.some((band) => band.kind === 'low') && <span data-kind="low">连续 4 章偏低 · 可检查转折</span>}{bands.some((band) => band.kind === 'high') && <span data-kind="high">连续 5 章偏高 · 可检查缓冲</span>}<small aria-live="polite">{focused ? `${focused.fields.title} · 紧张度 ${focused.fields.tension}` : '空值保持未评估；分值仅供作者判断'}</small></div>
+  </figure>
+}
+
+const outlineFieldLabels = { title: '标题', summary: '大纲内容', goal: '目标', conflict: '核心冲突', hook: '章末悬念', tension: '紧张度', beats: '场景节拍', beatSource: '节拍来源' } as const
+function outlineFieldText(value: OutlineFields[keyof OutlineFields]) {
+  if (value === null || value === undefined || value === '') return '尚未填写'
+  if (Array.isArray(value)) return value.map((item) => `${item.title}：${item.action} → ${item.outcome}`).join('\n') || '尚未填写'
+  return typeof value === 'object' ? value.title : String(value)
+}
+
+function OutlineRebaseReview({ proposal, targets, current, sourceTitle, adopted, disabled, onChange }: {
+  proposal: OutlineProposal; targets: LivingOutline[]; current: LivingOutline[]; sourceTitle: string
+  adopted: boolean; disabled: boolean; onChange: (proposal: OutlineProposal) => void
+}) {
+  const stale = targets.filter((target) => current.find((item) => item.id === target.id)?.stale)
+  const changes = proposal.chapters.flatMap((entry, index) => {
+    const original = targets.find((item) => item.id === entry.chapterId)
+    return (Object.keys(outlineFieldLabels) as (keyof OutlineFields)[]).map((key) => {
+      const before = original?.fields[key], after = entry.fields[key]
+      return { index, key, before, after, state: same(before, after) ? 'kept' : before === null || before === undefined || before === '' || Array.isArray(before) && before.length === 0 ? 'added' : 'changed' }
+    })
+  })
+  return <div className={styles.rebaseReview}>
+    {stale.length > 0 && <div className={styles.rebaseBanner} role="status"><StudioIcon name="bolt" size={24} /><div><strong>上游来源变更 · 受影响章纲 {stale.length} 条</strong><p>{[...new Set(stale.map((item) => current.find((value) => value.id === item.id)?.staleReason).filter(Boolean))].join('；')}</p></div></div>}
+    <div className={styles.rebaseColumns}>
+      <section className={styles.rebaseCurrent}><h3><StudioIcon name="spark" size={20} />当前章纲</h3>{proposal.chapters.map((entry, index) => {
+        const original = targets.find((item) => item.id === entry.chapterId)
+        const live = current.find((item) => item.id === entry.chapterId)
+        return <article key={entry.chapterId ?? index}><header><strong>{original?.fields.title ?? `章纲 ${index + 1}`}</strong>{original?.manual && <span className={styles.manualBadge}>作者手改</span>}</header>{!adopted && live && original && live.version !== original.version && <p className={styles.warning}>当前版本 {live.version} 与固定预览版本 {original.version} 不同，请重新准备预览。</p>}<p>{original?.fields.summary || '尚未填写大纲内容'}</p>{original && <details><summary>固定原章纲 · 修订 {original.version}</summary><dl>{(Object.keys(outlineFieldLabels) as (keyof OutlineFields)[]).map((key) => <div key={key}><dt>{outlineFieldLabels[key]}</dt><dd>{outlineFieldText(original.fields[key])}</dd></div>)}</dl></details>}</article>
+      })}</section>
+      <section className={styles.rebaseChanges}><h3><StudioIcon name="workflow" size={20} />差异清单</h3>{changes.map((change) => <article key={`${change.index}:${change.key}`} data-change={change.state}>
+        <div><span className={styles.changeSymbol} aria-hidden="true">{change.state === 'added' ? '+' : change.state === 'kept' ? '=' : '~'}</span><strong>{change.state === 'added' ? '新增' : change.state === 'kept' ? '保留' : '修改'}：{outlineFieldLabels[change.key]}</strong></div><p>{outlineFieldText(change.after)}</p><small>{proposal.chapters[change.index]!.fields.title} · 来源：{sourceTitle}</small>
+      </article>)}</section>
+      <section className={styles.rebaseProposal}><h3><StudioIcon name="spark" size={20} />AI 修纲提案</h3>{proposal.chapters.map((entry, index) => <article key={entry.chapterId ?? index}>
+        <strong>{entry.fields.title}</strong><p>{entry.fields.summary || '尚未填写大纲内容'}</p><details><summary>审阅并编辑完整提案</summary><div className={styles.section}><OutlineFieldsEditor fields={entry.fields} chapter disabled={disabled} onChange={(fields) => onChange({ ...proposal, chapters: proposal.chapters.map((item, at) => at === index ? { ...item, fields } : item) })} /></div></details>
+      </article>)}</section>
+    </div>
+    <p className={styles.note}>手改章纲只有在本次请求范围内逐章授权后才允许替换。需要保留某章时，返回调整范围并重新预览；未采纳前不会改写当前章纲。</p>
   </div>
 }
 
@@ -371,10 +511,10 @@ function OutlineFieldsEditor({ fields, chapter, disabled, onChange }: {
 }) {
   return <>
     <label>标题<input value={fields.title} maxLength={120} disabled={disabled} onChange={(event) => onChange({ ...fields, title: event.target.value })} /></label>
-    <label>大纲内容<textarea value={fields.summary} maxLength={16000} rows={5} disabled={disabled} placeholder="写下推进方向、转折与收束。计划可以随正文变化。" onChange={(event) => onChange({ ...fields, summary: event.target.value })} /></label>
+    <div className={styles.fieldGrid}><label>大纲内容<textarea value={fields.summary} maxLength={16000} rows={5} disabled={disabled} placeholder="写下推进方向、转折与收束。计划可以随正文变化。" onChange={(event) => onChange({ ...fields, summary: event.target.value })} /></label>
     <label>目标<textarea value={fields.goal} maxLength={10000} rows={3} disabled={disabled} onChange={(event) => onChange({ ...fields, goal: event.target.value })} /></label>
     <label>核心冲突<textarea value={fields.conflict} maxLength={2000} rows={3} disabled={disabled} onChange={(event) => onChange({ ...fields, conflict: event.target.value })} /></label>
-    <label>{chapter ? '章末悬念' : '高潮与收束方向'}<textarea value={fields.hook} maxLength={2000} rows={3} disabled={disabled} onChange={(event) => onChange({ ...fields, hook: event.target.value })} /></label>
+    <label>{chapter ? '章末悬念' : '高潮与收束方向'}<textarea value={fields.hook} maxLength={2000} rows={3} disabled={disabled} onChange={(event) => onChange({ ...fields, hook: event.target.value })} /></label></div>
     {chapter && <>
       <label className={styles.tension}>紧张度（留空表示未评估）<input type="number" min={0} max={100} step={1} value={fields.tension ?? ''} disabled={disabled} onChange={(event) => onChange({ ...fields, tension: event.target.value === '' ? null : Number(event.target.value) })} /></label>
       <div className={styles.beatsHeading}><h3>场景节拍</h3><button className={shared.button} type="button" disabled={disabled || fields.beats.length >= 6} onClick={() => onChange({ ...fields, beats: [...fields.beats, { title: `节拍 ${fields.beats.length + 1}`, action: '', outcome: '' }] })}>添加节拍</button></div>

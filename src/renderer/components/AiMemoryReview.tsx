@@ -1,13 +1,19 @@
-import { useMemo } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { DomainError, type StudioApi } from '../../contracts/api'
-import { isAiMemoryTask, parseAiMemoryProposal, type AiMemoryCitation, type AiMemoryProposal, type AiMemoryReviewAction, type AiMemoryReviewEntry, type AiRun } from '../../contracts/ai'
+import { isAiMemoryTask, parseAiMemoryAdoptInput, parseAiMemoryProposal, type AiMemoryCitation, type AiMemoryProposal, type AiMemoryReviewAction, type AiMemoryReviewEntry, type AiRun } from '../../contracts/ai'
 import { CONFLICT_STATES, KNOWLEDGE_KINDS, parseKnowledgeFields, type ConflictState, type KnowledgeItemDetail, type KnowledgeItemFields, type KnowledgeKind, type KnowledgeNature } from '../../contracts/knowledge'
 import { AiMemoryTargetPicker } from './AiMemoryTargetPicker'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './AiPanel.module.css'
+import { StudioIcon } from './StudioIcon'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarAi.module.css'
+import archive from './StellarArchive.module.css'
 
 export interface AiMemoryDraft extends AiMemoryReviewEntry { selected: boolean; targetSnapshot?: KnowledgeItemFields }
+type ArchiveConfirmation = { kind: 'close' } | {
+  kind: 'adopt'; version: number; contextHash: string; outputText: string; drafts: AiMemoryDraft[]
+}
 
 export function aiMemoryReviewEntries(drafts: AiMemoryDraft[]): AiMemoryReviewEntry[] {
   return drafts.filter((draft) => draft.selected).map(({ selected: _selected, targetSnapshot: _targetSnapshot, ...entry }) => entry)
@@ -18,12 +24,13 @@ interface Props {
   run: AiRun
   drafts: AiMemoryDraft[]
   disabled: boolean
+  error?: string | null
   onChange: (drafts: AiMemoryDraft[]) => void
-  onAdopt: () => void
+  onAdopt: () => Promise<void>
 }
 
 const kindLabels: Record<KnowledgeKind, string> = { person: '人物', place: '地点', organization: '组织', object: '物品', rule: '世界规则', theme: '主题', other: '其他' }
-const natureLabels: Record<KnowledgeNature, string> = { author_setting: '作者设定', future_plan: '未来计划', narrative_claim: '正文陈述', character_belief: '人物认知', ai_derived: 'AI 整理', ai_inference: 'AI 推断', external_reference: '外部参考' }
+const natureLabels: Record<KnowledgeNature, string> = { author_setting: '作者设定', future_plan: '未来计划', narrative_claim: '正文陈述', character_belief: '角色信念', ai_derived: 'AI 整理', ai_inference: '模型推断', external_reference: '外部参考' }
 const conflictLabels: Record<ConflictState, string> = { unchecked: '未检查冲突', clear: '作者未发现已知冲突', candidate: '存在候选冲突', explained: '作者已解释冲突' }
 const actionLabels: Record<AiMemoryReviewAction, string> = { create: '新建知识条目', link: '关联已有实体，仅追加来源', revise: '修订已有实体并追加来源', ignore: '忽略本条提议' }
 
@@ -44,7 +51,53 @@ function FixedCitations({ citations }: { citations: AiMemoryCitation[] }) {
   </>
 }
 
-export function AiMemoryReview({ api, run, drafts, disabled, onChange, onAdopt }: Props) {
+export function AiMemoryReview(props: Props) {
+  return <AiMemoryReviewSession key={props.run.id} {...props} />
+}
+
+function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, onAdopt }: Props) {
+  const [open, setOpen] = useState(['succeeded', 'adopted'].includes(run.state))
+  const [confirmation, setConfirmation] = useState<ArchiveConfirmation | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const dialog = useRef<HTMLDialogElement>(null)
+  const launcher = useRef<HTMLButtonElement>(null)
+  const confirmationButton = useRef<HTMLButtonElement>(null)
+  const confirmationTrigger = useRef<HTMLElement | null>(null)
+  const wasConfirming = useRef(false)
+  const submitLock = useRef(false)
+  const headingId = useId(), confirmationId = useId(), validationId = useId()
+  const drawerMode = ['succeeded', 'adopted'].includes(run.state)
+  useEffect(() => {
+    if (run.state === 'succeeded') setOpen(true)
+  }, [run.state])
+  useEffect(() => {
+    if (!open || !drawerMode) return
+    const element = dialog.current
+    if (!element) return
+    element.showModal()
+    return () => {
+      if (element.open) element.close()
+      if (launcher.current?.isConnected) launcher.current.focus({ preventScroll: true })
+    }
+  }, [open, drawerMode])
+  useEffect(() => {
+    if (confirmation) confirmationButton.current?.focus({ preventScroll: true })
+    else if (wasConfirming.current) {
+      const trigger = confirmationTrigger.current
+      if (trigger?.isConnected && !trigger.matches(':disabled')) trigger.focus({ preventScroll: true })
+      else {
+        const close = dialog.current?.querySelector<HTMLButtonElement>('[data-archive-close]:not(:disabled)')
+        const fallback = close ?? dialog.current?.querySelector<HTMLHeadingElement>('h2')
+        fallback?.focus({ preventScroll: true })
+      }
+      confirmationTrigger.current = null
+    }
+    wasConfirming.current = confirmation !== null
+  }, [confirmation])
+  useEffect(() => {
+    // 候选、版本或可写状态变化后必须重新确认，不能提交旧摘要对应的决定。
+    setConfirmation((value) => value?.kind === 'adopt' ? null : value)
+  }, [run.version, run.context.contextHash, run.outputText, drafts, disabled])
   const parsed = useMemo<{ proposal: AiMemoryProposal | null; error: string | null }>(() => {
     if (run.state !== 'succeeded') return { proposal: null, error: null }
     // 证据只从原始输出和固定上下文解析，作者字段编辑不能重写引文。
@@ -62,10 +115,43 @@ export function AiMemoryReview({ api, run, drafts, disabled, onChange, onAdopt }
         draft.fields.authorDecision === 'adopted' && draft.fields.freshness === 'current')) &&
         (run.kind !== 'summarize' || draft.fields.kind === 'other')
     })
-  const editable = run.state === 'succeeded' && matchingDrafts && !disabled
+  const editable = run.state === 'succeeded' && matchingDrafts && !disabled && !submitting
   const selectedCount = matchingDrafts ? drafts.filter((draft) => draft.selected).length : 0
   const missingTarget = drafts.some((draft) => draft.selected && (draft.action === 'link' || draft.action === 'revise') &&
     (!draft.targetItemId || !draft.expectedTargetRevisionId || !draft.targetSnapshot))
+  const decisionCounts = { create: 0, link: 0, revise: 0, ignore: 0 }
+  for (const draft of drafts) if (draft.selected) decisionCounts[draft.action ?? 'create'] += 1
+  let decisionError: string | undefined
+  if (matchingDrafts && selectedCount && !missingTarget) {
+    // 复用正式提交合同，重复目标、空字段和超限内容不能进入确认后才报错。
+    try { parseAiMemoryAdoptInput({ bookId: run.bookId, runId: run.id, expectedVersion: run.version, entries: aiMemoryReviewEntries(drafts) }) }
+    catch (cause) { decisionError = cause instanceof DomainError ? cause.detail.message : '请核对所选条目的字段与作者决定。' }
+  }
+  const archiveReason = submitting ? '正在保存作者决定' : disabled ? '当前候选不可提交，请收起后核对面板状态'
+    : !matchingDrafts ? '审阅草稿与原提议不匹配' : !selectedCount ? '请先勾选需要归档的候选'
+      : missingTarget ? '请先为关联或修订决定选择目标实体' : decisionError
+  function requestConfirmation(kind: 'close' | 'adopt') {
+    confirmationTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setConfirmation(kind === 'close' ? { kind } : { kind, version: run.version,
+      contextHash: run.context.contextHash, outputText: run.outputText, drafts })
+  }
+  function requestClose() {
+    if (submitLock.current) return
+    if (run.state === 'succeeded') requestConfirmation('close')
+    else setOpen(false)
+  }
+  function keepReviewing() {
+    setConfirmation(null)
+  }
+  async function confirmArchive() {
+    if (submitLock.current || !editable || archiveReason || confirmation?.kind !== 'adopt') return
+    // 确认仅授权当时的候选和整份草稿；异步换稿或重新勾选后必须再次确认。
+    if (confirmation.version !== run.version || confirmation.contextHash !== run.context.contextHash ||
+      confirmation.outputText !== run.outputText || confirmation.drafts !== drafts) { setConfirmation(null); return }
+    submitLock.current = true; setSubmitting(true); setConfirmation(null)
+    try { await onAdopt() }
+    finally { submitLock.current = false; setSubmitting(false) }
+  }
 
   function update(sourceIndex: number, patch: Partial<Pick<KnowledgeItemFields, 'kind' | 'name' | 'aliases' | 'summary' | 'conflictState'>>) {
     if (!editable) return
@@ -95,25 +181,31 @@ export function AiMemoryReview({ api, run, drafts, disabled, onChange, onAdopt }
     }))
   }
 
-  return <section className={styles.output} aria-label={run.kind === 'summarize' ? '章节摘要审阅' : '章节知识抽取审阅'}>
-    <div className={styles.heading}><h3>{run.kind === 'summarize' ? '章节摘要' : '知识抽取'} · 作者审阅</h3>
-      {run.state === 'succeeded' && proposal && <span>已选择 {selectedCount} / {proposal.items.length} 条</span>}
-      {run.state === 'adopted' && <span>采用时的固定记录</span>}
-    </div>
-    <p className={layout.sourceIds}>《{run.context.chapterTitle}》 · 章节 {run.context.chapterId}<br />固定正文修订 {run.context.chapterRevisionId}</p>
+  const content = <>
     {parsed.error && <p className={shared.formError} role="alert">{parsed.error} 原模型输出保留在下方；本次结果不能直接采用。</p>}
     {run.state === 'succeeded' && proposal && <>
-      <p className={styles.note}>逐条核对内容与引文，再选择要保存的条目。采用只表示作者决定保存，冲突默认仍为“未检查”；正文陈述、人物认知与 AI 推断保留各自性质。</p>
       {!matchingDrafts && <p className={shared.formError} role="alert">审阅草稿与原提议不匹配，请重新读取这次提议。原输出仍保留。</p>}
       {proposal.items.length === 0 && <p className={styles.note}>本次未抽取到条目，原输出已保留。可以调整创作要求后，另建一次预览。</p>}
-      {matchingDrafts && proposal.items.map((item, sourceIndex) => {
+      <div className={archive.candidates}>{matchingDrafts && proposal.items.map((item, sourceIndex) => {
         const draft = drafts.find((entry) => entry.sourceIndex === sourceIndex)!
         const fields = draft.fields
         const existing = draft.action === 'link' || draft.action === 'revise'
         const fieldsDisabled = !editable || draft.action === 'link' || draft.action === 'ignore' || (existing && !draft.targetItemId)
-        return <section className={styles.composer} key={sourceIndex} aria-label={`审阅第 ${sourceIndex + 1} 条`}>
-          <label className={shared.checkLabel}><input type="checkbox" checked={draft.selected} disabled={!editable} onChange={(event) => select(sourceIndex, event.target.checked)} /><span>选择第 {sourceIndex + 1} 条 · {fields.name || '尚未填写名称'}</span></label>
-          <div className={layout.labels}><span>{natureLabels[item.nature]}</span><span>{conflictLabels[fields.conflictState]}</span></div>
+        const citation = item.citations[0]
+        const blockPosition = citation ? run.context.chapterBlocks.findIndex((block) => block.blockId === citation.blockId) + 1 : 0
+        return <section className={archive.candidate} data-selected={draft.selected} key={sourceIndex} aria-label={`审阅第 ${sourceIndex + 1} 条`}>
+          <label className={archive.checkbox}><input type="checkbox" checked={draft.selected} disabled={!editable}
+            aria-label={`选择第 ${sourceIndex + 1} 条 · ${fields.name || '尚未填写名称'}`} onChange={(event) => select(sourceIndex, event.target.checked)} /><StudioIcon name="check" size={16} /></label>
+          <details className={archive.candidateDetails}>
+            <summary aria-label={`改判与详情：${fields.name || `第 ${sourceIndex + 1} 条`}`}>
+              <span className={archive.nature} data-nature={item.nature}>{natureLabels[item.nature]}</span>
+              <span className={archive.candidateText}><strong>{fields.name || '尚未填写名称'}{fields.summary && `：${fields.summary}`}</strong>
+                <span title={citation?.quote}>{citation ? `原文：“${citation.quote}”` : '尚无固定正文引文'}{blockPosition > 0 ? ` · 第 ${blockPosition} 段` : ''}{item.citations.length > 1 ? ` · 共 ${item.citations.length} 处` : ''}</span>
+              </span>
+              <StudioIcon name="chevron" size={20} />
+            </summary>
+            <div className={archive.candidateEditor}>
+          <div className={layout.labels}><span>{kindLabels[fields.kind]}</span><span>{conflictLabels[fields.conflictState]}</span><span>{actionLabels[draft.action ?? 'create']}</span></div>
           {run.kind === 'extract' && <label>作者决定<select value={draft.action ?? 'create'} disabled={!editable}
             onChange={(event) => chooseAction(sourceIndex, event.target.value as AiMemoryReviewAction)}>{Object.entries(actionLabels).map(([action, label]) => <option key={action} value={action}>{label}</option>)}</select></label>}
           {existing && <>
@@ -143,10 +235,14 @@ export function AiMemoryReview({ api, run, drafts, disabled, onChange, onAdopt }
             <label>冲突状态<select value={fields.conflictState} disabled={fieldsDisabled} onChange={(event) => update(sourceIndex, { conflictState: event.target.value as ConflictState })}>{CONFLICT_STATES.map((state) => <option value={state} key={state}>{conflictLabels[state]}</option>)}</select></label>
           </div>
           <FixedCitations citations={item.citations} />
+            </div>
+          </details>
         </section>
-      })}
-      <p className={styles.note}>一次提交所选决定，忽略项只记入审阅历史。每份候选只能提交一次；确认前请完成全部选择与修改。同批关联同一实体时，请合并内容并忽略重复提议。</p>
-      <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={!editable || selectedCount === 0 || missingTarget} onClick={onAdopt}>确认并保存 {selectedCount} 项决定</button></div>
+      })}</div>
+      <details className={archive.reviewNotes}><summary>审阅口径与固定来源 · 已选择 {selectedCount} / {proposal.items.length} 条</summary>
+        <p>采用表示作者决定保存，冲突默认仍为“未检查”；正文陈述、人物认知与 AI 推断保留原性质。忽略只记入审阅历史。同批关联同一实体时，请合并内容并忽略重复提议。</p>
+        <p className={layout.sourceIds}>章节 {run.context.chapterId}<br />固定正文修订 {run.context.chapterRevisionId}</p>
+      </details>
     </>}
     {run.state === 'adopted' && <>
       <p className={styles.note}>以下内容是本次采用时保存的快照。知识库之后的修改不会改变这里的历史记录。</p>
@@ -169,5 +265,41 @@ export function AiMemoryReview({ api, run, drafts, disabled, onChange, onAdopt }
       <summary>原模型输出 · 只读 · {run.outputText.length.toLocaleString()} 字符</summary><pre>{run.outputText || '尚无输出。'}</pre>
     </details>
     {run.usage && <p className={styles.note}>接口返回用量：输入 {run.usage.inputTokens ?? '未知'} · 输出 {run.usage.outputTokens ?? '未知'} · 总计 {run.usage.totalTokens ?? '未知'} tokens{run.finishReason ? ` · 结束原因 ${run.finishReason}` : ''}</p>}
+  </>
+  return <section className={styles.output} aria-label={run.kind === 'summarize' ? '章节摘要审阅' : '章节知识抽取审阅'}>
+    <div className={styles.heading}><h3>本章记忆归档</h3><span>{run.state === 'adopted' ? '采用时的固定记录' : proposal ? `已选择 ${selectedCount} / ${proposal.items.length} 条` : '作者审阅'}</span></div>
+    <p className={layout.sourceIds}>《{run.context.chapterTitle}》</p>
+    {drawerMode ? <>
+      <button ref={launcher} type="button" className={shared.button} onClick={() => { setConfirmation(null); setOpen(true) }}>
+        <StudioIcon name="spark" />{run.state === 'adopted' ? '查看本章归档记录' : '审阅本章记忆候选'}
+      </button>
+      {open && createPortal(<dialog ref={dialog} className={archive.drawer} aria-labelledby={headingId}
+        onCancel={(event) => { event.preventDefault(); event.stopPropagation(); if (!submitLock.current) confirmation ? keepReviewing() : requestClose() }}>
+        <header className={archive.header} inert={confirmation !== null}><StudioIcon name="spark" size={28} /><h2 id={headingId} tabIndex={-1} title={`${run.context.chapterTitle} · 本章记忆归档`}>{run.context.chapterTitle} · 本章记忆归档</h2>
+          <button type="button" data-archive-close className={archive.closeButton} disabled={submitting} aria-label="收起本章记忆归档" title="收起本章记忆归档" onClick={requestClose}><StudioIcon name="close" size={24} /></button>
+        </header>
+        {error && <p className={archive.error} role="alert">{error}</p>}
+        {decisionError && decisionError !== error && <p id={validationId} className={archive.error} role="status">{decisionError}</p>}
+        <div className={archive.body} inert={confirmation !== null || submitting}>{content}</div>
+        {confirmation && <section className={archive.confirmation} role="alertdialog" aria-labelledby={confirmationId}>
+          <h3 id={confirmationId}>{confirmation.kind === 'close' ? '收起本章记忆归档？' : `确认提交 ${selectedCount} 项作者决定？`}</h3>
+          {confirmation.kind === 'close' ? <p>当前勾选与修改保留在本页，尚未提交的决定不会写入设定库。</p> : <>
+            <p>新建 {decisionCounts.create} · 关联 {decisionCounts.link} · 修订 {decisionCounts.revise} · 忽略 {decisionCounts.ignore}</p>
+            <p>仅关联会保留原字段；修订会按已编辑内容保存新版本。忽略只记录审阅历史。本次候选只能提交一次。</p>
+          </>}
+          <div className={archive.confirmActions}><button ref={confirmationButton} type="button" className={shared.button} onClick={keepReviewing}>继续审阅</button>
+            <button type="button" className={shared.primaryButton} disabled={submitting || (confirmation.kind === 'adopt' && Boolean(archiveReason))}
+              onClick={() => { if (confirmation.kind === 'close') { setConfirmation(null); setOpen(false) } else void confirmArchive() }}>{confirmation.kind === 'close' ? '保留草稿并收起' : '确认归档'}</button>
+          </div>
+        </section>}
+        <footer className={archive.footer} inert={confirmation !== null}>
+          {run.state === 'succeeded' ? <button type="button" className={archive.archiveButton} disabled={Boolean(archiveReason) || confirmation !== null} title={archiveReason}
+            aria-describedby={decisionError && decisionError !== error ? validationId : undefined}
+            onClick={() => requestConfirmation('adopt')}><StudioIcon name="spark" size={20} />{submitting ? '正在归档…' : '确认归档'}</button>
+            : <button type="button" className={archive.archiveButton} onClick={requestClose}><StudioIcon name="check" size={20} />完成</button>}
+          <span><StudioIcon name="info" size={16} />{run.state === 'adopted' ? '已保留采用时的快照' : '确认前不会改写设定'}</span>
+        </footer>
+      </dialog>, document.body)}
+    </> : content}
   </section>
 }

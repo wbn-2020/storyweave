@@ -1,7 +1,7 @@
 import { useId, useLayoutEffect, useState, type FormEvent } from 'react'
 import type { BookSummary, ChapterSnapshot, ExportBookInput, UpdateBookInput, UpdateChapterInput, VolumeSummary } from '../../contracts/api'
 import { Dialog } from './Dialog'
-import styles from '../App.module.css'
+import styles from '../StellarShared.module.css'
 
 interface Common { busy: boolean; error?: string | null; onClose: () => void }
 interface DetailsRecoveryProps { message: string; checking: boolean; onCheck: () => void; onRecover: () => void }

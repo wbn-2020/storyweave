@@ -58,6 +58,7 @@ export interface ForeshadowRadarItem {
   actualPayoff: Disclosure
   due: RadarDue
   overdueChapters: number | null
+  source: { sourceType: 'chapter_text' | 'author_input' | 'external'; quote: string; referenceState: 'current' | 'historical' | null } | null
 }
 export interface ForeshadowRadarPage extends ControlVersions {
   bookId: string

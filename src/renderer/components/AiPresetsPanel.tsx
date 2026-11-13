@@ -6,7 +6,8 @@ import {
   type AiPreset, type AiPresetFields, type AiPresetKind, type AiPresetsApi, type AiPresetsSnapshot, type SaveAiPresetInput,
 } from '../../contracts/ai-presets'
 import { useToolSession } from './workbench-ui'
-import styles from './AiPresetsPanel.module.css'
+import { StudioIcon, type StudioIconName } from './StudioIcon'
+import styles from './StellarPresets.module.css'
 
 export interface AiPresetsPanelProps {
   api: StudioApi & AiPresetsApi
@@ -25,6 +26,8 @@ export interface AiPresetsPanelProps {
   initialKind?: AiPresetKind
   initialInstruction?: string
   initialConnectionId?: string | null
+  layout?: 'presets' | 'routing'
+  onSummary?: () => void
 }
 
 const labels: Record<AiPresetKind, string> = { plan: '规划', continue: '续写', rewrite: '改写', review: '审稿', study: '拆书' }
@@ -34,7 +37,7 @@ export function AiPresetsPanel(props: AiPresetsPanelProps) {
 }
 
 function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, onApply, onChanged, onUnknown, onRecover,
-  connections, initialTitle, initialKind, initialInstruction, initialConnectionId }: AiPresetsPanelProps) {
+  connections, initialTitle, initialKind, initialInstruction, initialConnectionId, layout = 'presets', onSummary }: AiPresetsPanelProps) {
   const headingId = useId()
   const [snapshot, setSnapshot] = useState<AiPresetsSnapshot | null>(null)
   const [draft, setDraft] = useState<SaveAiPresetInput | null>(null)
@@ -43,6 +46,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const [conflict, setConflict] = useState<AiPresetsSnapshot | null>(null)
   const [showArchived, setShowArchived] = useState(false)
   const [discard, setDiscard] = useState(false)
+  const [defaultConfirmed, setDefaultConfirmed] = useState(false)
   const [syncState, setSyncState] = useState<'idle' | 'needed' | 'busy'>('idle')
   const [syncError, setSyncError] = useState<AppError | null>(null)
   const syncRef = useRef(false)
@@ -60,6 +64,8 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const visible = snapshot?.presets.filter((item) => showArchived || !item.archived) ?? []
   const latest = conflict?.presets.find((item) => item.id === draft?.id)
   const oldDefault = draft && snapshot?.presets.find((item) => item.defaultForTask && item.kind === draft.fields.kind && item.id !== draft.id)
+  const replacingDefault = Boolean(draft?.fields.defaultForTask && oldDefault)
+  const routeIcons: Record<AiPresetKind, StudioIconName> = { plan: 'layers', continue: 'pen', rewrite: 'refresh', review: 'check', study: 'read' }
   const recoveryRecord = JSON.stringify({ version: 1, bookId, bookRevision: snapshot?.bookRevision ?? bookRevision,
     command: AI_PRESETS_COMMANDS.save, requestId: tool.pending?.error.requestId ?? null, input: submitted, draft,
     savedPreset: syncRef.current ? snapshot?.presets.find((item) => item.id === submitted?.id) : undefined, syncError }, null, 2)
@@ -86,20 +92,20 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     if (!tool.canLeave() || syncRef.current) { tool.setError('请先保存、放弃更改或核对原请求，再切换预设。'); return false }
     return true
   }
-  function edit(item?: AiPreset, useCurrent = false) {
+  function edit(item?: AiPreset, useCurrent = false, routeKind?: AiPresetKind) {
     if (blocked || !snapshot || !canSwitch()) return
     if (!item && snapshot.presets.length >= MAX_AI_PRESETS) { tool.setError('本书已达到 200 条预设上限（含归档），可继续编辑已有预设。'); return }
     setDraft({ bookId, expectedBookRevision: snapshot.bookRevision, id: item?.id ?? crypto.randomUUID(), expectedRevision: item?.revision ?? 0,
-      fields: item ? aiPresetFields(item) : { title: useCurrent ? initialTitle ?? '' : '', kind: useCurrent ? initialKind ?? 'continue' : 'continue',
+      fields: item ? aiPresetFields(item) : { title: useCurrent ? initialTitle ?? '' : '', kind: routeKind ?? (useCurrent ? initialKind ?? 'continue' : 'continue'),
         instruction: useCurrent ? initialInstruction ?? '' : '', connectionId: useCurrent ? initialConnectionId ?? null : null,
-        defaultForTask: false, archived: false } })
-    setSubmitted(null); setPreserved(null); setConflict(null); setDiscard(false); tool.setDirty(!item); tool.setError(null); tool.setNotice(null)
+        defaultForTask: Boolean(routeKind), archived: false } })
+    setSubmitted(null); setPreserved(null); setConflict(null); setDiscard(false); setDefaultConfirmed(false); tool.setDirty(!item); tool.setError(null); tool.setNotice(null)
   }
   function change(fields: Partial<AiPresetFields>) {
     if (!draft || tool.locked || syncRef.current) return
     const next = { ...draft, fields: { ...draft.fields, ...fields } }
     const original = snapshot?.presets.find((item) => item.id === next.id)
-    setDraft(next); setSubmitted(null); setPreserved(null); setConflict(null); setDiscard(false)
+    setDraft(next); setSubmitted(null); setPreserved(null); setConflict(null); setDiscard(false); setDefaultConfirmed(false)
     tool.setDirty(!original || JSON.stringify(next.fields) !== JSON.stringify(aiPresetFields(original)))
     tool.setNotice(null)
   }
@@ -148,7 +154,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   }
   async function save(event: FormEvent) {
     event.preventDefault()
-    if (!draft || blocked || !tool.hasChanges() || draft.expectedBookRevision !== snapshot?.bookRevision) return
+    if (!draft || blocked || !tool.hasChanges() || replacingDefault && !defaultConfirmed || draft.expectedBookRevision !== snapshot?.bookRevision) return
     try {
       const input = parseSaveAiPresetInput(draft)
       setSubmitted(input); setPreserved(null); setDiscard(false)
@@ -171,7 +177,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     if (draft.expectedRevision > 0 && !latest) { tool.setError('最新记录中找不到原预设，不能将它当作新预设覆盖，请保留输入并检查作品。'); return }
     receive(conflict)
     setDraft({ ...draft, expectedBookRevision: conflict.bookRevision, expectedRevision: latest?.revision ?? 0 })
-    setConflict(null); tool.setDirty(true); tool.setError(null); tool.setNotice('已沿用当前输入，请再次检查并保存。')
+    setConflict(null); setDefaultConfirmed(false); tool.setDirty(true); tool.setError(null); tool.setNotice('已沿用当前输入，请再次检查并保存。')
   }
   function apply(item: AiPreset) {
     if (blocked || item.archived || !canSwitch()) return
@@ -186,8 +192,10 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     const value = connections?.find((connection) => connection.id === id)
     return value ? `${value.name} · ${value.model}` : `绑定连接 ${id}`
   }
+  const routing = layout === 'routing'
+  const tokenTotal = snapshot ? snapshot.usage.inputTokens + snapshot.usage.outputTokens : 0
 
-  return <section className={styles.panel} aria-labelledby={headingId}>
+  return <section className={styles.panel} aria-labelledby={headingId} data-layout={layout}>
     <header className={styles.heading}><div><h3 id={headingId}>任务预设与用量</h3><p className={styles.muted}>保存这部作品常用的协作要求。应用预设会填入编辑框，由你确认后发送。</p></div>
       <button type="button" className={styles.button} disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => void reload()}>刷新</button></header>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
@@ -203,7 +211,29 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     {externalChange && <p className={styles.warning}>作品已有新版本。当前输入仍保留，可读取最新预设作比较，或处理输入后刷新。</p>}
     {snapshot?.archived && <p className={styles.warning}>作品已归档，任务预设仅供查看。</p>}
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取预设与累计用量…' : '尚未取得任务预设，请点击“刷新”重试。'}</p> : <>
-      <section className={styles.usage} aria-label="本书累计模型用量"><h4>累计用量</h4>
+      {routing && <section className={styles.routing} aria-label="任务路由矩阵">
+        <header className={styles.routeHeading}><h3><StudioIcon name="workflow" size={20} />任务路由矩阵</h3><span>本书默认预设</span></header>
+        <div className={styles.matrixScroll}><table className={styles.matrix}>
+          <thead><tr><th scope="col">任务类型</th>{connections?.map((connection) => <th scope="col" key={connection.id}>{connection.name}<small>{connection.model}</small></th>)}<th scope="col">当前协作连接</th><th scope="col">操作</th></tr></thead>
+          <tbody>{AI_PRESET_KINDS.map((kind) => {
+            const route = snapshot.presets.find((item) => item.kind === kind && item.defaultForTask && !item.archived)
+            const missing = route?.connectionId && !connections?.some((item) => item.id === route.connectionId)
+            return <tr key={kind}><th scope="row"><StudioIcon name={routeIcons[kind]} size={18} />{labels[kind]}</th>
+              {connections?.map((connection) => <td key={connection.id}>{route?.connectionId === connection.id ? <span className={styles.assignment}><i />{connection.model}</span> : <span className={styles.noRoute}>—</span>}</td>)}
+              <td>{!route ? <span className={styles.noRoute}>未设置</span> : missing ? <span className={styles.unavailable}>绑定连接不可用</span> : route.connectionId === null ? <span className={styles.assignment}><i />发送前选择</span> : <span className={styles.noRoute}>—</span>}</td>
+              <td><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty} title={blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={() => edit(route, false, kind)}><StudioIcon name="pen" size={16} /><span>配置</span></button></td>
+            </tr>
+          })}
+            <tr><th scope="row"><StudioIcon name="layers" size={18} />摘要</th><td colSpan={(connections?.length ?? 0) + 1} className={styles.summaryRoute}>在分层汇总任务中选择连接</td><td><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || !onSummary} title={!onSummary ? '当前入口不可用' : '打开全书分层汇总'} onClick={onSummary}><StudioIcon name="chevron" size={16} /><span>查看</span></button></td></tr>
+          </tbody>
+        </table></div>
+      </section>}
+      <section className={styles.usage} aria-label="本书累计模型用量"><h4>{routing && <StudioIcon name="chart" size={20} />}Token 用量统计</h4>
+        {routing && <div className={styles.tokenBars}>
+          <label>输入 Token<meter value={snapshot.usage.inputTokens} max={Math.max(1, tokenTotal)} /><output>{snapshot.usage.inputTokens.toLocaleString()}</output></label>
+          <label>输出 Token<meter value={snapshot.usage.outputTokens} max={Math.max(1, tokenTotal)} /><output>{snapshot.usage.outputTokens.toLocaleString()}</output></label>
+        </div>}
+        <details className={styles.usageDetails} open={!routing}><summary>累计运行与统计口径</summary>
         <dl><div><dt>运行次数</dt><dd>{snapshot.usage.runCount.toLocaleString()}</dd></div>
           <div><dt>已知输入 tokens</dt><dd>{snapshot.usage.inputTokens.toLocaleString()}</dd></div>
           <div><dt>已知输出 tokens</dt><dd>{snapshot.usage.outputTokens.toLocaleString()}</dd></div>
@@ -211,6 +241,8 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
           <div><dt>用量未知或不完整</dt><dd>{snapshot.usage.unknownUsageRuns.toLocaleString()}</dd></div></dl>
         <p className={styles.muted}>输入未知 {snapshot.usage.unknownInputRuns.toLocaleString()} 次，输出未知 {snapshot.usage.unknownOutputRuns.toLocaleString()} 次；两者可能重叠。token 合计仅包含已知部分；未知用量单独计数，不估算费用。</p>
         <p className={styles.muted}>运行次数包含开书与书内协作，以及进入生成流程后失败、中断和仍在生成的记录；未发送的预览不计入，不代表供应商的计费次数。</p>
+        </details>
+        {routing && <p className={styles.muted}>{snapshot.usage.knownUsageRuns.toLocaleString()} 次用量完整，{snapshot.usage.unknownUsageRuns.toLocaleString()} 次用量未知或不完整；仅合计接口已返回的 Token。</p>}
       </section>
       {snapshot.requiresUpgrade ? <p className={styles.warning}>请通过作品工具备份并升级这部作品，再刷新本面板以保存任务预设。</p> : <>
         <div className={styles.actions}><div className={styles.actions}>
@@ -240,10 +272,10 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
           {connections?.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}
         </select></label>
         <label className={styles.check}><input type="checkbox" disabled={draft.fields.archived} checked={draft.fields.defaultForTask} onChange={(event) => change({ defaultForTask: event.target.checked })} />设为{labels[draft.fields.kind]}的首选预设（优先显示，手动填入）</label>
-        {draft.fields.defaultForTask && oldDefault && <p className={styles.muted}>保存后会替换“{oldDefault.title}”的默认状态；两份预设都保留。</p>}
+        {replacingDefault && <label className={styles.check}><input type="checkbox" checked={defaultConfirmed} onChange={(event) => setDefaultConfirmed(event.target.checked)} />确认替换“{oldDefault?.title}”的默认状态；两份预设都保留。</label>}
         <label className={styles.check}><input type="checkbox" checked={draft.fields.archived} onChange={(event) => change({ archived: event.target.checked, defaultForTask: event.target.checked ? false : draft.fields.defaultForTask })} />归档此预设（保留内容与历史）</label>
       </fieldset>
-      <div className={styles.actions}><button className={styles.primaryButton} type="submit" disabled={blocked || !tool.dirty}>保存预设</button>
+      <div className={styles.actions}><button className={styles.primaryButton} type="submit" disabled={blocked || !tool.dirty || replacingDefault && !defaultConfirmed} title={replacingDefault && !defaultConfirmed ? '请先确认默认预设替换' : undefined}>保存预设</button>
         <button type="button" className={styles.button} disabled={tool.locked || syncState !== 'idle'} onClick={() => void compareLatest()}>读取最新版本作比较</button>
         <button type="button" className={styles.button} disabled={tool.locked || syncState !== 'idle'} onClick={closeDraft}>{discard ? '确认放弃当前更改' : tool.dirty ? '放弃更改' : '关闭编辑'}</button></div>
       {discard && <p className={styles.warning}>再次点击将放弃本次未保存的编辑，已有预设不受影响。</p>}

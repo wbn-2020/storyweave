@@ -5,15 +5,16 @@ import { MAX_COGNITION_STATES, STORY_EVOLUTION_SCHEMA_VERSION, STORY_KINDS, cogn
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
 import { blockText, cognitionChangeLabels, initialStoryFields, SourceEditor, stageLabels, StoryFieldsEditor, StoryFieldsView, storyKindLabels, timeLabel } from './StoryFieldsEditor'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './StoryPanel.module.css'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarStory.module.css'
 
 interface Props {
   api: StudioApi
   book: BookSnapshot
   initialKind?: StoryKind
   initialId?: string
+  initialCreate?: boolean
   busy: boolean
   error?: string | null
   pendingMessage?: string | null
@@ -50,7 +51,7 @@ function CognitionHistoryView({ states, currentId, disabled, onSelect }: {
   </section>
 }
 
-export function StoryPanel({ api, book, initialKind = 'relation', initialId, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, scenes }: Props) {
+export function StoryPanel({ api, book, initialKind = 'relation', initialId, initialCreate = false, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, scenes }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusRefresh, setStatusRefresh] = useState(0)
@@ -171,6 +172,11 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, bus
     if (create) setDetail(null)
     setSource(undefined); setHistoryDetail(null); setEvidence(null); setMessage(null); setDirtyState(true)
   }
+  useEffect(() => {
+    if (!initialCreate || initialId || initialOpened.current || !ready || !page || busy || pendingMessage || archived) return
+    initialOpened.current = true
+    beginEdit(true)
+  }, [initialCreate, initialId, ready, page, busy, pendingMessage, archived])
   function beginCognitionChange() {
     if (!mayLeave() || archived || !ready || !detail || detail.fields.kind !== 'cognition') return
     if (!evolutionReady) { setMessage('追加认知变化前，请先在本面板备份升级作品。'); return }
@@ -254,7 +260,7 @@ export function StoryPanel({ api, book, initialKind = 'relation', initialId, bus
     {status && !evolutionReady && <section className={layout.upgrade}><h3>为本书启用计划范围与认知变迁</h3><p>当前作品使用结构版本 {status.schemaVersion}。先保存独立数据库备份并核对，再升级到当前作品格式。已有故事记录仍可查阅；原稿与历史快照保留。</p><label className={`${shared.checkLabel} ${layout.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份，再升级本书结构。</label><button type="button" className={shared.primaryButton} disabled={unavailable || archived || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用新故事记录</button></section>}
     {status?.backupPath && <p className={layout.backupPath}>本次升级前备份：{status.backupPath}</p>}
     {ready && <><nav className={styles.tabs} aria-label="故事记录类型">{STORY_KINDS.map((value) => <button key={value} type="button" aria-pressed={kind === value} disabled={unavailable} onClick={() => switchKind(value)}>{storyKindLabels[value]}</button>)}</nav>
-      <div className={layout.layout}><aside className={layout.listPane} aria-label={`${storyKindLabels[kind]}列表`}>
+      <div className={`${layout.layout} ${styles.layout}`}><aside className={layout.listPane} aria-label={`${storyKindLabels[kind]}列表`}>
         <form className={layout.search} onSubmit={(event) => { event.preventDefault(); if (mayLeave()) { setSearch(query); setOffset(0); setRefresh((value) => value + 1) } }}><label>搜索名称与说明<input value={query} maxLength={200} disabled={unavailable} onChange={(event) => setQuery(event.target.value)} /></label><button className={shared.button} disabled={unavailable || listLoading} type="submit">搜索</button></form>
         <div className={layout.listActions}><button type="button" className={shared.primaryButton} disabled={unavailable || archived || !page} onClick={() => beginEdit(true)}>新建{storyKindLabels[kind]}</button><button type="button" className={shared.button} disabled={unavailable || listLoading} onClick={() => { if (mayLeave()) setRefresh((value) => value + 1) }}>刷新</button></div>
         {kind === 'event' && <p className={styles.listNote}>按作者填写的排序值排列；未指定排序的事件单独标记，不推测故事先后。</p>}

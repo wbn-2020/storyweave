@@ -267,7 +267,7 @@ export function parseAiEndpoint(value: unknown): string {
     invalid('接口须使用 HTTPS；本机地址可用 HTTP。地址中不能包含凭据、查询参数或片段。')
   }
   const base = url.href.replace(/\/+$/, '')
-  if (/\/(chat\/completions|responses|embeddings)$/i.test(base)) invalid('请填写接口基础地址，例如 https://api.example.com/v1。')
+  if (/\/(chat\/completions|images\/generations|responses|embeddings)$/i.test(base)) invalid('请填写接口基础地址，例如 https://api.example.com/v1，不要包含 chat/completions 或 images/generations。')
   return base
 }
 export function parseAiConnectionConfig(value: unknown): AiConnectionConfig {

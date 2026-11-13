@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { BookSummary, DraftImportPreview, RecoveryDraftList, StudioApi } from '../../contracts/api'
 import { request } from '../request'
 import { Dialog } from './Dialog'
-import styles from '../App.module.css'
+import styles from '../StellarShared.module.css'
 
 interface Props {
   api: StudioApi

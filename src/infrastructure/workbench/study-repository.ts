@@ -1,9 +1,11 @@
 import type Database from 'better-sqlite3'
 import { DomainError } from '../../contracts/api'
 import { parseInspirationFields, type InspirationFields, type InspirationItem } from '../../contracts/workbench'
-import { parseStudyAdoptInput, parseStudyProposal, studyInspirationFields, type StudyAdoptInput, type StudyAdoptReceipt } from '../../contracts/study'
+import { MAX_STUDY_ITEMS, parseStudyAdoptInput, parseStudyProposal, parseStudySavedInput, studyInspirationFields,
+  type StudyAdoptInput, type StudyAdoptReceipt, type StudySavedInput, type StudySavedResults } from '../../contracts/study'
 import type { AiRepository } from '../ai/ai-repository'
 import type { StudioRepository } from '../storage/studio-repository'
+import { readInspirationThumbnailMetadata } from './inspiration-thumbnail-repository'
 
 interface Row {
   id: string; revision: number; kind: string; title: string; body: string; source: string; tags_json: string
@@ -24,14 +26,57 @@ function read(db: Database.Database, id: string): InspirationItem | null {
     parentId: row.parent_id, bookId: row.book_id, archived: row.archived === 1 }
   const parsed = parseInspirationFields(fields)
   if (JSON.stringify(fields) !== JSON.stringify(parsed)) return failure('全局资料内容不符合保存格式，请保留拆书结果。', 'STORAGE_ERROR')
-  return { ...parsed, id: row.id, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at }
+  const item = { ...parsed, id: row.id, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { ...item, thumbnail: readInspirationThumbnailMetadata(db, item) }
 }
-function sameFields(item: InspirationItem, expected: InspirationFields): boolean {
+function sameFields(item: InspirationFields, expected: InspirationFields): boolean {
   return Object.keys(expected).every((key) => JSON.stringify(item[key as keyof InspirationFields]) === JSON.stringify(expected[key as keyof InspirationFields]))
 }
 
 export class StudyRepository {
   constructor(private readonly studio: StudioRepository, private readonly ai: AiRepository) {}
+
+  saved(input: StudySavedInput): StudySavedResults {
+    const data = parseStudySavedInput(input)
+    try {
+      const run = this.ai.get({ bookId: data.bookId, runId: data.runId })
+      if (run.version !== data.expectedVersion || run.state !== 'succeeded' || run.kind !== 'plan' || run.purpose !== 'study' ||
+        run.context.bookId !== data.bookId || run.context.chapterId !== run.chapterId) return failure('拆书候选版本已变化，请保留编辑并重新读取候选。')
+      const proposal = parseStudyProposal(run.outputText, run.context)
+      const db = this.studio.getInspirationDatabase()
+      if (!db) return { ...data, items: [] }
+      return db.transaction(() => {
+        // 固定首次入库历史定位来源；后来改标题、出处或归档，仍不能被当成尚未入库的候选。
+        const rows = db.prepare(`SELECT id, fields_json FROM inspiration_revisions WHERE revision = 1
+          AND json_extract(fields_json, '$.source') IS NOT NULL
+          AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.type') = 'study'
+          AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.bookId') = ?
+          AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.runId') = ?
+          LIMIT ?`).all(data.bookId, data.runId, MAX_STUDY_ITEMS + 1) as { id: string; fields_json: string }[]
+        if (rows.length > MAX_STUDY_ITEMS) return failure('同一拆书任务的入库历史数量异常，请保留结果并核对资料。', 'STORAGE_ERROR')
+        const indexes = new Set<number>()
+        const items = rows.map((row) => {
+          const first = parseInspirationFields(JSON.parse(row.fields_json))
+          const provenance = JSON.parse(first.source) as { index?: unknown }
+          const index = provenance.index
+          if (!Number.isSafeInteger(index) || typeof index !== 'number' || !proposal.items[index] || indexes.has(index)) {
+            return failure('拆书入库历史序号缺失或重复，请保留结果并核对资料。', 'STORAGE_ERROR')
+          }
+          indexes.add(index)
+          const original = proposal.items[index]!
+          const expected = studyInspirationFields({ ...data, entries: [] }, run.context, original, { index, id: row.id, title: first.title, body: first.body })
+          if (!sameFields(first, expected)) return failure('拆书入库历史与固定来源不一致。', 'STORAGE_ERROR')
+          const current = read(db, row.id)
+          if (!current) return failure('拆书入库历史对应的资料已经缺失。', 'STORAGE_ERROR')
+          return { index, origin: first.source, item: current }
+        })
+        return { ...data, items: items.sort((left, right) => left.index - right.index) }
+      })()
+    } catch (error) {
+      if (error instanceof DomainError) throw error
+      return failure('已入库拆书结果暂时无法读取，当前编辑保留。', 'STORAGE_ERROR')
+    }
+  }
 
   adopt(input: StudyAdoptInput): StudyAdoptReceipt {
     const data = parseStudyAdoptInput(input)
@@ -68,11 +113,11 @@ export class StudyRepository {
           }
           const fields = studyInspirationFields(data, run.context, original, entry)
           // 同一候选条目跨窗口仍只入库一次；重新打开审阅不能凭新 UUID 重复建立方法卡。
-          const prior = db.prepare(`SELECT id FROM inspirations WHERE
-            json_extract(CASE WHEN json_valid(source) THEN source ELSE '{}' END, '$.type') = 'study'
-            AND json_extract(CASE WHEN json_valid(source) THEN source ELSE '{}' END, '$.bookId') = ?
-            AND json_extract(CASE WHEN json_valid(source) THEN source ELSE '{}' END, '$.runId') = ?
-            AND json_extract(CASE WHEN json_valid(source) THEN source ELSE '{}' END, '$.index') = ? LIMIT 1`)
+          const prior = db.prepare(`SELECT id FROM inspiration_revisions WHERE revision = 1
+            AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.type') = 'study'
+            AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.bookId') = ?
+            AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.runId') = ?
+            AND json_extract(CASE WHEN json_valid(json_extract(fields_json, '$.source')) THEN json_extract(fields_json, '$.source') ELSE '{}' END, '$.index') = ? LIMIT 1`)
             .get(data.bookId, data.runId, entry.index) as { id: string } | undefined
           if (prior && prior.id !== entry.id) return failure(`第 ${entry.index + 1} 项已保存至全局资料。请取消选择该项，已有内容可在全局资料中继续编辑。`)
           const saved = read(db, entry.id)
@@ -81,7 +126,7 @@ export class StudyRepository {
             const history = db.prepare('SELECT fields_json, created_at FROM inspiration_revisions WHERE id = ? AND revision = 1')
               .get(entry.id) as { fields_json: string; created_at: string } | undefined
             const revisions = (db.prepare('SELECT COUNT(*) AS total FROM inspiration_revisions WHERE id = ?').get(entry.id) as { total: number }).total
-            if (saved.revision !== 1 || !sameFields(saved, fields) || saved.createdAt !== saved.updatedAt || !history ||
+            if (saved.revision !== 1 || saved.thumbnail !== null || !sameFields(saved, fields) || saved.createdAt !== saved.updatedAt || !history ||
               history.fields_json !== JSON.stringify(fields) || history.created_at !== saved.createdAt || revisions !== 1) {
               return failure('这个入库标识已有不同内容或后续修订，本次没有覆盖；请保留输入并核对全局资料。')
             }
@@ -101,7 +146,7 @@ export class StudyRepository {
               tags: JSON.stringify(fields.tags), parentId: fields.parentId, now })
           db.prepare('INSERT INTO inspiration_revisions (id, revision, fields_json, created_at) VALUES (?, 1, ?, ?)')
             .run(entry.id, JSON.stringify(fields), now)
-          return { ...fields, id: entry.id, revision: 1, createdAt: now, updatedAt: now }
+          return { ...fields, id: entry.id, revision: 1, createdAt: now, updatedAt: now, thumbnail: null }
         })
         return { bookId: data.bookId, runId: data.runId, items }
       }).immediate()

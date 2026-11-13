@@ -5,7 +5,7 @@ import { closeHistory } from '@tiptap/pm/history'
 import { TextSelection } from '@tiptap/pm/state'
 import { MAX_CHAPTER_LENGTH, parseManuscript } from '../../contracts/manuscript'
 import { findLiteralMatches, manuscriptLength, MAX_SEARCH_MATCHES, searchHighlightKey, type MatchResult, type SearchHighlight } from './manuscript-search'
-import styles from './ManuscriptEditor.module.css'
+import styles from './StellarEditor.module.css'
 
 interface Props {
   editor: Editor

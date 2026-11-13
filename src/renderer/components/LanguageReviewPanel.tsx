@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { ChapterSnapshot } from '../../contracts/api'
-import styles from './WorkbenchPanel.module.css'
+import styles from './StellarPlanning.module.css'
 
 export interface LanguageFinding { id: string; blockId: string; quote: string; category: string; reason: string }
 const PHRASES = ['嘴角勾起一抹弧度', '嘴角微微勾起', '眼中闪过一丝精芒', '眼中精芒', '倒吸一口凉气', '如遭雷击', '心中涌起无尽', '不禁倒吸', '一抹玩味的笑容']
@@ -57,14 +57,14 @@ export function LanguageReviewPanel({ chapter, disabled, onRegister, onReview }:
 }
 
 const READERS = [
-  { name: '爽点与节奏', lens: 'pace', focus: '关注人物行动、压抑与释放、信息密度、章末悬念；说明具体何处影响继续阅读。' },
-  { name: '设定与因果', lens: 'logic', focus: '核对本次实际提供的行动前提、资源代价和因果。没有前文资料时明确未知，不推断全书矛盾。' },
-  { name: '情绪与人物互动', lens: 'emotion', focus: '关注互动中的目标、情绪转变、潜台词及人物选择，给出具体段落与可能的另一种理解。' },
+  { name: '爽点党', lens: 'pace', focus: '关注人物行动、压抑与释放、信息密度、章末悬念；说明具体何处影响继续阅读。' },
+  { name: '考据党', lens: 'logic', focus: '核对本次实际提供的行动前提、资源代价和因果。没有前文资料时明确未知，不推断全书矛盾。' },
+  { name: 'CP 党', lens: 'emotion', focus: '关注互动中的目标、情绪转变、潜台词及人物选择，给出具体段落与可能的另一种理解。' },
 ] as const
 
 export function ReaderReviewPanel({ chapter, disabled, onReview }: { chapter: ChapterSnapshot | null; disabled: boolean; onReview?: (instruction: string) => void }) {
   return <section className={styles.readersSection} aria-label="虚拟读者试读"><h4>选择一个试读角度</h4><p className={styles.muted}>模型只阅读发送预览中选入的内容。意见是模拟建议，不能代表真实读者或留存数据。</p>
     {!chapter && <p className={styles.empty}>先打开并保存需要试读的章节。</p>}
-    {READERS.map((reader) => <article key={reader.lens} className={styles.panel}><h4>{reader.name}</h4><p>{reader.focus}</p><button type="button" className={styles.primaryButton} disabled={disabled || !chapter || !onReview} onClick={() => onReview?.(`以${reader.name}虚拟读者角度试读本章，所有建议使用lens=${reader.lens}。${reader.focus}只提出有逐字段落证据的问题，允许没有问题；给出反证、修改方向和必要时的段落替换稿，不输出评分或真实读者结论。`)}>准备这个角度的试读</button></article>)}
+    {READERS.map((reader) => <article key={reader.lens} className={styles.panel}><h4>{reader.name}</h4><p>{reader.focus}</p><button type="button" className={styles.primaryButton} disabled={disabled || !chapter || !onReview} onClick={() => onReview?.(`以${reader.name}虚拟读者角度试读本章，所有建议使用lens=${reader.lens}。${reader.focus}只提出有逐字段落证据的问题，允许没有问题；给出反证、修改方向和必要时的段落替换稿。只为${reader.lens}提供模型主观试读评分及短评，资料不足时评分为null；其他角度不评价，不输出真实读者结论。`)}>准备这个角度的试读</button></article>)}
   </section>
 }

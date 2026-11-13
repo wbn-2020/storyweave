@@ -6,6 +6,7 @@ export const MEMORY_VECTOR_BATCH_SIZE = 8
 export const MEMORY_VECTOR_MAX_DIMENSIONS = 4096
 export const MEMORY_VECTOR_SCAN_LIMIT = 5000
 export const MEMORY_VECTOR_CANDIDATES = 100
+export const MEMORY_VECTOR_TASK_LIMIT = 30
 export type MemoryVectorKind = 'index' | 'search'
 export type MemoryVectorState = 'prepared' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
 export interface MemoryVectorProfileInput { bookId: string; connectionId: string; embeddingModel: string }
@@ -68,12 +69,18 @@ export interface MemoryVectorRunSummary {
   error: string | null
   createdAt: string
   updatedAt: string
+  active?: boolean
+}
+export interface MemoryVectorRunPage {
+  bookId: string
+  requiresUpgrade: boolean
+  runs: MemoryVectorRunSummary[]
+  truncated: boolean
 }
 export interface MemoryVectorRun extends MemoryVectorRunSummary {
   context: MemoryVectorContext
   result: MemorySearchPage | null
   usage: MemoryVectorUsage | null
-  active?: boolean
 }
 export interface MemoryVectorStatus {
   bookId: string
@@ -85,6 +92,61 @@ export interface MemoryVectorStatus {
   dimensions: number | null
   responseModel: string | null
   recentRuns: MemoryVectorRunSummary[]
+}
+
+/** 任务中心与原任务入口共用摘要边界，状态和版本必须配对。 */
+export function isMemoryVectorRunSummary(value: unknown, bookId: string): value is MemoryVectorRunSummary {
+  if (!isRecord(value)) return false
+  try {
+    return requiredId(value.id) === value.id && value.bookId === bookId &&
+      Number.isSafeInteger(value.version) &&
+      (value.state === 'prepared' && value.version === 0 || value.state === 'running' && value.version === 1 ||
+        ['succeeded', 'failed', 'interrupted'].includes(String(value.state)) && value.version === 2 ||
+        value.state === 'cancelled' && (value.version === 1 || value.version === 2)) &&
+      (value.kind === 'index' || value.kind === 'search') &&
+      requiredInteger(value.publicationVersion, '发布版本') >= 1 &&
+      requiredText(value.connectionName, '连接名称', 80) === value.connectionName &&
+      requiredText(value.embeddingModel, '向量模型', 200) === value.embeddingModel &&
+      requiredInteger(value.inputCount, '输入数量', MEMORY_VECTOR_BATCH_SIZE) >= 1 &&
+      (value.kind !== 'search' || value.inputCount === 1) &&
+      (value.error === null || typeof value.error === 'string' && value.error.length <= 500) &&
+      typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt)) &&
+      typeof value.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt)) &&
+      (value.active === undefined || typeof value.active === 'boolean')
+  } catch { return false }
+}
+export function isMemoryVectorRunPage(value: unknown, bookId: string): value is MemoryVectorRunPage {
+  return isRecord(value) && value.bookId === bookId && typeof value.requiresUpgrade === 'boolean' &&
+    typeof value.truncated === 'boolean' && Array.isArray(value.runs) && value.runs.length <= MEMORY_VECTOR_TASK_LIMIT &&
+    value.runs.every((run) => isMemoryVectorRunSummary(run, bookId)) &&
+    new Set(value.runs.map((run) => run.id)).size === value.runs.length &&
+    (!value.requiresUpgrade || value.runs.length === 0 && !value.truncated)
+}
+export function isMemoryVectorRun(value: unknown, bookId: string, runId: string): value is MemoryVectorRun {
+  if (!isMemoryVectorRunSummary(value, bookId) || value.id !== runId ||
+    !isRecord(value) || !isRecord(value.context)) return false
+  const context = value.context
+  try {
+    const connection = parseAiConnection(context.connection)
+    const inputs = context.input
+    return context.bookId === bookId && context.kind === value.kind && context.publicationVersion === value.publicationVersion &&
+      context.embeddingModel === value.embeddingModel && connection.name === value.connectionName &&
+      typeof context.contextHash === 'string' && /^[a-f0-9]{64}$/.test(context.contextHash) &&
+      typeof context.profileHash === 'string' && /^[a-f0-9]{64}$/.test(context.profileHash) &&
+      requiredInteger(context.estimatedInputTokens, '输入预算') >= 1 &&
+      Array.isArray(inputs) && inputs.length === value.inputCount &&
+      inputs.every((text) => typeof text === 'string' && Boolean(text.trim()) && !text.includes('\0')) &&
+      Array.isArray(context.items) && (value.kind === 'index' ? context.search === undefined &&
+        context.items.length === value.inputCount && context.items.every((item, index) =>
+          isRecord(item) && item.bookId === bookId && item.text === inputs[index] &&
+          typeof item.title === 'string' && typeof item.revisionId === 'string' && Number.isSafeInteger(item.chunkId)) :
+        context.items.length === 0 && parseMemorySearchInput(context.search).bookId === bookId &&
+        inputs[0] === parseMemorySearchInput(context.search).query) &&
+      (value.result === null || isRecord(value.result) && value.result.bookId === bookId &&
+        value.result.publicationVersion === value.publicationVersion && Array.isArray(value.result.hits)) &&
+      (value.usage === null || isRecord(value.usage) && [value.usage.inputTokens, value.usage.totalTokens]
+        .every((entry) => entry === null || typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0))
+  } catch { return false }
 }
 
 function invalid(message: string): never { throw new DomainError({ code: 'INVALID_INPUT', message }) }

@@ -1,20 +1,23 @@
 import { createElement, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { isRecord, type BookSnapshot, type RequestStatus, type Result } from '../../contracts/api'
+import { isRecord, type BookSnapshot, type RequestStatus, type Result, type StudioApi } from '../../contracts/api'
 import {
   MAX_EXPORT_NOTE_LENGTH, bookExportExtension, bookExportReference, type BookExportChapterEntry, type BookExportChapterInput,
   type BookExportChapterPreview, type BookExportCommitInput, type BookExportOptions,
-  type BookExportPrepareInput, type BookExportPreview,
+  type BookExportPrepareInput, type BookExportPreview, type BookExportReceipt,
 } from '../../contracts/export'
 import type { InlineNode } from '../../contracts/manuscript'
-import { request, statusLabels } from '../request'
+import { displayTime, request, statusLabels } from '../request'
 import { Dialog } from './Dialog'
-import appStyles from '../App.module.css'
-import styles from './ExportBookPanel.module.css'
+import { StudioIcon } from './StudioIcon'
+import { BookCover } from './LibraryPanels'
+import appStyles from '../StellarShared.module.css'
+import styles from './StellarExport.module.css'
 
 export interface BookExportPanelApi {
   prepareBookExport(input: BookExportPrepareInput): Promise<Result<BookExportPreview>>
   readBookExportChapter(input: BookExportChapterInput): Promise<Result<BookExportChapterPreview>>
   getRequestStatus(input: { requestId: string }): Promise<Result<RequestStatus>>
+  revealBookExport(input: { exportId: string }): Promise<Result<null>>
 }
 
 type PendingRead = { requestId: string; bookKey: string } & (
@@ -22,7 +25,9 @@ type PendingRead = { requestId: string; bookKey: string } & (
 )
 
 export interface ExportBookPanelProps {
-  api: BookExportPanelApi
+  api: BookExportPanelApi & Pick<StudioApi, 'getBookMedia' | 'readBookMedia'>
+  workspaceScope?: string
+  receipt?: BookExportReceipt | null
   book: BookSnapshot
   busy: boolean
   error?: string | null
@@ -33,6 +38,12 @@ export interface ExportBookPanelProps {
 const PAGE_SIZE = 50
 const stateLabels = { included: '包含', not_selected: '未勾选', not_finalized: '缺少定稿', unavailable: '正文不可用' }
 const defaultDocxOptions = { submissionLayout: false, preface: '', afterword: '' }
+const exportFormats = [
+  { id: 'txt', name: 'TXT', detail: '纯文本', icon: 'notes' },
+  { id: 'markdown', name: 'Markdown', detail: '文字格式', icon: 'pen' },
+  { id: 'epub', name: 'EPUB', detail: '读者样书', icon: 'read' },
+  { id: 'docx', name: 'DOCX', detail: 'Word 文稿', icon: 'notes' },
+] as const
 
 function fileSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`
@@ -59,7 +70,7 @@ function ChapterContent({ chapter, submissionLayout }: { chapter: BookExportChap
   </article>
 }
 
-export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: ExportBookPanelProps) {
+export function ExportBookPanel({ api, book, busy, error, onClose, onExport, workspaceScope, receipt }: ExportBookPanelProps) {
   const [options, setOptions] = useState<Omit<BookExportOptions, 'chapterIds'>>({ format: 'txt', scope: 'working', includeChapterTitles: true, author: '', language: 'zh-CN' })
   const [selectedIds, setSelectedIds] = useState<string[]>(() => book.chapters.map((chapter) => chapter.id))
   const [preview, setPreview] = useState<BookExportPreview | null>(null)
@@ -94,6 +105,8 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
   const blocked = busy || preparing || exporting || Boolean(pendingRead)
   const currentPreview = preview?.manifest.bookId === book.book.id && preview.manifest.bookRevision === book.book.revision ? preview : null
   const docxOptions = options.docx ?? defaultDocxOptions
+  const exported = receipt?.bookId === book.book.id ? receipt : null
+  const alreadyExported = exported?.exportId === currentPreview?.token && Boolean(exported)
 
   useEffect(() => {
     mounted.current = true
@@ -224,7 +237,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
   }
 
   async function submit() {
-    if (blocked || exportInFlight.current || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)) return
+    if (blocked || exportInFlight.current || alreadyExported || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)) return
     exportInFlight.current = true
     setExporting(true); setReadError(null)
     try {
@@ -239,7 +252,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
 
   function status(entry: BookExportChapterEntry | undefined, chapterId: string): ReactNode {
     if (!entry) return selected.has(chapterId) ? '待核对' : '未勾选'
-    return <><span className={entry.state === 'unavailable' ? styles.problem : ''}>{stateLabels[entry.state]}</span>
+    return <><span className={styles.chapterStatus} data-state={entry.state} data-empty={entry.characterCount === 0}>{entry.state === 'included' ? entry.characterCount === 0 ? '待完善' : entry.status === 'finalized' ? '已完成' : statusLabels[entry.status] : stateLabels[entry.state]}</span>
       {entry.reason && <small>{entry.reason}</small>}
       {entry.state === 'included' && entry.characterCount === 0 && <small className={styles.problem}>空白正文，仍会导出</small>}</>
   }
@@ -249,12 +262,18 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
     {pendingRead && <p className={styles.pending} role="status">预览请求尚未确认，暂时保留当前选择。
       <button type="button" className={appStyles.button} disabled={checking || busy} onClick={() => void checkPending()}>{checking ? '查询中…' : '查询原请求结果'}</button>
     </p>}
+    {exported && <section className={styles.success} role="status" aria-label="导出成功"><StudioIcon name="check" size={24} /><div><strong>已导出 {exported.chapterCount} 章 · {exported.characterCount.toLocaleString()} 字</strong><p>{exported.filePath}</p><p>版本清单：{exported.manifestPath}</p></div><button type="button" className={appStyles.button} disabled={blocked} onClick={() => {
+      void request(() => api.revealBookExport({ exportId: exported.exportId })).then((result) => { if (!result.ok && mounted.current) setReadError(result.error.message) })
+    }}><StudioIcon name="folder" />在文件夹中显示</button></section>}
+    <div className={styles.exportWorkspace}>
+    <section className={styles.configuration} aria-label="格式与排版">
+    <h3>输出格式</h3>
+    <fieldset className={styles.formats} disabled={blocked}><legend className={styles.srOnly}>成品格式</legend>{exportFormats.map((format) => <label className={styles.formatCard} data-selected={options.format === format.id} key={format.id}>
+      <StudioIcon name={format.icon} size={32} /><strong>{format.name}</strong><small>{format.detail}</small><input type="radio" name={`${headingId}-format`} value={format.id} checked={options.format === format.id} onChange={() => updateOptions({ format: format.id })} />
+    </label>)}</fieldset>
     <div className={styles.options}>
       <label>正文范围<select value={options.scope} disabled={blocked} onChange={(event) => updateOptions({ scope: event.target.value as BookExportOptions['scope'] })}>
         <option value="working">当前工作稿</option><option value="finalized">作者定稿</option>
-      </select></label>
-      <label>成品格式<select value={options.format} disabled={blocked} onChange={(event) => updateOptions({ format: event.target.value as BookExportOptions['format'] })}>
-        <option value="txt">TXT · 纯文本</option><option value="markdown">Markdown · 保留文字格式</option><option value="epub">EPUB · 读者样书</option><option value="docx">DOCX · Word 文稿</option>
       </select></label>
       {(options.format === 'epub' || options.format === 'docx') && <>
         <label>署名（选填）<input value={options.author} maxLength={120} disabled={blocked} onChange={(event) => updateOptions({ author: event.target.value })} autoComplete="off" /></label>
@@ -275,6 +294,9 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
     <label className={`${appStyles.checkLabel} ${styles.check}`}><input type="checkbox" checked={options.includeChapterTitles} disabled={blocked} onChange={(event) => updateOptions({ includeChapterTitles: event.target.checked })} />正文包含章节标题</label>
     <p className={styles.help}>{options.scope === 'finalized' ? '尚未定稿的章节会列出跳过原因；定稿后对工作稿的修改不进入本次成品。' : '预览使用已经保存的当前稿，生成预览后修改作品需要重新核对。'}{options.format === 'epub' && ' EPUB 目录保留章节名，实际分页与字体由阅读器决定。'}{options.format === 'docx' && ' DOCX 预览展示固定正文与格式，实际分页和字体以打开文档的软件为准。'}</p>
 
+    </section>
+    <div className={styles.previewLayout}>
+      <section className={styles.chapterList} aria-labelledby={headingId}>
     <div className={styles.selectionBar}>
       <p id={headingId}>已选 {selectedIds.length.toLocaleString()} / {book.chapters.length.toLocaleString()} 章</p>
       <div className={styles.selectionActions}>
@@ -285,8 +307,6 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
     </div>
     <label className={styles.search}>筛选章节<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(0) }} placeholder="输入章节名称" maxLength={120} /></label>
 
-    <div className={styles.previewLayout}>
-      <section className={styles.chapterList} aria-labelledby={headingId}>
         <div className={styles.tableScroll} role="region" aria-label="逐章导出清单" tabIndex={0}>
           <table className={styles.table}>
             <thead><tr><th scope="col">选择</th><th scope="col">章节与版本</th><th scope="col">字数</th><th scope="col">交付状态</th></tr></thead>
@@ -311,14 +331,18 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
           <button type="button" className={appStyles.button} disabled={shownPage + 1 === pages} onClick={() => setPage(shownPage + 1)}>下一页</button>
         </nav>}
       </section>
-      <section className={styles.manuscript} aria-label="固定版本正文预览" aria-busy={reading}>
+      <details className={styles.manuscript} aria-label="固定版本正文预览" aria-busy={reading}><summary>核对固定版本正文 · {chapterPreview?.title ?? '生成清单后可读'}</summary>
         <h3>{chapterPreview ? chapterPreview.title : '正文预览'}</h3>
         {reading ? <p className={styles.empty} role="status">正在读取固定版本…</p> : chapterPreview ? <ChapterContent chapter={chapterPreview} submissionLayout={currentPreview?.manifest.docx?.submissionLayout ?? false} /> : <p className={styles.empty}>生成清单后，选择一章查看本次交付正文。</p>}
-      </section>
+      </details>
     </div>
 
-    {currentPreview && <section className={styles.summary} aria-label="本次交付核对结果" aria-live="polite">
+    <section className={styles.summary} aria-label="本次交付核对结果" aria-live="polite">
+      <h3>导出清单预览</h3>
+      <div className={styles.bookIdentity}><span className={styles.cover}><BookCover book={book.book} api={api} workspaceScope={workspaceScope} /></span><div><h4>{book.book.title}</h4><p>作品版本 {currentPreview?.manifest.bookRevision ?? book.book.revision}</p><small>{options.scope === 'finalized' ? '作者定稿' : '当前工作稿'} · .{bookExportExtension(options.format)}</small></div></div>
+    {currentPreview ? <>
       <p><strong>{currentPreview.chapterCount.toLocaleString()} 章 · {currentPreview.characterCount.toLocaleString()} 字</strong><span>预计 {fileSize(currentPreview.estimatedBytes)} · 作品版本 {currentPreview.manifest.bookRevision}</span></p>
+      <dl className={styles.manifestFacts}><dt>清单生成</dt><dd>{displayTime(currentPreview.manifest.createdAt)}</dd><dt>有效至</dt><dd>{displayTime(currentPreview.expiresAt)}</dd><dt>遗漏章节</dt><dd>{currentPreview.skippedCount} 章</dd></dl>
       {currentPreview.manifest.outputFormat === 'docx' && <>
         <p>DOCX · {currentPreview.manifest.docx?.submissionLayout ? '投稿排版' : '常规排版'} · 附文不计入章节字数</p>
         {currentPreview.manifest.docx?.preface && <details><summary>本次前言</summary><pre className={styles.notePreview}>{currentPreview.manifest.docx.preface}</pre></details>}
@@ -330,11 +354,13 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport }: E
       <details onToggle={(event) => setShowManifest(event.currentTarget.open)}><summary>查看本次版本清单</summary>
         {showManifest && <><p className={styles.help}>清单保留作品与章节身份、固定修订、字数和跳过原因。预览 30 分钟内有效。</p><pre className={styles.manifest}>{JSON.stringify(currentPreview.manifest, null, 2)}</pre></>}
       </details>
-    </section>}
+    </> : <p className={styles.empty}>尚未生成清单。选择章节与格式后核对本次交付版本。</p>}
+    </section>
+    </div>
     <p className={styles.help}>保存时新建 .{bookExportExtension(options.format)} 成品和同名 .manifest.json 版本清单。正文成品只包含选定内容；完整恢复请使用作品恢复包。单次成品上限 2 GiB。</p>
     <div className={styles.actions}>
       <button type="button" className={appStyles.button} disabled={busy || exporting} onClick={onClose}>关闭</button>
-      <button type="button" className={appStyles.primaryButton} disabled={blocked || reading || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}>{exporting ? '正在导出…' : '选择位置并导出'}</button>
+      <button type="button" className={appStyles.primaryButton} disabled={blocked || reading || alreadyExported || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '选择位置并导出'}</button>
     </div>
   </Dialog>
 }

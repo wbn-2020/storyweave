@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { StudioApi } from '../../contracts/api'
 import { MAX_CREATIVE_RESOURCES, WRITING_METHODS, creativeRef, type CreativeResourceRef, type CreativeSelection } from '../../contracts/creative-resources'
 import { request } from '../request'
-import styles from './WorkbenchPanel.module.css'
+import styles from './stellar/Workspace.module.css'
 import { studyMaterialText } from '../../contracts/study-card'
 
 interface Option extends CreativeResourceRef { title: string; description: string }

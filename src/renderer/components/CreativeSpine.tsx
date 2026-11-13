@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { StudioApi } from '../../contracts/api'
 import type { CreativeHealth, LivingOutline, LivingSnapshot } from '../../contracts/living'
 import { request } from '../request'
-import shared from '../App.module.css'
-import styles from './LivingPanel.module.css'
+import shared from '../StellarShared.module.css'
+import { StudioIcon, type StudioIconName } from './StudioIcon'
+import styles from './StellarLiving.module.css'
 
 export type CreativeDomain = 'idea' | 'world' | 'cast' | 'outline' | 'manuscript'
 const labels: Record<CreativeDomain, string> = { idea: '脑洞', world: '世界', cast: '角色', outline: '大纲', manuscript: '正文' }
 const states: Record<CreativeHealth, string> = { empty: '待建立', pending_proposal: '有待处理提案', stale: '待复核', in_progress: '创作中', ready: '已有资料' }
+const symbols: Record<CreativeDomain, StudioIconName> = { idea: 'bulb', world: 'globe', cast: 'user', outline: 'list', manuscript: 'pen' }
 
 export function useLivingSnapshot(api: StudioApi | undefined, bookId: string | undefined, revision: number | undefined) {
   const [snapshot, setSnapshot] = useState<LivingSnapshot | null>(null)
@@ -38,17 +40,20 @@ export function useLivingSnapshot(api: StudioApi | undefined, bookId: string | u
     } }
 }
 
-export function CreativeSpine({ snapshot, reading, error, disabled, onNavigate, onReload }: {
+export function CreativeSpine({ snapshot, reading, error, disabled, onNavigate, onReload, variant = 'compact' }: {
   snapshot: LivingSnapshot | null; reading: boolean; error: string | null; disabled: boolean
   onNavigate: (domain: CreativeDomain) => void; onReload: () => void
+  variant?: 'compact' | 'orbit'
 }) {
-  return <nav className={styles.spine} aria-label="五域创作状态">
+  return <nav className={`${styles.spine} ${variant === 'orbit' ? styles.orbitSpine : ''}`} aria-label="五域创作状态">
     {(Object.keys(labels) as CreativeDomain[]).map((domain) => <button key={domain} type="button" disabled={disabled}
-      data-health={snapshot?.health[domain]} onClick={() => onNavigate(domain)} title="各创作空间可随时进入，状态不限制创作顺序">
+      data-domain={domain} data-health={snapshot?.requiresUpgrade || reading ? undefined : snapshot?.health[domain]} onClick={() => onNavigate(domain)}
+      title={`${labels[domain]} · ${reading ? '核对中' : snapshot?.requiresUpgrade ? '升级后查看' : snapshot ? states[snapshot.health[domain]] : '状态未知'}`}>
+      {variant === 'orbit' && <span className={styles.spineSymbol}><StudioIcon name={symbols[domain]} size={24} /></span>}
       <span>{labels[domain]}</span><small>{reading ? '核对中' : snapshot?.requiresUpgrade ? '升级后查看' : snapshot ? states[snapshot.health[domain]] : '状态未知'}</small>
     </button>)}
     {error ? <button type="button" className={styles.spineNotice} disabled={disabled || reading} onClick={onReload} title={error}>状态读取未完成，点击重试</button>
-      : <span className={styles.spineNotice}>可先写正文，再补设定</span>}
+      : variant !== 'orbit' && <span className={styles.spineNotice}>可先写正文，再补设定</span>}
   </nav>
 }
 

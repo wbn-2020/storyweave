@@ -63,3 +63,27 @@ export const INSPIRATION_SCHEMA = `
   CREATE TRIGGER immutable_inspiration_revision_delete BEFORE DELETE ON inspiration_revisions
   BEGIN SELECT RAISE(ABORT, 'Inspiration revisions are immutable'); END;
 `
+
+// 图片与清除记录引用已有文字修订，原修订 JSON 继续只保存文字字段。
+export const INSPIRATION_THUMBNAIL_SCHEMA = `
+  CREATE TABLE inspiration_thumbnails (
+    inspiration_id TEXT NOT NULL,
+    inspiration_revision INTEGER NOT NULL CHECK (inspiration_revision BETWEEN 1 AND 9007199254740991),
+    mime TEXT, byte_length INTEGER, data_base64 TEXT, sha256 TEXT, alt TEXT,
+    created_at TEXT NOT NULL CHECK (length(created_at) = 24),
+    PRIMARY KEY (inspiration_id, inspiration_revision),
+    FOREIGN KEY (inspiration_id, inspiration_revision) REFERENCES inspiration_revisions(id, revision),
+    CHECK (
+      (mime IS NULL AND byte_length IS NULL AND data_base64 IS NULL AND sha256 IS NULL AND alt IS NULL)
+      OR (mime IS NOT NULL AND mime IN ('image/png', 'image/jpeg', 'image/webp')
+        AND byte_length IS NOT NULL AND byte_length BETWEEN 4 AND 2097152
+        AND data_base64 IS NOT NULL AND length(CAST(data_base64 AS BLOB)) = ((byte_length + 2) / 3) * 4
+        AND sha256 IS NOT NULL AND length(sha256) = 64 AND sha256 NOT GLOB '*[^a-f0-9]*'
+        AND alt IS NOT NULL AND length(CAST(alt AS BLOB)) <= 8000 AND instr(alt, char(0)) = 0)
+    )
+  ) STRICT;
+  CREATE TRIGGER immutable_inspiration_thumbnail_update BEFORE UPDATE ON inspiration_thumbnails
+  BEGIN SELECT RAISE(ABORT, 'Inspiration thumbnails are immutable'); END;
+  CREATE TRIGGER immutable_inspiration_thumbnail_delete BEFORE DELETE ON inspiration_thumbnails
+  BEGIN SELECT RAISE(ABORT, 'Inspiration thumbnails are immutable'); END;
+`

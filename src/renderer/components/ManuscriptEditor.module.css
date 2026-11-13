@@ -1,6 +1,4 @@
-/* ============================================================
-   织章 · StoryWeave — 出版级书页稿纸编辑器（含首字下沉朱砂大字与书眉线）
-   ============================================================ */
+/* 编辑区的搜索、格式与正文行为，颜色随独立稿纸偏好。 */
 
 .editor {
   position: relative;
@@ -30,8 +28,8 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 9px 24px;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--paper-line);
   background: color-mix(in srgb, var(--color-paper) 92%, var(--bg-surface));
   color: var(--paper-control-ink);
@@ -42,7 +40,7 @@
   flex-wrap: wrap;
   min-width: 0;
   max-width: 100%;
-  gap: 3px;
+  gap: var(--space-1);
 }
 .toolGroup + .toolGroup {
   padding-left: 16px;
@@ -50,14 +48,14 @@
 }
 .toolGroup button {
   border: 0;
-  border-radius: 2px;
-  padding: 4px 10px;
-  min-width: 34px;
-  min-height: 30px;
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  min-width: var(--control-compact);
+  min-height: var(--control-compact);
   background: transparent;
   color: var(--paper-control-ink);
   font-size: 12px;
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
   transition: background-color 150ms ease, color 150ms ease;
 }
 .toolGroup button:hover:not(:disabled) {
@@ -87,7 +85,7 @@
   min-height: 34px;
   padding: 6px 10px;
   border: 1px solid var(--paper-control-line);
-  border-radius: 2px;
+  border-radius: var(--radius-md);
   color: var(--color-paper-ink);
   background: var(--paper-input);
   font-size: 12.5px;
@@ -99,7 +97,7 @@
   min-width: 32px;
   min-height: 30px;
   border: 1px solid var(--paper-control-line);
-  border-radius: 2px;
+  border-radius: var(--radius-md);
   padding: 4px 10px;
   background: var(--paper-input);
   color: var(--paper-control-ink);
@@ -141,7 +139,7 @@
   position: relative;
   min-height: 540px;
   font: var(--manuscript-font-size, 18px)/var(--manuscript-line-height, 2.05) var(--font-serif);
-  letter-spacing: 0.012em;
+  letter-spacing: 0;
   outline: none;
   caret-color: var(--paper-focus);
   overflow-wrap: anywhere;
@@ -154,17 +152,7 @@
   text-indent: 2em;
 }
 .content :global(.tiptap > p:first-of-type) {
-  text-indent: 0;
-}
-/* 出版级首字下沉朱砂大字（对标 ui-v5 write.png） */
-.content :global(.tiptap > p:first-of-type::first-letter) {
-  float: left;
-  font-family: var(--font-serif);
-  font-size: 2.95em;
-  font-weight: 600;
-  line-height: 0.92;
-  padding: 4px 12px 2px 0;
-  color: var(--paper-focus, var(--color-accent));
+  text-indent: 2em;
 }
 
 .content :global(.tiptap h1), .content :global(.tiptap h2), .content :global(.tiptap h3) {

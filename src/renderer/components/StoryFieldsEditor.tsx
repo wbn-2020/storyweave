@@ -4,8 +4,8 @@ import { AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_NATUR
 import { COGNITION_ATTITUDES, COGNITION_CHANGES, MAX_FORESHADOW_MILESTONES, MAX_STORY_LINKS, plannedPayoffText, type CognitionChangeKind, type CognitionFields, type Disclosure, type EventFields, type ForeshadowMilestone, type PlannedPayoff, type StoryKind, type StoryRecordFields, type StoryTime } from '../../contracts/story'
 import type { ManuscriptBlock } from '../../contracts/manuscript'
 import { request } from '../request'
-import shared from '../App.module.css'
-import styles from './StoryPanel.module.css'
+import shared from '../StellarShared.module.css'
+import styles from './StellarStory.module.css'
 
 export const storyKindLabels: Record<StoryKind, string> = { relation: '实体关系', event: '事件时间线', foreshadow: '伏笔', cognition: '人物认知' }
 export const stageLabels = { planned: '计划', planted: '已埋设', advanced: '推进', revealed: '已揭示', resolved: '已回收', abandoned: '放弃' }
@@ -305,6 +305,7 @@ interface EditorProps {
   scenes?: PlannedPayoffEditorProps['scenes']
 }
 export function StoryFieldsEditor({ fields, onChange, api, book, disabled, names, savedMilestones, onReadingChange, savedCognition, previousCognition, scenes }: EditorProps) {
+  const relationTypesId = useId()
   const picker = { api, bookId: book.book.id, disabled, names }
   const location = { api, book, disabled, onReadingChange }
   const cognitionLocked = fields.kind === 'cognition' && Boolean(savedCognition)
@@ -327,7 +328,11 @@ export function StoryFieldsEditor({ fields, onChange, api, book, disabled, names
     {fields.kind === 'relation' && <>
       <ReferencePicker {...picker} label="关系起点" single value={fields.fromEntityId ? [fields.fromEntityId] : []} onChange={(value) => onChange({ ...fields, fromEntityId: value[0] ?? '' })} />
       <ReferencePicker {...picker} label="关系终点" single value={fields.toEntityId ? [fields.toEntityId] : []} onChange={(value) => onChange({ ...fields, toEntityId: value[0] ?? '' })} />
-      <div className={styles.columns}><label>关系类型<input value={fields.relationType} maxLength={120} disabled={disabled} onChange={(event) => onChange({ ...fields, relationType: event.target.value })} placeholder="如：师徒、敌对、秘密身份" /></label><label>方向<select value={fields.direction} disabled={disabled} onChange={(event) => onChange({ ...fields, direction: event.target.value as 'directed' | 'mutual' })}><option value="directed">起点 → 终点</option><option value="mutual">双向关系</option></select></label></div>
+      <div className={styles.columns}><label>关系类型<input value={fields.relationType} list={relationTypesId} maxLength={120} disabled={disabled} onChange={(event) => onChange({ ...fields, relationType: event.target.value })} placeholder="如：师徒、敌对、航道、领属" /></label>
+        <datalist id={relationTypesId}>{['师承', '血亲', '死敌', '同盟', '暗恋', '挚友', '航道', '领属'].map((type) => <option key={type} value={type} />)}</datalist>
+        <label>方向<select value={fields.direction} disabled={disabled} onChange={(event) => onChange({ ...fields, direction: event.target.value as 'directed' | 'mutual' })}><option value="directed">起点 → 终点</option><option value="mutual">双向关系</option></select></label></div>
+      {fields.relationType === '航道' && <p className={styles.help}>航道连接两个地点。选择起点、终点和通行方向，保存后可在世界地图查看。</p>}
+      {fields.relationType === '领属' && <p className={styles.help}>领属从地点指向所属势力。明确采用并完成复核后，世界地图才显示该势力的地点范围。</p>}
       <label>关系层次 · 需作品 v17<select value={fields.layer ?? ''} disabled={disabled} onChange={(event) => {
         const { layer: _layer, ...base } = fields
         onChange(event.target.value ? { ...base, layer: event.target.value as 'surface' | 'hidden' } : base)

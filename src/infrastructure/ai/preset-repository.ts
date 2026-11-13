@@ -8,6 +8,7 @@ import {
   parseAiPresetFields, parseGetAiPresetsInput, parseSaveAiPresetInput,
   type AiPreset, type AiPresetFields, type AiPresetsSnapshot, type AiPresetUsage, type GetAiPresetsInput, type SaveAiPresetInput,
 } from '../../contracts/ai-presets'
+import { BOOK_SCHEMA_VERSION } from '../storage/schema'
 import type { StudioRepository } from '../storage/studio-repository'
 import { AI_PRESETS_SCHEMA } from './preset-schema'
 
@@ -27,7 +28,8 @@ function perform<T>(operation: () => T): T {
 }
 function schemaVersion(db: Database.Database): number {
   const version = db.pragma('user_version', { simple: true })
-  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 2 || version > AI_PRESETS_SCHEMA_VERSION) return fail('作品格式版本不受支持。')
+  // 预设版本只决定功能是否可用，作品支持上限随整体存储格式推进。
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 2 || version > BOOK_SCHEMA_VERSION) return fail('作品格式版本不受支持。')
   return version
 }
 function bookState(db: Database.Database, bookId: string): BookState {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { OrphanScan, StudioApi } from '../../contracts/api'
 import { request } from '../request'
 import { Dialog } from './Dialog'
-import styles from '../App.module.css'
+import styles from '../StellarShared.module.css'
 
 interface OrphanProps { api: StudioApi; busy: boolean; error?: string | null; onClose: () => void; onRegister: (bookId: string) => void }
 

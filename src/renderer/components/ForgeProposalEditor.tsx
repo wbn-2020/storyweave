@@ -2,7 +2,7 @@ import type { ForgeProposal } from '../../contracts/forge'
 import { KNOWLEDGE_KINDS } from '../../contracts/knowledge'
 import { CharacterProfileEditor } from './CharacterProfileEditor'
 import { TimeEditor } from './StoryFieldsEditor'
-import styles from './ForgePanel.module.css'
+import styles from './StellarForge.module.css'
 
 const kindLabels = { person: '人物', place: '地点', organization: '势力', object: '物品', rule: '规则与力量体系', theme: '主题', other: '其他' }
 const natureLabels = { narrative_claim: '正文陈述', character_belief: '人物信念', ai_inference: '模型推断' }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { DomainError, requiredId } from '../../contracts/api'
 import {
-  MAX_KNOWLEDGE_HISTORY_PAGE, MAX_KNOWLEDGE_ITEMS, MAX_KNOWLEDGE_SOURCES,
+  KNOWLEDGE_KINDS, MAX_KNOWLEDGE_HISTORY_PAGE, MAX_KNOWLEDGE_ITEMS, MAX_KNOWLEDGE_SOURCES,
   parseCreateKnowledgeItem, parseKnowledgeFields, parseKnowledgeItemInput, resolveKnowledgeFields,
   parseKnowledgeSource, parseListKnowledgeItems, parseUpdateKnowledgeItem,
   type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeItemFields,
@@ -31,8 +31,10 @@ interface BookState { id: string; revision: number; knowledge_revision: number; 
 
 const ITEM_COLUMNS = `id, book_id, kind, name, aliases_json, summary, nature,
   author_decision, freshness, conflict_state, created_at, updated_at`
+const REVIEW_FILTER = `(author_decision IN ('unreviewed', 'review_later') OR freshness <> 'current' OR conflict_state IN ('candidate', 'unchecked'))`
 const LIST_FILTER = `book_id = @bookId AND (@kind IS NULL OR kind = @kind)
   AND (@nature IS NULL OR nature = @nature)
+  AND (@reviewOnly = 0 OR ${REVIEW_FILTER})
   AND (@search = '' OR instr(name, @search) > 0 OR instr(summary, @search) > 0
     OR EXISTS (SELECT 1 FROM json_each(aliases_json) WHERE instr(value, @search) > 0))`
 
@@ -93,15 +95,35 @@ export class KnowledgeRepository {
       const { db } = this.studio.getKnowledgeDatabase(data.bookId)
       return db.transaction(() => {
         const state = readState(db, data.bookId)
-        const params = { bookId: data.bookId, kind: data.kind ?? null, nature: data.nature ?? null, search: data.search ?? '' }
+        const params = { bookId: data.bookId, kind: data.kind ?? null, nature: data.nature ?? null, search: data.search ?? '', reviewOnly: data.reviewOnly ? 1 : 0 }
         const { total } = db.prepare(`SELECT COUNT(*) AS total FROM knowledge_items WHERE ${LIST_FILTER}`).get(params) as { total: number }
         if (!Number.isSafeInteger(total) || total > MAX_KNOWLEDGE_ITEMS) throw storageFailure()
         const limit = data.limit ?? 50
         const offset = data.offset ?? 0
         const rows = db.prepare(`SELECT ${itemColumns(db)} FROM knowledge_items WHERE ${LIST_FILTER}
           ORDER BY updated_at DESC, id LIMIT @limit OFFSET @offset`).all({ ...params, limit, offset }) as ItemRow[]
+        let overview: KnowledgeItemPage['overview']
+        if (data.includeOverview) {
+          // 分类为全书计数，出处只统计当前页；同一只读事务避免数量与卡片来自不同版本。
+          const counts = Object.fromEntries(KNOWLEDGE_KINDS.map((kind) => [kind, 0])) as Record<KnowledgeItemFields['kind'], number>
+          const grouped = db.prepare(`SELECT kind, COUNT(*) AS total, SUM(CASE WHEN ${REVIEW_FILTER} THEN 1 ELSE 0 END) AS review
+            FROM knowledge_items WHERE book_id = ? GROUP BY kind`).all(data.bookId) as { kind: KnowledgeItemFields['kind']; total: number; review: number }[]
+          let all = 0, reviewTotal = 0
+          for (const group of grouped) {
+            if (!KNOWLEDGE_KINDS.includes(group.kind) || !Number.isSafeInteger(group.total) || group.total < 0 ||
+                !Number.isSafeInteger(group.review) || group.review < 0 || group.review > group.total) throw storageFailure()
+            counts[group.kind] = group.total; all += group.total; reviewTotal += group.review
+          }
+          if (all > MAX_KNOWLEDGE_ITEMS) throw storageFailure()
+          const sourceRows = db.prepare(`SELECT item_id, COUNT(DISTINCT chapter_id) AS total FROM knowledge_sources
+            WHERE book_id = @bookId AND source_type = 'chapter_text' AND item_id IN (SELECT value FROM json_each(@ids)) GROUP BY item_id`)
+            .all({ bookId: data.bookId, ids: JSON.stringify(rows.map((row) => row.id)) }) as { item_id: string; total: number }[]
+          if (sourceRows.some((row) => !rows.some((item) => item.id === row.item_id) || !Number.isSafeInteger(row.total) || row.total < 0 || row.total > MAX_KNOWLEDGE_SOURCES)) throw storageFailure()
+          overview = { counts, total: all, reviewTotal, sourceChapterCounts: Object.fromEntries(sourceRows.map((row) => [row.item_id, row.total])) }
+        }
         return { bookId: data.bookId, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision,
-          items: rows.map(itemSummary), total, nextOffset: offset + rows.length < total ? offset + rows.length : null }
+          items: rows.map(itemSummary), total, nextOffset: offset + rows.length < total ? offset + rows.length : null,
+          ...(overview ? { overview } : {}) }
       })()
     })
   }
@@ -177,6 +199,12 @@ export class KnowledgeRepository {
       if (previous?.kind === 'person' && data.fields.kind !== 'person' && (db.pragma('user_version', { simple: true }) as number) >= 4 &&
           db.prepare("SELECT record_id FROM story_entity_refs WHERE entity_id = ? AND role = 'cognition_subject' LIMIT 1").get(id)) {
         throw new DomainError({ code: 'INVALID_INPUT', message: '这个人物仍被人物认知记录引用，请先调整对应认知主体，再更改条目类型。' })
+      }
+      if (previous?.kind === 'person' && fields.kind !== 'person' && (db.pragma('user_version', { simple: true }) as number) >= 19 &&
+        db.prepare(`SELECT 1 FROM realm_history h, json_each(h.fields_json, '$.characters') c
+          WHERE json_extract(c.value, '$.personId') = ? LIMIT 1`).get(id)) {
+        // 不可变突破历史保留人物语义，不能因后续改类型而令整书恢复失败。
+        throw new DomainError({ code: 'INVALID_INPUT', message: '这个人物已进入不可变境界历史，不能改成其他条目类型；可继续修改人物档案。' })
       }
       if (previous && (previous.kind === 'person' || previous.kind === 'place') && data.fields.kind !== previous.kind &&
           db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scene_cards'").get()) {

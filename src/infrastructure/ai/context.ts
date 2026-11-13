@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { creativeRef, parseCreativeResources } from '../../contracts/creative-resources'
 import { readCreativeResources } from './creative-context'
 import { STUDY_SYSTEM_RULES, STUDY_CARDS_SYSTEM_RULES, STUDY_CARDS_PROMPT_VERSION } from '../../contracts/study'
-import { REVIEW_PROMPT_VERSION, REVIEW_SYSTEM_RULES } from '../../contracts/review'
+import { REVIEW_PROMPT_VERSION, REVIEW_LEGACY_PROMPT_VERSION, REVIEW_SYSTEM_RULES, REVIEW_LEGACY_SYSTEM_RULES, isReviewPromptVersion } from '../../contracts/review'
 import { forgeInstructionKind, forgeUsesChapter } from '../../contracts/forge'
 import { FORGE_SYSTEM_RULES } from './forge-prompt'
 import { DomainError, requiredInteger, requiredText, type ChapterSnapshot } from '../../contracts/api'
@@ -250,7 +250,8 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
   const reader = data.perspective === 'reader'
   const character = data.perspective === 'character'
   const forgeKind = data.purpose === 'forge' ? forgeInstructionKind(data.instruction) : null
-  const structuredReview = data.purpose === 'review' && (dedicatedPromptVersion ?? REVIEW_PROMPT_VERSION) === REVIEW_PROMPT_VERSION
+  const reviewPromptVersion = dedicatedPromptVersion ?? REVIEW_PROMPT_VERSION
+  const structuredReview = data.purpose === 'review' && isReviewPromptVersion(reviewPromptVersion)
   const studyCards = data.purpose === 'study' && (dedicatedPromptVersion ?? STUDY_CARDS_PROMPT_VERSION) === STUDY_CARDS_PROMPT_VERSION
   // 逐段替换必须以完整段落为基线，不能把邻近范围的裁剪片段当作整段原稿。
   if (structuredReview && data.contextScope !== 'chapter') invalid('结构化审稿需要完整本章，请切换到当前整章后重新准备。')
@@ -326,7 +327,7 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
     if (evidence.some((item) => item.sourceKind === 'chapter')) warnings.push('所选正文摘录属于原稿陈述，尚未判断冲突，不代表客观事实或角色已经知情。')
     if (contextSummaries.length) warnings.push('完整摘要仅覆盖目标章之前的来源；它是作者采用的整理结果，保留压缩与推断的不确定性，不代表人物已知情或读者已获披露。其他手选资料未按章序筛选。')
     const messages: AiMessage[] = [
-      { role: 'system', content: forgeKind !== null ? FORGE_SYSTEM_RULES : data.purpose === 'living' ? LIVING_SYSTEM_RULES : data.purpose === 'study' ? studyCards ? STUDY_CARDS_SYSTEM_RULES : STUDY_SYSTEM_RULES : isAiMemoryTask(data.kind) ? MEMORY_SYSTEM_RULES : SYSTEM_RULES + (reader ? READER_CONTEXT_RULES : '') + (character ? characterContextRules(characterPromptVersion) : '') + (contextSummaries.length ? SUMMARY_CONTEXT_RULES : '') + (writingContext ? WRITING_CONTEXT_RULES : '') + (creativeResources ? CREATIVE_RESOURCE_RULES : '') + (data.purpose === 'review' ? structuredReview ? REVIEW_SYSTEM_RULES : REVIEW_CONTEXT_RULES : '') + (livingContext ? LIVING_WRITING_RULES : '') },
+      { role: 'system', content: forgeKind !== null ? FORGE_SYSTEM_RULES : data.purpose === 'living' ? LIVING_SYSTEM_RULES : data.purpose === 'study' ? studyCards ? STUDY_CARDS_SYSTEM_RULES : STUDY_SYSTEM_RULES : isAiMemoryTask(data.kind) ? MEMORY_SYSTEM_RULES : SYSTEM_RULES + (reader ? READER_CONTEXT_RULES : '') + (character ? characterContextRules(characterPromptVersion) : '') + (contextSummaries.length ? SUMMARY_CONTEXT_RULES : '') + (writingContext ? WRITING_CONTEXT_RULES : '') + (creativeResources ? CREATIVE_RESOURCE_RULES : '') + (data.purpose === 'review' ? structuredReview ? reviewPromptVersion === REVIEW_LEGACY_PROMPT_VERSION ? REVIEW_LEGACY_SYSTEM_RULES : REVIEW_SYSTEM_RULES : REVIEW_CONTEXT_RULES : '') + (livingContext ? LIVING_WRITING_RULES : '') },
       { role: 'user', content: JSON.stringify({
         ...(reader ? { perspective: 'reader' } : {}),
         ...(characterContext ? { perspective: 'character', characterContext } : {}),
@@ -359,7 +360,7 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
       contextScope: data.contextScope, selectedBlockIds: [...data.selectedBlockIds], originalText: selected.originalText,
       ...(reader ? { perspective: 'reader' as const } : {}),
       ...(characterContext ? { perspective: 'character' as const, characterContext } : {}),
-      chapterBlocks: selected.blocks, evidence, connection, promptVersion: structuredReview ? REVIEW_PROMPT_VERSION : studyCards ? STUDY_CARDS_PROMPT_VERSION : isAiMemoryTask(data.kind) ? AI_MEMORY_PROMPT_VERSION
+      chapterBlocks: selected.blocks, evidence, connection, promptVersion: structuredReview ? reviewPromptVersion : studyCards ? STUDY_CARDS_PROMPT_VERSION : isAiMemoryTask(data.kind) ? AI_MEMORY_PROMPT_VERSION
         : character ? characterPromptVersion : reader ? AI_READER_CONTEXT_PROMPT_VERSION : contextSummaries.length ? AI_CONTEXT_SUMMARY_PROMPT_VERSION : AI_PROMPT_VERSION, messages,
       estimatedInputTokens, reservedOutputTokens, warnings,
       ...(contextSummaries.length ? { contextSummaries } : {}),
@@ -385,7 +386,7 @@ export function validateAiContext(studio: StudioRepository, memorySearch: Memory
   if (packet.writingContext !== undefined && (isAiMemoryTask(packet.kind) || reader || character ||
     JSON.stringify(parseAiWritingContext(packet.writingContext)) !== JSON.stringify(packet.writingContext))) throw storageFailure()
   if (character !== Boolean(characterContext) || (character && (isAiMemoryTask(packet.kind) || summaries.length))) throw storageFailure()
-  const dedicatedPrompt = packet.purpose === 'review' && packet.promptVersion === REVIEW_PROMPT_VERSION || packet.purpose === 'study' && packet.promptVersion === STUDY_CARDS_PROMPT_VERSION
+  const dedicatedPrompt = packet.purpose === 'review' && isReviewPromptVersion(packet.promptVersion) || packet.purpose === 'study' && packet.promptVersion === STUDY_CARDS_PROMPT_VERSION
   if (character && !dedicatedPrompt && !isAiCharacterContextPromptVersion(packet.promptVersion)) throw storageFailure()
   if (reader && isAiMemoryTask(packet.kind)) invalid('章节摘要与知识提取仅支持作者视角。')
   if (reader && summaries.length) invalid('读者已披露资料范围不能发送完整前文摘要，请移除摘要后重新预览。')

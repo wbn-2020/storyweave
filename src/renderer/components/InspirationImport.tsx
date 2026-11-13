@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppError, StudioApi } from '../../contracts/api'
 import { parseImportInspirationsInput, type ImportInspirationsInput } from '../../contracts/workbench'
 import { sameFields, useToolSession } from './workbench-ui'
-import styles from './WorkbenchPanel.module.css'
+import styles from './stellar/Workspace.module.css'
 
 interface Props { api: StudioApi; disabled: boolean; onDirtyChange: (dirty: boolean) => void; onSaved: () => void; onUnknown?: (error: AppError) => void; onRecover?: () => void }
 export function InspirationImport({ api, disabled, onDirtyChange, onSaved, onUnknown, onRecover }: Props) {
@@ -47,7 +47,7 @@ export function InspirationImport({ api, disabled, onDirtyChange, onSaved, onUnk
     await tool.write('inspiration.import', () => api.importInspirations(input), (receipt) => Boolean(receipt && Array.isArray(receipt.items)
       && receipt.items.length === input.items.length && input.items.every((entry, index) => {
         const item = receipt.items[index]
-        return Boolean(item && item.id === entry.id && item.revision === 1 && sameFields(item, entry.fields))
+        return Boolean(item && item.id === entry.id && item.revision === 1 && item.thumbnail === null && sameFields(item, entry.fields))
       })), () => {
       setDraft(null); setPreserved(null); onSaved()
     }, '参考文本与分段已保存，可在 AI 拆书中选择需要分析的分段。')

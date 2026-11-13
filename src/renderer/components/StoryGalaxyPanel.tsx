@@ -8,13 +8,15 @@ import { Dialog } from './Dialog'
 import { blockText, initialStoryFields, StoryFieldsView } from './StoryFieldsEditor'
 import { StoryGalaxyView } from './StoryGalaxyView'
 import { RelationshipCanvas } from './RelationshipCanvas'
+import { WorldMapPanel } from './WorldMapPanel'
+import { StudioIcon, type StudioIconName } from './StudioIcon'
 import { AppearanceMatrix, ForeshadowRadar } from './StoryControlPanel'
 import type { StoryKind } from '../../contracts/story'
 import type { CreativeResourceRef } from '../../contracts/creative-resources'
 import type { CompanionNavigateTarget } from './CompanionPanel'
 import { sameFields, useToolSession } from './workbench-ui'
-import shared from '../App.module.css'
-import styles from './StoryGalaxyPanel.module.css'
+import shared from '../StellarShared.module.css'
+import styles from './StellarGalaxy.module.css'
 
 export interface StoryGalaxyPanelProps {
   api: StudioApi
@@ -22,12 +24,18 @@ export interface StoryGalaxyPanelProps {
   busy: boolean
   error?: string | null
   onClose: () => void
-  onOpenKnowledge: () => void | Promise<void>
-  onOpenRecords: (kind?: StoryKind, id?: string) => void | Promise<void>
+  onOpenKnowledge: (id?: string) => void | Promise<void>
+  onOpenScene?: (placeId: string, offset: number) => void
+  initialPlaceId?: string
+  initialMapOffset?: number
+  onOpenRecords: (kind?: StoryKind, id?: string, initialCreate?: boolean) => void | Promise<void>
   onNavigate: (target: CompanionNavigateTarget) => void | Promise<void>
   onUseForeshadow?: (ref: CreativeResourceRef) => void
-  initialView?: 'galaxy' | 'matrix' | 'radar'
+  onScanRelations?: () => void
+  initialView?: 'galaxy' | 'relationships' | 'world' | 'matrix' | 'radar'
+  onMapViewChange: (view: 'galaxy' | 'world') => void
   chapterId?: string
+  onOpenChapter?: (chapterId: string) => void
   onDirtyChange: (dirty: boolean) => void
   onBookChange: (book: BookSnapshot) => void
   onUnknown?: (error: AppError) => void
@@ -67,6 +75,11 @@ const conflictLabels = { unchecked: '未检查', clear: '未发现已知冲突',
 const sourceLabels = { author_input: '作者输入', external: '外部资料说明', chapter_text: '固定正文引文' }
 const validityLabels = { valid: '出处可查', partial: '出处部分缺失', missing: '出处缺失' }
 const referenceLabels = { current: '当前稿登记', historical: '历史稿登记' }
+const galaxyLegend: { kind: GalaxyKind; label: string; icon: StudioIconName }[] = [
+  { kind: 'person', label: '人物', icon: 'user' }, { kind: 'place', label: '地点', icon: 'compass' },
+  { kind: 'organization', label: '势力', icon: 'spark' }, { kind: 'object', label: '物品', icon: 'layers' },
+  { kind: 'event', label: '事件', icon: 'orbit' }, { kind: 'foreshadow', label: '伏笔', icon: 'timeline' },
+]
 
 function sameTarget(a: GalaxyTarget | null | undefined, b: GalaxyTarget | null | undefined): boolean {
   return a && b ? a.source === b.source && a.id === b.id : !a && !b
@@ -98,7 +111,8 @@ function validPage(page: StoryGalaxyPage, listing: PageRequest, bookId: string):
     (!listing.expected || (page.bookRevision === listing.expected.bookRevision && page.knowledgeRevision === listing.expected.knowledgeRevision)) &&
     page.nodes.length === count + (focus ? 1 : 0) && keys.size === page.nodes.length &&
     (!focus || keys.has(galaxyKey(focus))) && page.nodes.every((node) => node.bookId === bookId &&
-      (node.source === 'knowledge' ? KNOWLEDGE_KINDS.some((kind) => kind === node.kind) : node.source === 'story' && STORY_KINDS.some((kind) => kind === node.kind))) &&
+      (node.source === 'knowledge' ? KNOWLEDGE_KINDS.some((kind) => kind === node.kind) : node.source === 'story' && STORY_KINDS.some((kind) => kind === node.kind)) &&
+      (node.kind !== 'relation' || typeof node.relationType === 'string' && Array.from(node.relationType).length <= 120 && ['directed', 'mutual'].includes(node.relationDirection ?? ''))) &&
     page.nextOffset === (listing.offset + count < page.total ? listing.offset + count : null) &&
     page.edges.length <= MAX_GALAXY_EDGES && new Set(page.edges.map((edge) => edge.id)).size === page.edges.length &&
     page.edges.every((edge) => keys.has(galaxyKey(edge.from)) && keys.has(galaxyKey(edge.to)) && GALAXY_ROLES.includes(edge.role))
@@ -115,12 +129,17 @@ function excerpt(text: string, quote?: string): { text: string; clippedStart: bo
 }
 
 export function StoryGalaxyPanel(props: StoryGalaxyPanelProps) {
-  return <GalaxyContent key={props.book.book.id} {...props} />
+  // 地图与星图切换同步外层路由，命令再次打开地图时才能命中真实视图。
+  return props.initialView === 'world' ? <WorldMapPanel api={props.api} book={props.book} busy={props.busy} error={props.error} onClose={props.onClose}
+    onOpenKnowledge={props.onOpenKnowledge} onOpenRecords={props.onOpenRecords} onNavigate={props.onNavigate} onOpenScene={props.onOpenScene}
+    initialPlaceId={props.initialPlaceId} initialOffset={props.initialMapOffset} onGalaxy={() => props.onMapViewChange('galaxy')} />
+    : <GalaxyContent key={props.book.book.id} {...props} onWorld={() => props.onMapViewChange('world')} />
 }
 
-function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpenRecords, onDirtyChange, onBookChange, onUnknown, onRecover, onNavigate, onUseForeshadow, initialView, chapterId }: StoryGalaxyPanelProps) {
+function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpenRecords, onDirtyChange, onBookChange, onUnknown, onRecover, onNavigate, onUseForeshadow, onScanRelations, initialView, chapterId, onOpenChapter, onWorld }: StoryGalaxyPanelProps & { onWorld: () => void }) {
   const bookId = book.book.id
   const [query, setQuery] = useState('')
+  const [chapterPosition, setChapterPosition] = useState(Math.max(0, book.chapters.findIndex((chapter) => chapter.id === chapterId)))
   const [listing, setListing] = useState<PageRequest>({ scope: 'book', filters: EMPTY_FILTERS, offset: 0, expected: null })
   const [page, setPage] = useState<StoryGalaxyPage | null>(null)
   const [listLoading, setListLoading] = useState(true)
@@ -137,7 +156,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [checkingRequest, setCheckingRequest] = useState(false)
   const [detailJump, setDetailJump] = useState(0)
-  const [view, setView] = useState<'galaxy' | 'relationships' | 'matrix' | 'radar'>(initialView ?? 'galaxy')
+  const [view, setView] = useState<'galaxy' | 'relationships' | 'matrix' | 'radar'>(initialView === 'world' ? 'galaxy' : initialView ?? 'galaxy')
   const [draft, setDraft] = useState<RelationDraft | null>(null)
   const [confirmation, setConfirmation] = useState<CreateStoryRecordInput | null>(null)
   const [discardRequested, setDiscardRequested] = useState(false)
@@ -291,13 +310,17 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
     }
   }
 
-  function beginRelation(fromEntityId?: string, toEntityId?: string) {
+  function beginRelation(fromEntityId?: string, toEntityId?: string, relationType?: string) {
     if (!canRead() || !page || book.book.archivedAt) return
     const fields = initialStoryFields('relation')
     if (fields.kind !== 'relation') return
     const from = page.nodes.find((node) => node.source === 'knowledge' && sameTarget(node, selected))
     if ([fromEntityId, toEntityId].some((id) => id && !page.nodes.some((node) => node.source === 'knowledge' && node.id === id))) return
-    setDraft({ fields: { ...fields, fromEntityId: fromEntityId ?? from?.id ?? '', toEntityId: toEntityId ?? '' }, baseline: versions(page) })
+    const fromName = page.nodes.find((node) => node.source === 'knowledge' && node.id === fromEntityId)?.title ?? ''
+    const toName = page.nodes.find((node) => node.source === 'knowledge' && node.id === toEntityId)?.title ?? ''
+    // 环形选择只预填作者选中的关系类型；仍须预览、确认后才进入原保存事务。
+    setDraft({ fields: { ...fields, fromEntityId: fromEntityId ?? from?.id ?? '', toEntityId: toEntityId ?? '',
+      ...(relationType ? { relationType, title: Array.from(`${fromName}与${toName}的${relationType}关系`).slice(0, 120).join('') } : {}) }, baseline: versions(page) })
     setConfirmation(null); setDiscardRequested(false); setRecoveryPreserved(false)
     setSavedRelation(null)
     tool.setDirty(true); tool.setError(null); tool.setNotice(null)
@@ -510,23 +533,37 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const entities = page?.nodes.filter((node) => node.source === 'knowledge') ?? []
   const entityName = (id: string) => entities.find((node) => node.id === id)?.title ?? id
   const chosenEntities = draft ? [draft.fields.fromEntityId, draft.fields.toEntityId] : []
+  const registeredChapters = detail?.value.sources.flatMap((source) => {
+    const chapter = source.sourceType === 'chapter_text' ? detailBook.chapters.find((item) => item.id === source.chapterId) : undefined
+    return chapter ? [{ source, chapter }] : []
+  }).sort((first, second) => first.chapter.position - second.chapter.position) ?? []
+  const firstRegistered = registeredChapters[0], lastRegistered = registeredChapters.at(-1)
+  const jumpSource = detail?.value.sources.find((source) => source.sourceType === 'chapter_text')
+  const positionChapter = book.chapters[Math.min(chapterPosition, Math.max(0, book.chapters.length - 1))]
 
-  return <Dialog title="故事星海" wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}>
-    <div className={styles.panel}>
+  return <Dialog title={view === 'relationships' ? '关系星网' : view === 'galaxy' ? '记忆星图' : view === 'matrix' ? '章节出场矩阵' : '伏笔雷达'} className={view === 'relationships' ? styles.relationshipPage : view === 'galaxy' ? styles.galaxyPage : styles.controlPage} wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}>
+    <div className={styles.panel} data-view={view}>
       <div className={styles.intro}>
         <div><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 星海与关系画布</span></div>
         <div className={styles.actions}>
-          <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(onOpenKnowledge)}>知识条目</button>
+          <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenKnowledge())}>知识条目</button>
           <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords())}>故事记录</button>
         </div>
       </div>
-      <p className={styles.help}>展示已登记的对象与引用，包含未来计划、人物认知及未采纳记录。作者采纳不等于事实核实；本视图包含剧透，不按读者进度隐藏内容。</p>
-      <div className={styles.viewSwitch} role="group" aria-label="故事对象显示方式">
+      <details className={styles.viewModes}><summary>显示方式</summary><div className={styles.viewSwitch} role="group" aria-label="故事对象显示方式">
         <button type="button" className={shared.button} aria-pressed={view === 'galaxy'} disabled={disabled} onClick={() => { if (canRead()) setView('galaxy') }}>星海视图</button>
-        <button type="button" className={shared.button} aria-pressed={view === 'relationships'} disabled={disabled} onClick={() => { if (canRead()) setView('relationships') }}>2D 关系画布</button>
+        <button type="button" className={shared.button} aria-pressed={view === 'relationships'} disabled={disabled} onClick={() => { if (canRead()) setView('relationships') }}>关系星网</button>
+        <button type="button" className={shared.button} aria-pressed={false} disabled={disabled} onClick={() => void leave(onWorld)}>世界星域</button>
         <button type="button" className={shared.button} aria-pressed={view === 'matrix'} disabled={disabled} onClick={() => { if (canRead()) setView('matrix') }}>章节出场矩阵</button>
         <button type="button" className={shared.button} aria-pressed={view === 'radar'} disabled={disabled} onClick={() => { if (canRead()) setView('radar') }}>伏笔雷达</button>
-      </div>
+      </div></details>
+      {view === 'galaxy' && <div className={styles.galaxyLegend} role="group" aria-label="记忆星图类型">
+        {galaxyLegend.map((entry) => <button key={entry.kind} type="button" data-kind={entry.kind} aria-pressed={filters.kind === entry.kind} disabled={filterDisabled}
+          onClick={() => refreshBook({ kind: filters.kind === entry.kind ? '' : entry.kind })}><StudioIcon name={entry.icon} size={20} />{entry.label}</button>)}
+        <span>知识版本 {page?.knowledgeRevision ?? '—'}</span>
+        {listing.scope === 'focus' ? <button type="button" disabled={disabled || needsRefresh || !bookBaseline.current} onClick={returnToBook}><StudioIcon name="focus" />返回全书</button>
+          : <span>作者全知</span>}
+      </div>}
       {pending && <section className={styles.pending} aria-label="查询超时的只读请求">
         <h3>等待读取结果</h3><p role="status">{pendingMessage}</p>
         <p className={styles.ids}>{pending.requestId ? `请求 ${pending.requestId}` : '请求标识未返回'} · {pending.command}</p>
@@ -544,6 +581,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
           : <ForeshadowRadar api={api} book={book} disabled={busy || tool.locked || syncRequired} asOfChapterId={chapterId} onNavigate={onNavigate}
             onOpenRecord={(kind, id) => void leave(() => onOpenRecords(kind, id))} onUseForeshadow={onUseForeshadow} />}
       </> : <>
+      <details className={styles.queryControls}><summary>搜索与筛选</summary>
       <div className={styles.filters}>
         <form className={styles.search} onSubmit={search}>
           <label>搜索名称与说明<input type="search" value={query} maxLength={200} disabled={filterDisabled} placeholder="输入后提交搜索" onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault() }} /></label>
@@ -562,6 +600,8 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         </div>
       </div>
       {listing.scope === 'focus' && <p className={styles.help}>仅查看中心对象的直接关联，全书搜索与筛选已保留。中心始终显示，分页总数不含中心。</p>}
+      {view === 'relationships' && <div className={styles.canvasActions}><button type="button" className={shared.button} disabled={disabled || Boolean(book.book.archivedAt) || entities.length < 2} onClick={() => beginRelation()}>选择两个实体建立关系</button></div>}
+      </details>
       {savedRelation && !syncRequired && <button type="button" className={shared.button} disabled={disabled || !page} onClick={focusSavedRelation}>查看已保存关系及其两端</button>}
       {tool.pending && <section className={styles.pending} aria-label="核对关系保存回执">
         <h3>关系保存结果尚未确认</h3><p>当前草稿与提交版本已保留，暂不能离开或再次提交。请查询原请求。</p>
@@ -615,17 +655,15 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         <label className={styles.check}><input type="checkbox" checked={recoveryPreserved} disabled={tool.busy || busy} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已复制留存上方草稿和保存状态，可进入恢复核对</label>
         <button type="button" className={shared.button} disabled={tool.busy || busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button>
       </div>}
-      <section className={styles.overview} aria-label="星海本页概览" aria-busy={listLoading}>
+      <div className={styles.graphWorkspace}><section className={styles.overview} aria-label="星海本页概览" aria-busy={listLoading}>
         {listLoading && <div className={styles.loading} role="status"><p>{busy ? '等待当前操作结束后读取星海…' : '正在读取故事星海…'}</p><div className={styles.skeleton} aria-hidden="true" /></div>}
         {page && <>
           <p className={styles.snapshot}>{page.focus ? `直接关联共 ${page.total} 个（不含中心）` : `匹配对象共 ${page.total} 个`} · 每页 {GALAXY_PAGE_SIZE} 个<br />作品版本 {page.bookRevision} · 知识版本 {page.knowledgeRevision}</p>
-          {view === 'relationships' && <div className={styles.canvasActions}><button type="button" className={shared.primaryButton} disabled={disabled || Boolean(book.book.archivedAt) || entities.length < 2} onClick={() => beginRelation()}>选择两个实体建立关系</button>
-            <span className={styles.help}>{book.book.archivedAt ? '作品已归档，关系仅供查看。' : entities.length < 2 ? '当前页不足两个知识实体；请调整筛选或翻页。' : '先选实体，再命名与确认保存。'}</span></div>}
           {page.nodes.length > 0 && (view === 'galaxy'
             ? <StoryGalaxyView nodes={page.nodes} edges={page.edges} focus={page.focus} selected={selected} disabled={disabled} onSelect={(target) => void selectNode(target)} />
-            : <RelationshipCanvas key={bookId} bookId={bookId} nodes={page.nodes} edges={page.edges} selected={selected} disabled={readDisabled || tool.locked || syncRequired || confirmation !== null}
+            : <RelationshipCanvas key={bookId} api={api} bookId={bookId} bookRevision={page.bookRevision} nodes={page.nodes} edges={page.edges} selected={selected} disabled={readDisabled || tool.locked || syncRequired || confirmation !== null}
               picking={draft !== null} chosen={chosenEntities} kindLabels={kindLabels} roleLabels={roleLabels}
-              onConnect={!book.book.archivedAt ? beginRelation : undefined}
+              onConnect={!book.book.archivedAt ? beginRelation : undefined} onScan={onScanRelations ? () => void leave(onScanRelations) : undefined}
               onSelect={(target) => { if (draft) chooseEntity(target); else void selectNode(target) }} />)}
           {page.total === 0 && <div className={styles.empty}>
             <h3>{page.focus ? '中心暂无直接关联' : filtered ? '没有匹配的对象' : '还没有故事对象'}</h3>
@@ -642,7 +680,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         </>}
       </section>
       <div className={styles.layout}>
-        <section className={styles.listPane} aria-label="本页完整对象列表">
+        <details className={styles.objectInventory}><summary>本页完整对象列表</summary><section className={styles.listPane} aria-label="本页完整对象列表">
           <h3 className={styles.sectionTitle}>本页对象</h3>
           {nodes.length > 0 ? <ul className={styles.nodes}>{nodes.map((node) => <li key={galaxyKey(node)}>
             <button type="button" className={styles.node} disabled={disabled} aria-pressed={sameTarget(node, selected)} aria-controls={detailId} onClick={() => void selectNode(node)}>
@@ -652,8 +690,10 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
               {node.excerpt && <span className={styles.excerpt}>{node.excerpt}</span>}
             </button>
           </li>)}</ul> : <p className={styles.help}>{listLoading ? '正在读取本页对象。' : page ? '当前范围没有对象。' : '读取完成后在此查看对象。'}</p>}
-        </section>
-        <section id={detailId} className={styles.detailPane} aria-labelledby={`${detailId}-heading`} aria-busy={reading !== null}>
+        </section></details>
+        <section id={detailId} hidden={view === 'relationships' && !selected} className={styles.detailPane} aria-labelledby={`${detailId}-heading`} aria-busy={reading !== null}>
+          <div className={styles.detailScroll}>
+          {view === 'galaxy' && selectedNode && <div className={styles.galaxySymbol} data-kind={selectedNode.kind}><StudioIcon name={galaxyLegend.find((entry) => entry.kind === selectedNode.kind)?.icon ?? 'spark'} size={56} /></div>}
           <h3 id={`${detailId}-heading`} ref={detailHeading} tabIndex={-1} className={styles.detailTitle}>{selectedNode ? selectedNode.title : '对象详情'}</h3>
           {reading === 'detail' && <p className={styles.help} role="status">正在核对对象详情与页面双版本…</p>}
           {readError && <div className={styles.readError}><p className={shared.formError} role="alert">{readError}</p>
@@ -662,6 +702,9 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
           </div>}
           {!detail && !reading && !readError && <p className={styles.help}>从图或本页完整列表选择对象，查看说明、状态与登记来源。</p>}
           {detail && detailFields && <>
+            {view === 'galaxy' && <dl className={styles.galaxyFacts}><dt>类型</dt><dd>{kindLabels[detailFields.kind]}</dd>
+              <dt>首次登记</dt><dd>{firstRegistered ? `第 ${firstRegistered.chapter.position + 1} 章 · ${firstRegistered.chapter.title}` : '未登记正文出处'}</dd>
+              <dt>最近登记</dt><dd>{lastRegistered ? `第 ${lastRegistered.chapter.position + 1} 章 · ${lastRegistered.chapter.title}` : '未登记正文出处'}</dd></dl>}
             <div className={styles.detailActions}><span>{kindLabels[detailFields.kind]}</span><button type="button" className={shared.button} disabled={disabled || sameTarget(selected, page?.focus)} onClick={focusSelected}>{sameTarget(selected, page?.focus) ? '当前聚焦对象' : '聚焦直接关联'}</button></div>
             {detailFields.authorDecision === 'rejected' && <p className={styles.rejected}>作者已否决此记录，保留登记内容供回查。</p>}
             {detailFields.nature === 'future_plan' && <p className={styles.caution}>未来计划尚不表示已经发生。</p>}
@@ -707,8 +750,20 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
               </div>}
             </section>
           </>}
+          </div>
+          {view === 'galaxy' && <div className={styles.galaxyDetailFooter}>
+            <button type="button" className={shared.primaryButton} disabled={disabled || !jumpSource || page?.bookRevision !== book.book.revision}
+              title={!jumpSource ? '所选对象尚未登记正文出处' : '核对来源后跳到当前正文段落'} onClick={() => jumpSource && void jumpToOriginal(jumpSource.id)}><StudioIcon name="spark" />跳到正文</button>
+            {selected && <button type="button" className={shared.button} disabled={disabled || !detail} onClick={() => void leave(() => selected.source === 'knowledge' ? onOpenKnowledge(selected.id) : onOpenRecords(selectedNode?.kind as StoryKind, selected.id))}>维护所选对象</button>}
+          </div>}
         </section>
-      </div>
+      </div></div>
+      {view === 'galaxy' && <div className={styles.chapterProgress}>
+        <span>{book.chapters.length ? 1 : 0}</span><label>章节定位<input type="range" min={0} max={Math.max(0, book.chapters.length - 1)} value={Math.min(chapterPosition, Math.max(0, book.chapters.length - 1))} disabled={disabled || !book.chapters.length}
+          aria-valuetext={positionChapter ? `第 ${positionChapter.position + 1} 章 ${positionChapter.title}` : '尚无章节'} onChange={(event) => setChapterPosition(Number(event.target.value))} /></label>
+        <span>{book.chapters.length}</span><output>{positionChapter ? `第 ${positionChapter.position + 1} 章 · ${positionChapter.title}` : '尚无章节'}</output>
+        <button type="button" className={shared.button} disabled={disabled || !positionChapter || !onOpenChapter} title={!positionChapter ? '尚无章节' : '打开所选章节'} onClick={() => positionChapter && void leave(() => onOpenChapter?.(positionChapter.id))}><StudioIcon name="read" />打开章节</button>
+      </div>}
       </>}
     </div>
   </Dialog>

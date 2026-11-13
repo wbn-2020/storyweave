@@ -12,11 +12,14 @@ import type { ManuscriptBlock } from '../../contracts/manuscript'
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
 import { CharacterProfileEditor, CharacterProfileView } from './CharacterProfileEditor'
-import shared from '../App.module.css'
-import styles from './KnowledgePanel.module.css'
+import shared from '../StellarShared.module.css'
+import styles from './StellarKnowledge.module.css'
+import { StudioIcon } from './StudioIcon'
+import { SavedPortrait, useSavedPortraits } from './SavedPortrait'
 
 interface Props {
   initialKind?: KnowledgeKind
+  initialId?: string
   api: StudioApi
   book: BookSnapshot
   busy: boolean
@@ -42,6 +45,13 @@ const sourceLabels = { author_input: '作者输入', chapter_text: '正文摘录
 const validityLabels = { valid: '出处可查', partial: '出处部分缺失', missing: '出处缺失' }
 const initialFields: KnowledgeItemFields = { kind: 'person', name: '', aliases: [], summary: '', nature: 'author_setting', authorDecision: 'adopted', freshness: 'current', conflictState: 'clear' }
 const PAGE_SIZE = 50
+const categoryIcons = { person: 'user', place: 'compass', organization: 'workflow', object: 'archive', rule: 'read', theme: 'spark', other: 'grid' } as const
+function cardState(item: KnowledgeItemFields) {
+  if (item.authorDecision === 'rejected') return { tone: 'danger', label: '已否决' }
+  if (['unreviewed', 'review_later'].includes(item.authorDecision) || item.freshness !== 'current' || ['candidate', 'unchecked'].includes(item.conflictState)) return { tone: 'warning', label: '待复核' }
+  if (item.nature === 'ai_inference') return { tone: 'inference', label: 'AI 推断' }
+  return { tone: 'success', label: '已确认' }
+}
 
 // StarWriter V2.4.8 同款：内置 9 种世界观模型预设（开箱即用，告别从零空想）
 const WORLD_MODELS: readonly {
@@ -180,7 +190,7 @@ function blockText(block: ManuscriptBlock): string {
   return block.type === 'horizontalRule' ? '' : (block.content ?? []).map((node) => node.type === 'hardBreak' ? '\n' : node.text).join('')
 }
 
-export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, onForge }: Props) {
+export function KnowledgePanel({ api, book, busy, initialKind, initialId, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onCreate, onUpdate, onForge }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusRefresh, setStatusRefresh] = useState(0)
@@ -189,10 +199,11 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
   const [activeView, setActiveView] = useState<'entries' | 'worldModels' | 'namer'>('entries')
   const [namerGenre, setNamerGenre] = useState<'xianxia' | 'scifi' | 'urban'>('xianxia')
   const [search, setSearch] = useState('')
-  const [filters, setFilters] = useState<{ search: string; kind: KnowledgeKind | ''; nature: KnowledgeNature | '' }>({ search: '', kind: initialKind ?? '', nature: '' })
+  const [filters, setFilters] = useState<{ search: string; kind: KnowledgeKind | ''; nature: KnowledgeNature | ''; reviewOnly: boolean }>({ search: '', kind: initialKind ?? '', nature: '', reviewOnly: false })
   const [offset, setOffset] = useState(0)
   const [refresh, setRefresh] = useState(0)
   const [page, setPage] = useState<KnowledgeItemPage | null>(null)
+  const portraits = useSavedPortraits(api, book.book.id, page?.bookRevision ?? book.book.revision)
   const [listLoading, setListLoading] = useState(true)
   const [detail, setDetail] = useState<KnowledgeItemDetail | null>(null)
   const [reading, setReading] = useState(false)
@@ -222,6 +233,13 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
   const knowledgeReady = status !== null && !status.requiresUpgrade
   const characterProfileReady = status !== null && status.schemaVersion >= CHARACTER_PROFILE_SCHEMA_VERSION
   const abilitiesReady = status !== null && status.schemaVersion >= 17
+  const initialSelection = useRef(initialId)
+  useEffect(() => {
+    if (!knowledgeReady || unavailable || !initialSelection.current) return
+    const id = initialSelection.current
+    initialSelection.current = undefined
+    void selectItem(id)
+  }, [knowledgeReady, unavailable])
   const hasProfileDraft = Object.values(fields.characterProfile ?? {}).some((value) => typeof value === 'string' ? Boolean(value.trim()) : Boolean(value && Object.keys(value).length))
 
   function setDirtyState(value: boolean) { dirtyRef.current = value; setDirty(value); callback.current(value) }
@@ -250,10 +268,13 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
     if (!knowledgeReady) { setPage(null); setListLoading(false); return }
     const ticket = ++listTicket.current
     setListLoading(true); setPage(null)
-    void request(() => api.listKnowledgeItems({ bookId: book.book.id, search: filters.search, ...(filters.kind ? { kind: filters.kind } : {}), ...(filters.nature ? { nature: filters.nature } : {}), limit: PAGE_SIZE, offset })).then((result) => {
+    void request(() => api.listKnowledgeItems({ bookId: book.book.id, search: filters.search, ...(filters.kind ? { kind: filters.kind } : {}), ...(filters.nature ? { nature: filters.nature } : {}), reviewOnly: filters.reviewOnly, includeOverview: true, limit: PAGE_SIZE, offset })).then((result) => {
       if (!mounted.current || ticket !== listTicket.current) return
       setListLoading(false)
-      if (result.ok && result.data.bookId === book.book.id) setPage(result.data)
+      if (result.ok && result.data.bookId === book.book.id && result.data.overview &&
+          KNOWLEDGE_KINDS.every((kind) => Number.isSafeInteger(result.data.overview?.counts[kind]) && result.data.overview!.counts[kind] >= 0) &&
+          Object.values(result.data.overview.counts).reduce((sum, count) => sum + count, 0) === result.data.overview.total &&
+          Number.isSafeInteger(result.data.overview.reviewTotal) && result.data.overview.reviewTotal >= 0 && result.data.overview.reviewTotal <= result.data.overview.total) setPage(result.data)
       else if (result.ok) setMessage('知识列表与当前作品不符，请重新打开后再试。')
       else setMessage(result.error.message)
     })
@@ -398,17 +419,16 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
   }, null, 2) : null
   const panelError = [message, error].filter((value, index, values) => value && value !== pendingMessage && values.indexOf(value) === index).join(' ') || null
 
-  return <Dialog title="人物角色卡与世界观设定系统" wide busy={unavailable} error={panelError} onClose={() => { if (mayLeave()) onClose() }}>
+  return <Dialog title="故事设定库" className={styles.libraryPage} wide busy={unavailable} error={panelError} onClose={() => { if (mayLeave()) onClose() }}><div className={styles.panel} data-mode={mode}>
     <div className={styles.intro}>
       <div>
-        <p>《{book.book.title}》的角色档案、世界模型与起名中心</p>
-        <small className={shared.helpText}>支持一人一卡（性格/动机/口头禅/六维属性雷达）、9 种世界观流派模型一键套用，以及去 AI 味角色起名器。</small>
+        <p>{book.book.title}</p>
       </div>
       <div className={styles.topSwitchBar} role="tablist" aria-label="设定子模块切换">
-        <button type="button" role="tab" aria-selected={activeView === 'entries' && filters.kind === 'person'} className={activeView === 'entries' && filters.kind === 'person' ? styles.topTabActive : styles.topTab} onClick={() => filterKind('person')}>👤 人物角色卡</button>
-        <button type="button" role="tab" aria-selected={activeView === 'entries' && filters.kind === ''} className={activeView === 'entries' && filters.kind === '' ? styles.topTabActive : styles.topTab} onClick={() => filterKind('')}>📚 全部设定 ({page?.total ?? 0})</button>
-        <button type="button" role="tab" aria-selected={activeView === 'worldModels'} className={activeView === 'worldModels' ? styles.topTabActive : styles.topTab} onClick={() => { if (mayLeave()) setActiveView('worldModels') }}>🌍 9种世界模型</button>
-        <button type="button" role="tab" aria-selected={activeView === 'namer'} className={activeView === 'namer' ? styles.topTabActive : styles.topTab} onClick={() => { if (mayLeave()) setActiveView('namer') }}>🎲 角色起名器</button>
+        <button type="button" role="tab" aria-selected={activeView === 'entries' && filters.kind === ''} className={activeView === 'entries' && filters.kind === '' ? styles.topTabActive : styles.topTab} onClick={() => filterKind('')}><StudioIcon name="books" size={20} />全部设定</button>
+        <button type="button" role="tab" aria-selected={activeView === 'entries' && filters.kind === 'person'} className={activeView === 'entries' && filters.kind === 'person' ? styles.topTabActive : styles.topTab} onClick={() => filterKind('person')}><StudioIcon name="user" size={20} />本书人物</button>
+        <button type="button" role="tab" aria-selected={activeView === 'worldModels'} className={activeView === 'worldModels' ? styles.topTabActive : styles.topTab} onClick={() => { if (mayLeave()) setActiveView('worldModels') }}><StudioIcon name="galaxy" size={20} />世界模板</button>
+        <button type="button" role="tab" aria-selected={activeView === 'namer'} className={activeView === 'namer' ? styles.topTabActive : styles.topTab} onClick={() => { if (mayLeave()) setActiveView('namer') }}><StudioIcon name="spark" size={20} />名字参考</button>
       </div>
     </div>
 
@@ -443,8 +463,8 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
       <section className={styles.worldModelsSection} aria-label="9种世界模型预设">
         <div className={styles.subHeader}>
           <div>
-            <h3>9 种世界观流派模型 · 开箱即用</h3>
-            <p>世界观不用从零开始想。点击任意流派模板，即可将其力量体系、社会结构、经济体系与核心禁忌一键带入本书设定卡片并自由增删改写。</p>
+            <h3>世界设定模板</h3>
+            <p>9 份内置模板；选用后可编辑，保存前不会加入本书设定。</p>
           </div>
           <button type="button" className={shared.button} onClick={() => setActiveView('entries')}>返回设定列表</button>
         </div>
@@ -482,8 +502,8 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
       <section className={styles.namerSection} aria-label="去AI味角色起名器">
         <div className={styles.subHeader}>
           <div>
-            <h3>角色起名器 · 专治 AI 同质化命名</h3>
-            <p>自动避开“萧、叶、林、苏、顾、林辰、苏清雪”等网文撞烂的名字。按题材与人设气质定制，选中即可一键建为本书角色卡。</p>
+            <h3>人物名字参考</h3>
+            <p>按题材收录的内置候选。选用后可修改姓名与档案。</p>
           </div>
           <div className={styles.namerGenreButtons}>
             <button type="button" className={namerGenre === 'xianxia' ? shared.primaryButton : shared.button} onClick={() => setNamerGenre('xianxia')}>东方玄幻 / 修仙武侠</button>
@@ -534,22 +554,27 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
     )}
 
     {/* 主视图 C：角色与设定列表 + 详情/编辑 */}
-    {knowledgeReady && activeView === 'entries' && <div className={styles.layout}>
-      <section className={styles.listPane} aria-label="知识条目列表">
+    {knowledgeReady && activeView === 'entries' && <>
+      <div className={styles.libraryTools}>
         <form className={styles.search} onSubmit={(event) => { event.preventDefault(); if (mayLeave()) { setFilters({ ...filters, search: search.trim() }); setOffset(0) } }}>
-          <label>搜索角色名、别名或设定说明<input value={search} maxLength={200} onChange={(event) => setSearch(event.target.value)} disabled={unavailable || dirty} placeholder="搜索角色、势力、规则…" /></label>
-          <button className={shared.button} type="submit" disabled={unavailable || dirty}>查找</button>
+          <StudioIcon name="search" size={20} /><input type="search" aria-label="搜索角色名、别名或设定说明" value={search} maxLength={200} onChange={(event) => setSearch(event.target.value)} disabled={unavailable || dirty} placeholder="搜索设定…" />
+          <button className={styles.toolIcon} type="submit" disabled={unavailable || dirty} aria-label="查找设定" title="查找"><StudioIcon name="arrow" size={20} /></button>
         </form>
+        <button type="button" className={styles.reviewFilter} aria-pressed={filters.reviewOnly} disabled={unavailable || dirty} title="未处理、要求复核、新鲜度变化或冲突未检查／候选冲突" onClick={() => { if (mayLeave()) { setFilters({ ...filters, reviewOnly: !filters.reviewOnly }); setOffset(0) } }}>仅待复核<span>{page?.overview?.reviewTotal ?? '—'}</span></button>
+        <button className={styles.toolIcon} type="button" disabled={unavailable || dirty || listLoading} onClick={() => { setMessage(null); setRefresh((value) => value + 1) }} aria-label="刷新设定库" title="刷新"><StudioIcon name="refresh" size={20} /></button>
+        <button className={shared.primaryButton} type="button" disabled={unavailable || dirty || archived || !page} onClick={() => beginEdit(true, { kind: filters.kind || 'person' })}><StudioIcon name="plus" size={20} />新建条目</button>
+      </div>
+      {portraits.error && <p className={styles.status} role="status">{portraits.error}</p>}
+      <div className={styles.layout}>
+      <aside className={styles.filterPane} aria-label="设定筛选">
+        <nav className={styles.categories} aria-label="设定分类">
+          <button type="button" aria-pressed={!filters.kind} disabled={unavailable || dirty} onClick={() => filterKind('')}><StudioIcon name="books" size={24} /><span>全部设定</span><strong>{page?.overview?.total ?? '—'}</strong></button>
+          {KNOWLEDGE_KINDS.map((kind) => <button type="button" key={kind} aria-pressed={filters.kind === kind} disabled={unavailable || dirty} onClick={() => filterKind(kind)}><StudioIcon name={categoryIcons[kind]} size={24} /><span>{kindLabels[kind]}</span><strong>{page?.overview?.counts[kind] ?? '—'}</strong></button>)}
+        </nav>
         <div className={styles.filters}>
-          <label>分类<select value={filters.kind} onChange={(event) => filterKind(event.target.value)} disabled={unavailable || dirty}><option value="">全部类型</option>{KNOWLEDGE_KINDS.map((kind) => <option key={kind} value={kind}>{kindLabels[kind]}</option>)}</select></label>
           <label>性质<select value={filters.nature} onChange={(event) => filterNature(event.target.value)} disabled={unavailable || dirty}><option value="">全部性质</option>{KNOWLEDGE_NATURES.map((nature) => <option key={nature} value={nature}>{natureLabels[nature]}</option>)}</select></label>
         </div>
-        <div className={styles.listActions}>
-          <button className={shared.primaryButton} type="button" disabled={unavailable || dirty || archived || !page} onClick={() => beginEdit(true, { kind: filters.kind || 'person' })}>
-            + {filters.kind === 'person' ? '添加角色卡' : '新建设定卡'}
-          </button>
-          <button className={shared.button} type="button" disabled={unavailable || dirty || listLoading} onClick={() => { setMessage(null); setRefresh((value) => value + 1) }}>刷新</button>
-        </div>
+      </aside><section className={styles.listPane} aria-label="知识条目列表">
         {listLoading && <p className={styles.status} role="status">正在读取本书角色与设定…</p>}
         {page && <p className={styles.status}>共 {page.total.toLocaleString()} 张设定卡 · 每页 {PAGE_SIZE} 条</p>}
         <ul className={styles.items}>
@@ -562,15 +587,15 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
                 aria-pressed={detail?.id === item.id}
                 onClick={() => void selectItem(item.id)}
               >
-                <span className={styles.avatarCircle} data-tone={item.name.charCodeAt(0) % 4}>
-                  {item.name.slice(0, 1)}
-                </span>
+                <SavedPortrait api={api} bookId={book.book.id} personId={item.id} metadata={item.kind === 'person' ? portraits.items.find((value) => value.personId === item.id) : undefined} name={item.name} className={styles.cardPortrait} fallback={<><StudioIcon name={categoryIcons[item.kind]} size={48} /><span>{kindLabels[item.kind]}</span></>} />
+                {(page.overview?.sourceChapterCounts[item.id] ?? 0) > 0 && <span className={styles.sourceCount}>出处 {page.overview!.sourceChapterCounts[item.id]} 章</span>}
                 <div className={styles.itemRowMeta}>
                   <div className={styles.itemRowTitleLine}>
                     <strong>{item.name}</strong>
                     <span className={styles.roleTag} data-kind={item.kind}>{kindLabels[item.kind]}</span>
                   </div>
-                  <small>{natureLabels[item.nature]} · {decisionLabels[item.authorDecision]}</small>
+                  <span className={styles.itemSummary}>{item.summary || '尚未填写说明'}</span>
+                  <span className={styles.cardState} data-tone={cardState(item).tone}><StudioIcon name={cardState(item).tone === 'success' ? 'check' : cardState(item).tone === 'inference' ? 'spark' : 'clock'} size={16} />{cardState(item).label}</span>
                 </div>
               </button>
             </li>
@@ -580,66 +605,69 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
           <div className={styles.emptyListHint}>
             <p>当前筛选下还没有卡片。</p>
             <div className={styles.listActions}>
-              <button type="button" className={shared.button} onClick={() => setActiveView('namer')}>🎲 去起名器挑个角色</button>
-              <button type="button" className={shared.button} onClick={() => setActiveView('worldModels')}>🌍 套用 9 大世界模型</button>
+              <button type="button" className={shared.primaryButton} disabled={unavailable || dirty || archived} onClick={() => beginEdit(true, { kind: filters.kind || 'person' })}>新建条目</button>
+              <button type="button" className={shared.button} onClick={() => setActiveView('namer')}>查看名字参考</button>
+              <button type="button" className={shared.button} onClick={() => setActiveView('worldModels')}>查看世界模板</button>
             </div>
           </div>
         )}
-        <div className={styles.paging}><button type="button" className={shared.button} disabled={unavailable || dirty || listLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>上一页</button><button type="button" className={shared.button} disabled={unavailable || dirty || listLoading || page?.nextOffset == null} onClick={() => { if (page?.nextOffset != null) setOffset(page.nextOffset) }}>下一页</button></div>
+        <div className={styles.paging}><button type="button" className={shared.button} disabled={unavailable || dirty || listLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>上一页</button><span>{page ? `${page.total ? Math.floor(offset / PAGE_SIZE) + 1 : 0} / ${Math.ceil(page.total / PAGE_SIZE)}` : '—'}</span><button type="button" className={shared.button} disabled={unavailable || dirty || listLoading || page?.nextOffset == null} onClick={() => { if (page?.nextOffset != null) setOffset(page.nextOffset) }}>下一页</button></div>
       </section>
 
       <section className={styles.detailPane} aria-label="知识条目详情" aria-busy={reading}>
         {mode === 'view' ? detail ? <>
+          <SavedPortrait api={api} bookId={book.book.id} personId={detail.id} metadata={detail.kind === 'person' ? portraits.items.find((value) => value.personId === detail.id) : undefined} name={detail.name} className={styles.detailPortrait} fallback={<StudioIcon name={categoryIcons[detail.kind]} size={64} />} />
           <div className={styles.detailHeading}>
             <div className={styles.detailHeroLeft}>
-              <span className={styles.avatarCircleLarge} data-tone={detail.name.charCodeAt(0) % 4}>{detail.name.slice(0, 1)}</span>
               <div>
                 <div className={styles.detailTagRow}>
                   <span className={styles.roleTag} data-kind={detail.kind}>{kindLabels[detail.kind]}</span>
                   <span className={styles.natureBadge}>{natureLabels[detail.nature]}</span>
                 </div>
                 <h3>{detail.name}</h3>
+                <span className={styles.cardState} data-tone={cardState(detail).tone}>{cardState(detail).label}</span>
                 {detail.aliases.length > 0 && <p className={shared.helpText}>别名 / 称号：{detail.aliases.join('、')}</p>}
               </div>
             </div>
             <div className={styles.listActions}><button className={shared.primaryButton} type="button" disabled={unavailable || archived} onClick={() => beginEdit(false)}>编辑卡片</button>
-              {detail.kind === 'person' && onForge && <><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'fill') }}>AI 补全空白</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'extract') }}>从正文提炼</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'audition') }}>角色试戏</button></>}
+              {detail.kind === 'person' && onForge && <details className={styles.forgeActions}><summary>AI 工坊</summary><div><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'fill') }}>AI 补全空白</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'extract') }}>从正文提炼</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'audition') }}>角色试戏</button></div></details>}
             </div>
           </div>
 
-          <div className={styles.labels}>
+          <details className={styles.judgment}><summary>作者判断与状态</summary><div className={styles.labels}>
             <span>采纳状态：{decisionLabels[detail.authorDecision]}</span>
             <span>新鲜度：{freshnessLabels[detail.freshness]}</span>
             <span>一致性：{conflictLabels[detail.conflictState]}</span>
-          </div>
+          </div></details>
           {detail.nature === 'future_plan' && <p className={styles.natureNote}>这是尚未写成的未来计划，不作为当前已发生事实。</p>}
           {detail.nature === 'ai_inference' && <p className={styles.natureNote}>这是推断记录，需要依据与作者判断，不能自动视为已成立。</p>}
 
           <div className={styles.summaryCard}>
-            <h4>核心设定与人物小传</h4>
+            <h4>身份与设定</h4>
             <p className={styles.body}>{detail.summary || '尚未填写说明。'}</p>
           </div>
+          {detail.kind === 'person' && <dl className={styles.keyFacts}><div><dt>动机</dt><dd>{detail.characterProfile?.motivation || '未填写'}</dd></div><div><dt>致命弱点</dt><dd>{detail.characterProfile?.weakness || '未填写'}</dd></div><div><dt>身世</dt><dd>{detail.characterProfile?.background || '未填写'}</dd></div></dl>}
 
           {detail.kind === 'person' && (
-            <section className={styles.characterProfile} key={`profile-${detail.id}`}>
+            <details className={styles.characterProfile} key={`profile-${detail.id}`}><summary>完整八维档案与六维能力</summary>
               <CharacterProfileView profile={detail.characterProfile} />
-            </section>
+            </details>
           )}
 
           <div className={styles.sectionHeading}><h4>正文出处与依据</h4><span>{detail.sources.length} 条</span></div>
-          {detail.sources.length === 0 && <p className={shared.helpText}>暂无关联正文段落。此卡片为作者手工设定。</p>}
+          {detail.sources.length === 0 && <p className={shared.helpText}>暂无已登记来源。</p>}
           <ul className={styles.sources}>{detail.sources.map((source) => <li key={source.id}><div><strong>{sourceLabels[source.sourceType]}</strong><span>{source.sourceType === 'chapter_text' ? validityLabels[source.validity] : '手工来源记录'}{source.sourceType === 'chapter_text' && source.referenceState === 'historical' ? ' · 引用历史稿' : ''}</span></div><blockquote>{source.quote}</blockquote>{source.sourceType === 'chapter_text' && <button className={shared.button} type="button" onClick={() => void showSource(source)} disabled={unavailable}>查看此版本原文</button>}</li>)}</ul>
           {evidence && <Evidence source={evidence.source} revision={evidence.revision} onClose={() => setEvidence(null)} />}
           <div className={styles.sectionHeading}><h4>修改记录</h4><span>共 {detail.revisions.length} 次保存</span></div>
           <ol className={styles.history}>{detail.revisions.map((revision) => <li key={revision.id}><time dateTime={revision.createdAt}>{displayTime(revision.createdAt)}</time><span>{revision.reason === 'created' ? '建立卡片' : '更新卡片'} · {revision.fields.name} · {decisionLabels[revision.fields.authorDecision]}</span></li>)}</ol>
         </> : (
           <div className={styles.empty}>
-            <h3>{reading ? '正在读取卡片…' : '选择一张角色卡，或一键套用 9 大世界模型'}</h3>
-            <p>一人一卡管理主角、配角与反派的性格、动机、口头禅与六维属性雷达；写正文时可在右侧「伴随资料」随时调出对照，防止人设崩塌。</p>
+            <StudioIcon name="read" size={32} /><h3>{reading ? '正在读取卡片…' : '尚未选择设定'}</h3>
+            <p>选择条目查看档案、来源与作者判断。</p>
             <div className={styles.emptyActionRow}>
               <button type="button" className={shared.primaryButton} disabled={unavailable || archived || !page} onClick={() => beginEdit(true, { kind: 'person' })}>+ 新建人物角色卡</button>
-              <button type="button" className={shared.button} onClick={() => setActiveView('namer')}>🎲 打开去AI味起名器</button>
-              <button type="button" className={shared.button} onClick={() => setActiveView('worldModels')}>🌍 浏览 9 种世界观模型</button>
+              <button type="button" className={shared.button} onClick={() => setActiveView('namer')}>名字参考</button>
+              <button type="button" className={shared.button} onClick={() => setActiveView('worldModels')}>世界模板</button>
             </div>
           </div>
         ) : <form className={styles.editorForm} onSubmit={(event) => void save(event)}>
@@ -661,8 +689,8 @@ export function KnowledgePanel({ api, book, busy, initialKind, error, pendingMes
           <div className={shared.formActions}><button className={shared.button} type="button" disabled={unavailable} onClick={discard}>{dirty ? '放弃本次修改' : '返回详情'}</button><button className={shared.primaryButton} type="submit" disabled={unavailable || archived || !fields.name.trim() || (mode === 'edit' && !dirty)}>{writing || busy ? '正在保存…' : '保存卡片'}</button></div>
         </form>}
       </section>
-    </div>}
-  </Dialog>
+    </div></>}
+  </div></Dialog>
 }
 
 function Evidence({ source, revision, onClose }: { source: KnowledgeSource; revision: RevisionSnapshot; onClose: () => void }) {

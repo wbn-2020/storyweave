@@ -1,7 +1,4 @@
-/* ============================================================
-   织章 · StoryWeave — 「纸页与星图」高定文学书桌设计系统
-   宣纸 / 墨色 / 朱砂 / 星海。界面退后，故事向前。
-   ============================================================ */
+/* 星穹设计系统；保留历史主题的颜色映射与独立稿纸偏好。 */
 
 :root,
 :root[data-studio-theme='mirroric'] {
@@ -329,20 +326,135 @@
   --paper-current-match: #F7C6D7;
   --paper-current-ink: #3B1222;
   --paper-current-line: #AC2854;
-  --font-ui: "Segoe UI Variable Text", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei UI", "Noto Sans SC", system-ui, sans-serif;
+  --font-ui: "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
-  --font-display: "Iowan Old Style", "Palatino Linotype", "Georgia", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --font-display: var(--font-ui);
   --font-manuscript: var(--font-serif);
-  --font-mono: "Cascadia Mono", "Consolas", "SFMono-Regular", monospace;
-  --radius-sm: 3px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
-  --radius-xl: 8px;
+  --font-num: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-mono: var(--font-num);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --radius-sm: 8px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+  --rail-width: 64px;
+  --topbar-height: 56px;
+  --statusbar-height: 36px;
+  --outline-width: 260px;
+  --inspector-width: 360px;
+  --control-height: 36px;
+  --control-compact: 32px;
+  --manuscript-width: 760px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-title: 24px;
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-drawer: 30;
+  --z-modal: 40;
+  --z-tooltip: 50;
+  --color-disabled: var(--color-faint);
+  --genre-fantasy: #E0A24A;
+  --genre-stellar: #4FD1C5;
+  --genre-urban: #5EA8FF;
+  --genre-galaxy: #8B7CFF;
+  --genre-system: #57D68A;
+  --genre-accent: var(--genre-stellar);
+  --stellar-star: transparent;
+  --stellar-haze: transparent;
+  --stellar-ai-haze: transparent;
+  --shadow-glow: 0 0 0 1px var(--color-accent-soft);
+  --progress-track: var(--bg-raised);
+  --duration: 160ms;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-  font: 14px/1.6 var(--font-ui);
+  font: 13px/1.5 var(--font-ui);
+  letter-spacing: 0;
   background: var(--bg-shell);
   color: var(--color-ink);
 }
+
+:root[data-studio-theme='stellar'] {
+  color-scheme: dark;
+  --bg-shell: #070A14;
+  --bg-deep: #05070F;
+  --bg-sidebar: rgba(10, 14, 24, .92);
+  --bg-canvas: #070A14;
+  --bg-surface: #0E1526;
+  --bg-subtle: #0B1120;
+  --bg-raised: #131B2E;
+  --bg-tint: rgba(79, 209, 197, .10);
+  --color-line: rgba(140, 190, 255, .16);
+  --color-line-strong: rgba(140, 190, 255, .28);
+  --color-ink: #E8EEF9;
+  --color-ink-secondary: #C3D0E6;
+  --color-muted: #8FA0BF;
+  --color-faint: #6B7A99;
+  --color-accent: #4FD1C5;
+  --color-accent-hover: #6FE0D6;
+  --color-accent-soft: rgba(79, 209, 197, .12);
+  --color-accent-ink: #04120F;
+  --color-accent-text: var(--color-accent);
+  --color-accent-2: #8B7CFF;
+  --color-success: #57D68A;
+  --color-success-soft: rgba(87, 214, 138, .12);
+  --color-warning: #F5B84C;
+  --color-warning-text: var(--color-warning);
+  --color-warning-soft: rgba(245, 184, 76, .12);
+  --color-danger: #FF5C6C;
+  --color-danger-soft: rgba(255, 92, 108, .12);
+  --color-disabled: #6B7A99;
+  --color-paper: #0B1120;
+  --color-paper-ink: #E8EEF9;
+  --color-paper-muted: #8FA0BF;
+  --overlay-backdrop: rgba(3, 6, 12, .55);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, .35);
+  --shadow-md: 0 20px 48px rgba(0, 0, 0, .45);
+  --shadow-paper: none;
+  --shadow-cover: 0 4px 8px rgba(0, 0, 0, .3);
+  --shadow-glow: 0 0 0 1px rgba(79, 209, 197, .28), 0 8px 30px rgba(79, 209, 197, .12);
+  --stellar-star: rgba(232, 238, 249, .35);
+  --stellar-haze: rgba(79, 209, 197, .10);
+  --stellar-ai-haze: rgba(139, 124, 255, .10);
+  --progress-track: rgba(255, 255, 255, .08);
+  --galaxy-person: #5EA8FF;
+  --galaxy-place: #4FD1C5;
+  --galaxy-organization: #F5B84C;
+  --galaxy-object: #B3A6FF;
+  --galaxy-other: #9AA9C7;
+  --cover-ink: var(--color-ink);
+  --cover-muted: var(--color-muted);
+  --cover-faint: var(--color-muted);
+  --cover-line: var(--color-line-strong);
+  --cover-light-ink: var(--color-ink);
+  --cover-light-muted: var(--color-muted);
+  --cover-light-faint: var(--color-muted);
+  --cover-light-line: var(--color-line);
+  --paper-match: #3B3521;
+  --paper-match-ink: #FFE3A4;
+  --paper-match-line: #F5B84C;
+  --paper-current-match: #16403F;
+  --paper-current-ink: #D9FFFA;
+  --paper-current-line: #4FD1C5;
+  --font-manuscript: var(--font-ui);
+}
+
+[data-genre='fantasy'] { --genre-accent: var(--genre-fantasy); }
+[data-genre='stellar'] { --genre-accent: var(--genre-stellar); }
+[data-genre='urban'] { --genre-accent: var(--genre-urban); }
+[data-genre='galaxy'] { --genre-accent: var(--genre-galaxy); }
+[data-genre='system'] { --genre-accent: var(--genre-system); }
 
 :root[data-studio-theme='night'] {
   --color-accent-text: var(--color-accent);
@@ -428,39 +540,16 @@
 body {
   margin: 0;
   min-width: 360px;
-  background:
-    radial-gradient(1100px 700px at 90% -10%, rgba(255, 255, 255, 0.38), transparent 62%),
-    var(--bg-shell);
+  background: var(--bg-shell);
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
-:root[data-studio-theme='night'] body {
-  background:
-    radial-gradient(1000px 640px at 88% -10%, rgba(215, 120, 87, 0.07), transparent 60%),
-    var(--bg-shell);
-}
-
-/* 全局宣纸微噪点纹理：赋予整个应用真实的纸质出版物触感 */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  opacity: 0.048;
-  mix-blend-mode: multiply;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.86' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
-}
-:root[data-studio-theme='night'] body::after {
-  opacity: 0.035;
-  mix-blend-mode: screen;
-}
 
 button, input, select, textarea { font: inherit; color: inherit; }
 svg { flex-shrink: 0; }
-button { cursor: pointer; }
-button:disabled { opacity: .52; cursor: not-allowed; }
+button { cursor: pointer; min-height: var(--control-compact); min-width: var(--control-compact); }
+button:disabled { opacity: .45; cursor: not-allowed; }
 button, input { -webkit-tap-highlight-color: transparent; }
 
 input:not([type='checkbox']):not([type='radio']):not([type='file']),
@@ -469,21 +558,23 @@ textarea {
   background: var(--bg-surface);
   color: var(--color-ink);
   border: 1px solid var(--color-line-strong);
-  border-radius: 3px;
-  padding: 8px 11px;
-  transition: border-color 0.2s var(--ease), background-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  min-height: var(--control-height);
+  transition: border-color var(--duration) var(--ease), background-color var(--duration) var(--ease);
 }
 input:not([type='checkbox']):not([type='radio']):not([type='file']):focus,
 select:focus,
 textarea:focus {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent-soft);
-  outline: none;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 input::placeholder, textarea::placeholder { color: var(--color-ink-secondary); opacity: 1; }
-:focus-visible { outline: 1.5px solid var(--color-accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 h1, h2, h3, h4, p { margin: 0; }
-h1, h2, h3, h4 { font-weight: 500; text-wrap: balance; }
+h1, h2, h3, h4 { font-weight: 600; text-wrap: balance; letter-spacing: 0; }
 button, a { touch-action: manipulation; }
 ::selection { background: var(--color-accent-soft); color: var(--color-accent); }
 

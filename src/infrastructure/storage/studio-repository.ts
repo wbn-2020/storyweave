@@ -24,14 +24,17 @@ import { GENERATION_BOOK_UPGRADE, STUDIO_GENERATION_SCHEMA } from '../ai/generat
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
-import { NOTES_SCHEMA } from '../notes/schema'
-import { INSPIRATION_APPLICATION_ID, INSPIRATION_SCHEMA, WORKBENCH_SCHEMA } from '../workbench/schema'
+import { NOTES_SCHEMA, NOTE_CHAPTER_SCHEMA, NOTE_MATERIAL_SCHEMA, NOTE_THUMBNAIL_SCHEMA } from '../notes/schema'
+import { INSPIRATION_APPLICATION_ID, INSPIRATION_SCHEMA, INSPIRATION_THUMBNAIL_SCHEMA, WORKBENCH_SCHEMA } from '../workbench/schema'
+import { INSPIRATION_THUMBNAIL_SCHEMA_VERSION, parseUpgradeInspirationsInput, type UpgradeInspirationsInput, type UpgradeInspirationsReceipt } from '../../contracts/inspiration-thumbnail'
 import { CHARACTER_PROFILE_SCHEMA } from '../knowledge/schema'
 import { CALENDAR_SCHEMA } from '../workbench/calendar-schema'
 import { AI_PRESETS_SCHEMA } from '../ai/preset-schema'
-import { MEDIA_SCHEMA } from '../workbench/media-schema'
+import { MEDIA_SCHEMA, SCENE_MEDIA_SCHEMA } from '../workbench/media-schema'
 import { LIVING_SCHEMA } from '../workbench/living-schema'
 import { FORGE_SCHEMA } from '../workbench/forge-schema'
+import { WEAVE_SCHEMA } from '../workbench/weave-schema'
+import { REALM_SCHEMA } from '../workbench/realm-schema'
 import { recordWritingActivity } from '../workbench/writing-activity'
 import type { WritingDay } from '../../contracts/workbench'
 import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
@@ -990,6 +993,12 @@ export class StudioRepository {
         if (previousVersion < 15) db.exec(GENERATION_BOOK_UPGRADE)
         if (previousVersion < 16) db.exec(LIVING_SCHEMA)
         if (previousVersion < 17) db.exec(FORGE_SCHEMA)
+        if (previousVersion < 18) db.exec(WEAVE_SCHEMA)
+        if (previousVersion < 19) db.exec(REALM_SCHEMA)
+        if (previousVersion < 20) db.exec(NOTE_CHAPTER_SCHEMA)
+        if (previousVersion < 21) db.exec(SCENE_MEDIA_SCHEMA)
+        if (previousVersion < 22) db.exec(NOTE_MATERIAL_SCHEMA)
+        if (previousVersion < 23) db.exec(NOTE_THUMBNAIL_SCHEMA)
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
         this.recordMutation(db, 'book.metadata', new Date().toISOString())
@@ -1056,7 +1065,9 @@ export class StudioRepository {
       if (!existing && !create) return null
       if (this.inspiration?.open) return this.inspiration
       const check = (db: Database.Database) => {
-        if (db.pragma('application_id', { simple: true }) !== INSPIRATION_APPLICATION_ID || db.pragma('user_version', { simple: true }) !== 1) throw storageFailure()
+        const version = db.pragma('user_version', { simple: true })
+        if (db.pragma('application_id', { simple: true }) !== INSPIRATION_APPLICATION_ID
+          || version !== 1 && version !== INSPIRATION_THUMBNAIL_SCHEMA_VERSION) throw storageFailure()
       }
       if (existing) {
         const probe = new Database(path, { readonly: true, fileMustExist: true, timeout: 2000 })
@@ -1068,13 +1079,71 @@ export class StudioRepository {
         if (existing) check(db)
         else db.transaction(() => {
           db.exec(INSPIRATION_SCHEMA)
+          db.exec(INSPIRATION_THUMBNAIL_SCHEMA)
           db.pragma(`application_id = ${INSPIRATION_APPLICATION_ID}`)
-          db.pragma('user_version = 1')
+          db.pragma(`user_version = ${INSPIRATION_THUMBNAIL_SCHEMA_VERSION}`)
         }).immediate()
         this.inspiration = db
         return db
       } catch (error) { db.close(); throw error }
     })
+  }
+
+  async upgradeInspirations(input: UpgradeInspirationsInput): Promise<UpgradeInspirationsReceipt> {
+    let backupPath: string | undefined
+    try {
+      const data = parseUpgradeInspirationsInput(input), db = this.getInspirationDatabase()
+      if (!db || db.pragma('user_version', { simple: true }) !== data.expectedSchemaVersion) {
+        throw new DomainError({ code: 'REVISION_CONFLICT', message: '全局灵感库格式已变化，请刷新列表后重新检查。' })
+      }
+      const dataVersion = db.pragma('data_version', { simple: true })
+      const backups = join(this.requireRoot(), 'backups')
+      ensureDirectory(backups)
+      const directory = join(backups, `inspiration-v1-${randomUUID()}`)
+      mkdirSync(directory)
+      assertLocalPath(directory, true)
+      backupPath = join(directory, 'inspiration.sqlite')
+      // 仅向本次独占创建的目标备份；失败文件保留，不覆盖既有副本。
+      const created = openSync(backupPath, 'wx')
+      let identity: ReturnType<typeof fstatSync>
+      try { identity = fstatSync(created); fsyncSync(created) } finally { closeSync(created) }
+      const checkIdentity = () => {
+        assertLocalPath(backups, true); assertLocalPath(directory, true); assertLocalPath(backupPath!, false)
+        const actual = lstatSync(backupPath!)
+        if (actual.dev !== identity.dev || actual.ino !== identity.ino) throw storageFailure()
+      }
+      checkIdentity()
+      const copied = await db.backup(backupPath)
+      if (copied.remainingPages !== 0 || copied.totalPages <= 0) throw storageFailure()
+      checkIdentity()
+      const probe = new Database(backupPath, { readonly: true, fileMustExist: true, timeout: 2000 })
+      try {
+        configure(probe)
+        if (probe.pragma('application_id', { simple: true }) !== INSPIRATION_APPLICATION_ID
+          || probe.pragma('user_version', { simple: true }) !== data.expectedSchemaVersion
+          || probe.pragma('quick_check(1)', { simple: true }) !== 'ok' || probe.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
+      } finally { probe.close() }
+      checkIdentity()
+      const durable = openSync(backupPath, 'r+')
+      try {
+        const actual = fstatSync(durable)
+        if (actual.dev !== identity.dev || actual.ino !== identity.ino) throw storageFailure()
+        fsyncSync(durable)
+      } finally { closeSync(durable) }
+      // 备份期间若其他连接改库，保留副本并停止，不能把旧快照当成本次升级前状态。
+      db.transaction(() => {
+        if (db.pragma('user_version', { simple: true }) !== data.expectedSchemaVersion
+          || db.pragma('data_version', { simple: true }) !== dataVersion) throw storageFailure()
+        db.exec(INSPIRATION_THUMBNAIL_SCHEMA)
+        if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
+        db.pragma(`user_version = ${INSPIRATION_THUMBNAIL_SCHEMA_VERSION}`)
+      }).immediate()
+      return { schemaVersion: INSPIRATION_THUMBNAIL_SCHEMA_VERSION, backupPath }
+    } catch (error) {
+      if (backupPath) throw new DomainError({ code: 'STORAGE_ERROR', message: `全局灵感配图启用未确认，请保留原库与本次备份：${backupPath}。备份可能尚未完成，请勿直接替换原库。` })
+      if (error instanceof DomainError) throw error
+      throw storageFailure()
+    }
   }
 
   readKnowledgeSource(input: Extract<KnowledgeSourceInput, { sourceType: 'chapter_text' }>): KnowledgeSourceState {

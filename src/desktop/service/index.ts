@@ -3,11 +3,14 @@ import { KnowledgeRepository } from '../../infrastructure/knowledge/knowledge-re
 import { StoryRepository } from '../../infrastructure/story/story-repository'
 import { StoryTimelineRepository } from '../../infrastructure/story/timeline-repository'
 import { StoryGalaxyRepository } from '../../infrastructure/story/galaxy-repository'
+import { WorldMapRepository } from '../../infrastructure/story/world-map-repository'
 import { StoryControlRepository } from '../../infrastructure/story/control-repository'
 import { NotesRepository } from '../../infrastructure/notes/notes-repository'
 import { WorkbenchRepository } from '../../infrastructure/workbench/workbench-repository'
 import { InspirationRepository } from '../../infrastructure/workbench/inspiration-repository'
 import { WritingCalendarRepository } from '../../infrastructure/workbench/calendar-repository'
+import { WeaveSystemRepository } from '../../infrastructure/workbench/weave-repository'
+import { RealmRepository } from '../../infrastructure/workbench/realm-repository'
 import { StudyRepository } from '../../infrastructure/workbench/study-repository'
 import { AiPresetRepository } from '../../infrastructure/ai/preset-repository'
 import { BookMediaRepository } from '../../infrastructure/workbench/media-repository'
@@ -27,7 +30,8 @@ import { BookRecoveryRepository } from '../../infrastructure/storage/book-recove
 import { BookExportRepository } from '../../infrastructure/storage/book-export'
 import { mergeRevision } from '../../infrastructure/storage/revision-merge'
 import { parseServiceRequest } from '../request-validation'
-import { writeNewText } from '../file-access'
+import { writeNewBinary, writeNewText } from '../file-access'
+import { extname } from 'node:path'
 import { ImportSessions } from './import-sessions'
 
 const parentPort = process.parentPort
@@ -37,11 +41,14 @@ const knowledge = new KnowledgeRepository(repository)
 const story = new StoryRepository(repository)
 const timeline = new StoryTimelineRepository(repository)
 const galaxy = new StoryGalaxyRepository(repository)
+const worldMap = new WorldMapRepository(repository)
 const control = new StoryControlRepository(repository)
 const notes = new NotesRepository(repository)
 const workbench = new WorkbenchRepository(repository)
 const inspirations = new InspirationRepository(repository, notes)
 const calendar = new WritingCalendarRepository(repository)
+const weave = new WeaveSystemRepository(repository)
+const realm = new RealmRepository(repository)
 const memory = new MemoryRepository((bookId) => repository.getMemoryDatabase(bookId))
 const memorySearch = new MemorySearchRepository((bookId) => repository.getMemoryDatabase(bookId), (input) => memory.status(input))
 const memoryVectors = new MemoryVectorRepository((bookId) => repository.getMemoryDatabase(bookId), memorySearch)
@@ -96,22 +103,40 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'workbench.get': return workbench.get(request.payload)
     case 'workbench.brief': return workbench.saveBrief(request.payload)
     case 'workbench.scene': return workbench.saveScene(request.payload)
+    case 'workbench.scenes.reorder': return workbench.reorderScenes(request.payload)
     case 'workbench.issue': return workbench.saveIssue(request.payload)
     case 'workbench.applyIssue': return workbench.applyIssue(request.payload)
     case 'workbench.goal': return workbench.saveGoal(request.payload)
     case 'workbench.session': return workbench.logSession(request.payload)
     case 'inspiration.list': return inspirations.list(request.payload)
+    case 'inspiration.thumbnail': return inspirations.readThumbnail(request.payload)
+    case 'inspiration.upgrade': return repository.upgradeInspirations(request.payload)
     case 'inspiration.save': return inspirations.save(request.payload)
     case 'inspiration.copy': return inspirations.copyToNote(request.payload)
     case 'inspiration.import': return inspirations.importItems(request.payload)
     case 'calendar.get': return calendar.getWritingCalendar(request.payload)
     case 'calendar.save': return calendar.saveCalendarEntry(request.payload)
+    case 'weave.get': return weave.get(request.payload)
+    case 'weave.mutate': return weave.mutate(request.payload)
+    case 'realm.get': return realm.get(request.payload)
+    case 'realm.mutate': return realm.mutate(request.payload)
+    case 'realm.simulate': return realm.simulate(request.payload)
     case 'study.adopt': return studies.adopt(request.payload)
+    case 'study.saved': return studies.saved(request.payload)
     case 'ai.presets.get': return presets.getAiPresets(request.payload)
     case 'ai.presets.save': return presets.saveAiPreset(request.payload)
     case 'book.media.get': return media.getBookMedia(request.payload)
     case 'book.media.read': return media.readBookMedia(request.payload)
     case 'book.media.save': return media.saveBookMedia(request.payload)
+    case 'book.media.export': {
+      const input = request.payload, image = media.readBookMedia({ bookId: input.bookId, id: input.id })
+      if (image.sha256 !== input.expectedSha256 || image.mime !== input.mime) throw new DomainError({ code: 'REVISION_CONFLICT', message: '所选图片与固定摘要或格式不一致，请重新读取原图。' })
+      const extensions = image.mime === 'image/png' ? ['.png'] : image.mime === 'image/jpeg' ? ['.jpg', '.jpeg'] : ['.webp']
+      if (!extensions.includes(extname(input.filePath).toLowerCase())) throw new DomainError({ code: 'INVALID_INPUT', message: '导出文件扩展名必须与所选原图格式一致。' })
+      // 导出固定不可变资产，不转换图片；独占创建并同步落盘，禁止覆盖已有文件。
+      const receipt = writeNewBinary(input.filePath, Buffer.from(image.dataBase64, 'base64'))
+      return { ...receipt, bookId: input.bookId, id: input.id, sha256: image.sha256 }
+    }
     case 'workspace.get': return repository.getWorkspace()
     case 'workspace.open': {
       const workspace = repository.openWorkspace(request.payload.rootPath)
@@ -130,12 +155,15 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'knowledge.update': return knowledge.updateItem(request.payload)
     case 'notes.list': return notes.list(request.payload)
     case 'notes.get': return notes.get(request.payload)
+    case 'notes.thumbnail': return notes.readThumbnail(request.payload)
     case 'notes.create': return notes.create(request.payload)
     case 'notes.update': return notes.update(request.payload)
     case 'notes.promote': return notes.promote(request.payload)
+    case 'notes.chapters': return notes.setChapters(request.payload)
     case 'story.list': return story.listRecords(request.payload)
     case 'story.timeline': return timeline.list(request.payload)
     case 'story.galaxy': return galaxy.list(request.payload)
+    case 'story.worldMap': return worldMap.get(request.payload)
     case 'story.matrix': return control.matrix(request.payload)
     case 'story.radar': return control.radar(request.payload)
     case 'story.get': return story.getRecord(request.payload)
@@ -148,6 +176,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'memory.control': return memory.control(request.payload)
     case 'memory.search': return memorySearch.search(request.payload)
     case 'memory.evidence': return memorySearch.evidence(request.payload)
+    case 'memory.vector.list': return memoryVectors.list(request.payload)
     case 'memory.vector.status': return memoryVectors.status(request.payload)
     case 'memory.vector.get': return memoryVectors.get(request.payload)
     case 'memory.vector.prepare': return memoryVectors.prepare(request.payload)

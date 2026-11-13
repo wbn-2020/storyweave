@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { AI_OUTPUT_LIMIT } from '../../contracts/ai'
 import { applyAiTextHunks, compareAiText, type AiTextComparison, type AiTextHunk } from '../../contracts/ai-text-diff'
-import styles from './AiTextDiff.module.css'
+import styles from './StellarTextDiff.module.css'
 
 export interface AiTextDiffProps {
   originalText: string
@@ -92,7 +92,7 @@ export function AiTextDiff({ originalText, suggestedText, disabled, onAcceptText
         <button type="button" disabled={blocked || !active.selected.length} onClick={() => update({ selected: [], error: null, accepted: false })}>清空选择</button>
         <span role="status">已选 {active.selected.length} / {diff.hunks.length} 处</span>
       </div>
-      {visible.map((hunk) => <article className={styles.hunk} key={hunk.id}>
+      {visible.map((hunk) => <article className={styles.hunk} key={hunk.id} data-kind={!hunk.originalText ? 'added' : !hunk.suggestedText ? 'removed' : 'changed'}>
         <label className={styles.choice}><input type="checkbox" checked={active.selected.includes(hunk.id)} disabled={blocked} onChange={() => toggle(hunk.id)} />
           <span>差异 {hunk.id + 1} · {kind(hunk)}{hunk.coarse ? ' · 整块选择' : ''}</span>
         </label>

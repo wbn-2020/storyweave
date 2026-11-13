@@ -3,13 +3,13 @@ import type Database from 'better-sqlite3'
 import { DomainError, isRecord, requiredId, requiredText } from '../../contracts/api'
 import { parseAiConnection, type AiConnection } from '../../contracts/ai'
 import { AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_NATURES } from '../../contracts/knowledge'
-import { MEMORY_CHUNK_SIZE, MEMORY_SOURCE_KINDS, parseMemorySearchInput, type MemoryEvidence, type MemorySearchPage } from '../../contracts/memory'
+import { MEMORY_CHUNK_SIZE, MEMORY_SOURCE_KINDS, parseMemoryBookInput, parseMemorySearchInput, type MemoryBookInput, type MemoryEvidence, type MemorySearchPage } from '../../contracts/memory'
 import {
-  MEMORY_VECTOR_BATCH_SIZE, MEMORY_VECTOR_CANDIDATES, MEMORY_VECTOR_SCAN_LIMIT,
+  MEMORY_VECTOR_BATCH_SIZE, MEMORY_VECTOR_CANDIDATES, MEMORY_VECTOR_SCAN_LIMIT, MEMORY_VECTOR_TASK_LIMIT,
   parseMemoryVectorFinishInput, parseMemoryVectorPrepareServiceInput, parseMemoryVectorProfileServiceInput,
   parseMemoryVectorReadInput, parseMemoryVectorSearchResultInput, parseMemoryVectorStartInput, parseMemoryVectorValues, parseMemoryVectorVersionInput,
   type MemoryVectorContext, type MemoryVectorFinishInput, type MemoryVectorPrepareServiceInput,
-  type MemoryVectorProfileServiceInput, type MemoryVectorReadInput, type MemoryVectorRun,
+  type MemoryVectorProfileServiceInput, type MemoryVectorReadInput, type MemoryVectorRun, type MemoryVectorRunPage,
   type MemoryVectorRunSummary, type MemoryVectorSearchResultInput, type MemoryVectorSearchResultPage, type MemoryVectorStartInput, type MemoryVectorStatus,
   type MemoryVectorUsage, type MemoryVectorVersionInput,
 } from '../../contracts/memory-vector'
@@ -212,6 +212,26 @@ function advance(db: Database.Database, row: RunRow, state: MemoryVectorRun['sta
 
 export class MemoryVectorRepository {
   constructor(private readonly getDatabase: (bookId: string) => Database.Database, private readonly memorySearch: MemorySearchRepository) {}
+
+  list(input: MemoryBookInput): MemoryVectorRunPage {
+    return perform(() => {
+      const data = parseMemoryBookInput(input)
+      const db = this.getDatabase(data.bookId)
+      return db.transaction(() => {
+        readBook(db, data.bookId)
+        if (schemaVersion(db) < 10) return { bookId: data.bookId, requiresUpgrade: true, runs: [], truncated: false }
+        // 运行中优先；多读一行只判断截断，不读取任务输入或选择当前模型。
+        const rows = db.prepare(`SELECT id, book_id, version, state, kind, publication_version,
+          connection_name, embedding_model, input_count, context_hash, profile_hash, error, created_at, updated_at
+          FROM memory_vector_runs WHERE book_id = ?
+          ORDER BY CASE WHEN state = 'running' THEN 0 ELSE 1 END, sequence DESC LIMIT ?`)
+          .all(data.bookId, MEMORY_VECTOR_TASK_LIMIT + 1) as RunRow[]
+        return { bookId: data.bookId, requiresUpgrade: false,
+          runs: rows.slice(0, MEMORY_VECTOR_TASK_LIMIT).map((row) => summary(row, data.bookId)),
+          truncated: rows.length > MEMORY_VECTOR_TASK_LIMIT }
+      })()
+    })
+  }
 
   status(input: MemoryVectorProfileServiceInput): MemoryVectorStatus {
     return perform(() => {

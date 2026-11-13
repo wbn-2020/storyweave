@@ -27,7 +27,7 @@ import { validateAiSummaryContext } from './summary-context'
 import { creativeRef, parseCreativeResources } from '../../contracts/creative-resources'
 import { AiMemoryTaskRepository } from './memory-task-repository'
 import { parseLivingWritingContext } from '../../contracts/living'
-import { REVIEW_PROMPT_VERSION } from '../../contracts/review'
+import { isReviewPromptVersion } from '../../contracts/review'
 import { STUDY_CARDS_PROMPT_VERSION } from '../../contracts/study'
 import { requireLiving } from '../workbench/living-state'
 import { requireForge } from '../workbench/forge-state'
@@ -172,7 +172,7 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         value.perspective !== undefined || characterContext !== undefined || value.estimatedInputTokens !== estimated || value.reservedOutputTokens !== config.maxOutputTokens ||
         estimated + config.maxOutputTokens > config.contextWindow) throw storageFailure()
     } else {
-      const supportedPrompt = value.purpose === 'review' && value.promptVersion === REVIEW_PROMPT_VERSION || value.purpose === 'study' && value.promptVersion === STUDY_CARDS_PROMPT_VERSION ? true : characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
+      const supportedPrompt = value.purpose === 'review' && isReviewPromptVersion(value.promptVersion) || value.purpose === 'study' && value.promptVersion === STUDY_CARDS_PROMPT_VERSION ? true : characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
         : value.promptVersion === (isAiMemoryTask(row.kind) ? AI_MEMORY_PROMPT_VERSION : value.perspective === 'reader' ? AI_READER_CONTEXT_PROMPT_VERSION : contextSummaries.length ? AI_CONTEXT_SUMMARY_PROMPT_VERSION : AI_PROMPT_VERSION)
       if (!supportedPrompt) throw storageFailure()
     }
@@ -194,7 +194,7 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         return disclosure.state !== 'located' || JSON.stringify(disclosure) !== JSON.stringify(item.readerDisclosure)
       })) throw storageFailure()
     }
-    if (contextSummaries.length || value.perspective === 'reader' || characterContext || value.writingContext !== undefined || creativeResources || livingContext || value.purpose === 'living' || value.purpose === 'forge' || value.purpose === 'review' && value.promptVersion === REVIEW_PROMPT_VERSION) {
+    if (contextSummaries.length || value.perspective === 'reader' || characterContext || value.writingContext !== undefined || creativeResources || livingContext || value.purpose === 'living' || value.purpose === 'forge' || value.purpose === 'review' && isReviewPromptVersion(value.promptVersion)) {
       const estimated = Math.ceil(Buffer.byteLength(JSON.stringify(value.messages), 'utf8') * 1.1) + 1024
       if (value.messages.length !== 2 || !isRecord(value.messages[0]) || value.messages[0].role !== 'system' ||
         !isRecord(value.messages[1]) || value.messages[1].role !== 'user' || value.warnings.some((warning) => typeof warning !== 'string') ||

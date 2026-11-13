@@ -6,6 +6,7 @@ import {
   parseAiListInput, parseAiMemoryAdoptInput, parseAiPrepareInput, parseAiRunInput, parseAiStartInput, parseAiVersionInput,
   type AiConfigureInput, type AiConnection, type AiConnectionPage, type AiFinishInput, type AiRun, type AiRunInput, type AiUsage,
 } from '../../contracts/ai'
+import { parseGetAiPresetsInput, parseSaveAiPresetInput } from '../../contracts/ai-presets'
 import type { ServiceClient } from './service-client'
 import { writeNewText } from '../file-access'
 import { PendingAiResults, type PendingAiFile, type PendingAiPreflight } from './pending-ai-results'
@@ -16,9 +17,11 @@ import { parseAiContextSummaryInput } from '../../contracts/ai-context-summary'
 import { parseAiContextRecommendationInput } from '../../contracts/ai-context-recommendation'
 import {
   MEMORY_VECTOR_BATCH_SIZE, parseMemoryEmbeddingResponse, parseMemoryVectorPrepareInput,
+  isMemoryVectorRunPage,
   parseMemoryVectorProfileInput, parseMemoryVectorReadInput, parseMemoryVectorStartInput, parseMemoryVectorVersionInput,
   type MemoryVectorFinishInput, type MemoryVectorReadInput, type MemoryVectorRun,
 } from '../../contracts/memory-vector'
+import { parseMemoryBookInput } from '../../contracts/memory'
 
 const RESPONSE_LIMIT = 4 * 1024 * 1024
 const VECTOR_RESPONSE_LIMIT = 2 * 1024 * 1024
@@ -116,6 +119,10 @@ function limitedText(text: string, maximum: number): string {
 
 export class AiSessions {
   constructor(private readonly workspaceKey?: (root: string, connection: AiConnection) => string | undefined) {}
+  sessionKey(root: string, bookId: string, connection: AiConnection): string | undefined {
+    const key = this.keys.get(keyScope(root, bookId, connection.id))
+    return key?.baseUrl === connection.baseUrl ? key.value : this.workspaceKey?.(root, connection)
+  }
   private readonly keys = new Map<string, SessionKey>()
   private readonly uncertainWrites = new Map<string, UncertainRequest>()
   private readonly pendingConfigurations = new Map<string, PendingConfiguration>()
@@ -150,7 +157,7 @@ export class AiSessions {
         for (const entry of this.pendingResults.load(root)) {
           if ('warning' in entry) { warnings += 1; firstError ??= failure('STORAGE_ERROR', entry.warning); continue }
           const file = entry.file
-          if (file.payload.command === 'generation.finish') { warnings += 1; firstError ??= failure('STORAGE_ERROR', '原模型留存目录出现开书记录，请保留原文件并核对。'); continue }
+          if (file.payload.command !== 'ai.finish' && file.payload.command !== 'memory.vector.finish') { warnings += 1; firstError ??= failure('STORAGE_ERROR', '原模型留存目录出现其他类型记录，请保留原文件并核对。'); continue }
           const unresolvedFile = unresolved?.journal
           if (unresolvedFile && file.root === unresolvedFile.root && file.id === unresolvedFile.id &&
             file.hash === unresolvedFile.hash && file.volume.id === unresolvedFile.volume.id && file.volume.hash === unresolvedFile.volume.hash) continue
@@ -223,11 +230,13 @@ export class AiSessions {
       if (!root) return failure('WORKSPACE_REQUIRED', '请先打开本地书库，再使用 AI 协作。')
       const restored = await this.restorePending(service)
       // 个别恢复残件不能封住其他候选的读取入口；生成和采用仍须等待留存结果核对。
-      const reading = ['ai.connection.list', 'ai.list', 'ai.get', 'ai.context.summaries', 'ai.context.recommend',
+      const reading = ['ai.connection.list', 'ai.presets.get', 'ai.list', 'ai.get', 'ai.context.summaries', 'ai.context.recommend',
         'ai.task.status', 'ai.task.maintenance', 'ai.task.get', 'ai.summary.status', 'ai.summary.get', 'ai.summary.node',
-        'memory.vector.status', 'memory.vector.get'].includes(command)
+        'memory.vector.list', 'memory.vector.status', 'memory.vector.get'].includes(command)
       if (!restored.ok && !reading && (this.pendingFinish || this.restoredRoot !== root)) return restored
       switch (command) {
+        case 'ai.presets.get': return await service.request('ai.presets.get', parseGetAiPresetsInput(payload))
+        case 'ai.presets.save': return await service.request('ai.presets.save', parseSaveAiPresetInput(payload))
         case 'ai.connection.list': {
           const input = parseAiBookInput(payload)
           const result = await service.request('ai.connection.list', input)
@@ -294,6 +303,16 @@ export class AiSessions {
         case 'ai.summary.step': return await service.request('ai.summary.step', parseAiSummaryTaskInput(payload))
         case 'ai.summary.control': return await service.request('ai.summary.control', parseAiSummaryControlInput(payload))
         case 'ai.summary.adopt': return await service.request('ai.summary.adopt', parseAiSummaryAdoptInput(payload))
+        case 'memory.vector.list': {
+          const input = parseMemoryBookInput(payload)
+          const result = await service.request('memory.vector.list', input)
+          if (!result.ok) return result
+          if (service.getWorkspaceRoot() !== root || !isMemoryVectorRunPage(result.data, input.bookId)) {
+            return failure('REVISION_CONFLICT', '向量任务列表或书库身份不符，请重新读取。')
+          }
+          return { ok: true, data: { ...result.data, runs: result.data.runs.map((run) => ({ ...run,
+            active: this.activeVectorFor(root, { bookId: input.bookId, runId: run.id }, service) !== null })) } }
+        }
         case 'memory.vector.status': {
           const input = parseMemoryVectorProfileInput(payload)
           const page = await service.request('ai.connection.list', { bookId: input.bookId })

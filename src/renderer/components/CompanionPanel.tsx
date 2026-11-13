@@ -5,7 +5,7 @@ import { documentToText, parseManuscript } from '../../contracts/manuscript'
 import { paragraphText } from '../../contracts/paragraph-diff'
 import type { StoryRecordDetail } from '../../contracts/story'
 import { displayTime, request } from '../request'
-import styles from './CompanionPanel.module.css'
+import styles from './StellarCompanion.module.css'
 
 export interface CompanionNavigateTarget {
   bookId: string

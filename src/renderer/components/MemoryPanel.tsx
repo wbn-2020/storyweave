@@ -5,13 +5,15 @@ import { MEMORY_SOURCE_KINDS, type MemoryControlInput, type MemoryEvidence, type
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
 import { MemoryVectorPanel } from './MemoryVectorPanel'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './MemoryPanel.module.css'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarMemory.module.css'
 
 interface Props {
   api: StudioApi
   book: BookSnapshot
+  initialTaskId?: string
+  initialVectorRunId?: string
   busy: boolean
   error?: string | null
   pendingMessage?: string | null
@@ -36,7 +38,7 @@ const phaseLabels = { planning: '固定来源范围', indexing: '原文分片与
 const reasonLabels = { keyword: '关键词', title: '名称', entity: '显式实体关联', semantic: '向量语义候选' }
 function runnable(task: MemoryTaskSummary | null | undefined): boolean { return task?.state === 'planning' || task?.state === 'running' }
 
-export function MemoryPanel({ api, book, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onStart, onStep, onControl }: Props) {
+export function MemoryPanel({ api, book, initialTaskId, initialVectorRunId, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onStart, onStep, onControl }: Props) {
   const [status, setStatus] = useState<MemoryStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
@@ -59,12 +61,23 @@ export function MemoryPanel({ api, book, busy, error, pendingMessage, checkingRe
   const lock = useRef(false)
   const ticket = useRef(0)
   const statusRef = useRef<MemoryStatus | null>(null)
+  const requestedTask = useRef<HTMLElement | null>(null)
+  const taskLocated = useRef(false)
   const dirtyCallback = useRef(onDirtyChange)
   dirtyCallback.current = onDirtyChange
   const archived = Boolean(book.book.archivedAt)
   const parentBlocked = busy || loading || working || reading || Boolean(pendingMessage)
   const blocked = parentBlocked || vectorBusy
   const task = status?.activeTask
+  useEffect(() => {
+    if (!status || loading || !initialTaskId || taskLocated.current) return
+    taskLocated.current = true
+    if (status.activeTask?.id !== initialTaskId && !status.recentTasks.some((item) => item.id === initialTaskId)) {
+      setMessage('所选索引任务已不在最近记录中，请重新读取任务中心核对。'); return
+    }
+    requestedTask.current?.focus()
+    requestedTask.current?.scrollIntoView({ block: 'nearest' })
+  }, [status, loading, initialTaskId])
 
   function acceptStatus(value: MemoryStatus) {
     if (value.bookId !== book.book.id) { setMessage('整理状态的作品身份不符，请重新打开。'); return false }
@@ -204,9 +217,9 @@ export function MemoryPanel({ api, book, busy, error, pendingMessage, checkingRe
     {!loading && !status && <button type="button" className={shared.button} disabled={blocked} onClick={() => void refreshStatus()}>重新读取状态</button>}
     {status && status.schemaVersion < 10 && <section className={layout.upgrade}><h3>{status.requiresUpgrade ? '为旧作品启用记忆索引' : '为本书启用向量索引与混合检索'}</h3><p>当前格式 v{status.schemaVersion}。启用前会建立独立数据库备份，核对后升级到当前作品格式；已有本地检索仍可继续使用。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意为本书创建备份并升级数据结构</label><button type="button" className={shared.primaryButton} disabled={blocked || archived || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
     {backupPath && <p className={layout.backupPath}>升级前数据库副本：{backupPath}</p>}
-    {status && !status.requiresUpgrade && <>
+    {status && !status.requiresUpgrade && <div className={styles.memoryWorkspace}>
       <section className={styles.coverage} aria-label="整理覆盖"><div><span>版本匹配的索引</span><strong>{status.indexedSourceCount.toLocaleString()} <small>/ {status.sourceCount.toLocaleString()} 个来源</small></strong></div><div><span>待索引变更</span><strong>{status.pendingEventCount.toLocaleString()}</strong></div><div><span>发布批次</span><strong>{status.publicationVersion || '尚无'}</strong></div><p className={status.current ? styles.current : styles.stale}>{status.current ? '已发布批次覆盖当前作品版本' : '当前版本尚未整批覆盖；发生变化的旧来源会排除检索'}<span>作品版本 {status.bookRevision} · 知识版本 {status.knowledgeRevision} · {status.changedDependencyCount} 个来源的引用原稿已有变化，需复核</span></p></section>
-      <section className={styles.task} aria-label="整理任务"><div className={styles.taskHeading}><h3>{task ? taskLabels[task.state] : '整理本书资料'}</h3><button className={shared.button} type="button" disabled={blocked || autoRun} onClick={() => void refreshStatus()}>刷新状态</button></div>
+      <section ref={task?.id === initialTaskId ? requestedTask : undefined} tabIndex={task?.id === initialTaskId ? -1 : undefined} className={styles.task} aria-label="整理任务"><div className={styles.taskHeading}><h3>{task ? taskLabels[task.state] : '整理本书资料'}</h3><button className={shared.button} type="button" disabled={blocked || autoRun} onClick={() => void refreshStatus()}>刷新状态</button></div>
         {task ? <><p>{phaseLabels[task.phase]} · 已完成 {task.completedSources.toLocaleString()} / {task.plannedSources.toLocaleString()} 个来源 · {task.processedChunks.toLocaleString()} 个片段</p><progress aria-label="已完成来源" value={task.completedSources} max={Math.max(1, task.plannedSources)} /><p className={styles.note}>固定输入：作品 {task.targetBookRevision}／知识 {task.targetKnowledgeRevision}。每次最多规划 100 个来源或处理 64 个片段，完整且版本匹配才发布。</p>{task.error && <p className={shared.formError}>{task.error}</p>}<div className={styles.actions}>
           {runnable(task) && (autoRun ? <button className={shared.button} type="button" onClick={() => setAutoRun(false)}>停止连续处理</button> : <><button className={shared.primaryButton} type="button" disabled={blocked || archived} onClick={() => setAutoRun(true)}>继续整理</button><button className={shared.button} type="button" disabled={blocked || archived} onClick={() => void step()}>只处理下一批</button><button className={shared.button} type="button" disabled={blocked || archived} onClick={() => void control('pause')}>暂停任务</button></>)}
           {task.state === 'paused' && <button className={shared.primaryButton} type="button" disabled={blocked || archived} onClick={() => void control('resume')}>恢复任务</button>}
@@ -214,10 +227,10 @@ export function MemoryPanel({ api, book, busy, error, pendingMessage, checkingRe
           <button className={shared.button} type="button" disabled={blocked || autoRun || archived} onClick={() => void control('cancel')}>取消任务</button>
         </div><p className={styles.note}>{autoRun ? '正在逐批处理；可停止调度，已确认的进度会保留。' : '检查点会保留；关闭面板后停止调度，下次可继续。'}</p></> : <><p>新任务固定当前版本，复用版本匹配的完整索引。任务处理中暂存的片段在发布前不可检索。</p><button className={shared.primaryButton} type="button" disabled={blocked || archived} onClick={() => void start()}>整理当前版本</button></>}
         {archived && <p className={styles.note}>作品已归档，可检索已有资料；解除归档后可继续整理。</p>}
-        {status.recentTasks.length > 0 && <details className={styles.history}><summary>最近任务</summary><ul>{status.recentTasks.map((item) => <li key={item.id}><span>{taskLabels[item.state]} · {item.completedSources}/{item.plannedSources} 来源</span><span>{displayTime(item.updatedAt)} · 作品 {item.targetBookRevision}</span>{item.error && <span>{item.error}</span>}</li>)}</ul></details>}
+        {status.recentTasks.length > 0 && <details className={styles.history} open={Boolean(initialTaskId && task?.id !== initialTaskId && status.recentTasks.some((item) => item.id === initialTaskId))}><summary>最近任务</summary><ul>{status.recentTasks.map((item) => <li key={item.id} aria-current={item.id === initialTaskId ? 'true' : undefined} tabIndex={item.id === initialTaskId ? -1 : undefined} ref={(element) => { if (item.id === initialTaskId && task?.id !== initialTaskId) requestedTask.current = element }}><span>{item.id === initialTaskId && '当前查看 · '}{taskLabels[item.state]} · {item.completedSources}/{item.plannedSources} 来源</span><span>{displayTime(item.updatedAt)} · 作品 {item.targetBookRevision}</span>{item.error && <span>{item.error}</span>}</li>)}</ul></details>}
       </section>
       <form className={styles.search} onSubmit={(event) => void search(event)}><label className={styles.query}>查找资料<input value={query} maxLength={200} disabled={blocked || autoRun} placeholder="人物名字、地点、事件或原文词语" onChange={(event) => setQuery(event.target.value)} /></label><label>来源<select value={sourceKind} disabled={blocked || autoRun} onChange={(event) => setSourceKind(event.target.value as MemorySourceKind | '')}><option value="">全部来源</option>{MEMORY_SOURCE_KINDS.map((value) => <option key={value} value={value}>{sourceLabels[value]}</option>)}</select></label><label>性质<select value={nature} disabled={blocked || autoRun} onChange={(event) => setNature(event.target.value as KnowledgeNature | '')}><option value="">全部性质</option>{KNOWLEDGE_NATURES.map((value) => <option key={value} value={value}>{natureLabels[value]}</option>)}</select></label><button className={shared.primaryButton} type="submit" disabled={blocked || autoRun || !query.trim()}>检索</button><div className={styles.checks}><label><input type="checkbox" checked={includeUnreviewed} disabled={blocked || autoRun} onChange={(event) => setIncludeUnreviewed(event.target.checked)} />包含未审阅资料</label><label><input type="checkbox" checked={includeAffected} disabled={blocked || autoRun} onChange={(event) => setIncludeAffected(event.target.checked)} />包含受影响或引用原稿已变化的资料</label></div></form>
-      {status.schemaVersion >= 10 && <MemoryVectorPanel api={api} bookId={book.book.id} archived={archived} publicationVersion={status.publicationVersion}
+      {status.schemaVersion >= 10 && <MemoryVectorPanel key={initialVectorRunId ?? 'current'} api={api} bookId={book.book.id} initialRunId={initialVectorRunId} archived={archived} publicationVersion={status.publicationVersion}
         disabled={parentBlocked || autoRun} onBusyChange={setVectorBusy} onRecover={onRecover}
         searchInput={{ bookId: book.book.id, query, includeUnreviewed, includeAffected, limit: 30, ...(sourceKind ? { sourceKind } : {}), ...(nature ? { nature } : {}) }}
         onRestoreSearch={(input) => { setQuery(input.query); setSourceKind(input.sourceKind ?? ''); setNature(input.nature ?? ''); setIncludeUnreviewed(input.includeUnreviewed !== false); setIncludeAffected(input.includeAffected === true) }}
@@ -225,6 +238,6 @@ export function MemoryPanel({ api, book, busy, error, pendingMessage, checkingRe
       {page?.semantic && <p className={styles.note}>本次混合检索快照：筛选范围内已有向量 {page.semantic.indexedChunks.toLocaleString()} / {page.semantic.eligibleChunks.toLocaleString()} 个片段，实际比较 {page.semantic.scannedChunks.toLocaleString()} 个，单次上限 {page.semantic.scanLimit.toLocaleString()}。每路最多 100 个候选；覆盖或扫描不全会标记截断，不表示全书语义召回已完成。</p>}
       {reading && <p className={styles.note} role="status">正在读取…</p>}
       {page && <section className={styles.results} aria-label="检索结果"><p className={styles.note}>批次 {page.publicationVersion} · {page.hits.length} 个原文片段{page.truncated ? ' · 有界候选仍有更多结果，请缩小检索范围' : ''}。已拒绝资料不参与检索；当前界面包含作者全知内容。</p>{page.hits.length === 0 && <p className={styles.empty}>没有找到当前筛选范围内的有效片段。可以调整词语、筛选或整理当前版本。</p>}<ol>{page.hits.map((hit) => <li key={hit.chunkId}><div className={styles.resultHeading}><h4>{hit.title}</h4><span>{sourceLabels[hit.sourceKind]} · {hit.reasons.map((reason) => reasonLabels[reason]).join('、')}</span></div><div className={layout.labels}><span>{natureLabels[hit.nature]}</span>{hit.authorDecision && <span>{decisionLabels[hit.authorDecision]}</span>}<span>{hit.sourceKind === 'chapter' ? '来源状态：当前' : freshnessLabels[hit.freshness]}</span><span>{hit.sourceKind === 'chapter' ? '未判断陈述真伪' : conflictLabels[hit.conflictState]}</span>{hit.dependencyState === 'source_changed' && <span>引用原稿已变化，待复核</span>}</div><blockquote>{hit.excerpt}</blockquote><button className={shared.button} type="button" disabled={blocked || autoRun} onClick={() => void readEvidence(hit)}>核对固定版本出处</button>{evidence?.chunkId === hit.chunkId && <div className={styles.evidence}><p>原对象 {evidence.sourceId}<br />修订 {evidence.revisionId}<br />{evidence.blockId ? `正文块 ${evidence.blockId}` : '知识／故事字段摘录'} · UTF-16 偏移 {evidence.startOffset}–{evidence.endOffset}</p><pre>{evidence.text}</pre><small>已核对当前发布指针与这份固定原稿；原文存在不等于陈述真实。{evidence.dependencyState === 'source_changed' && '引用的原稿已变化，历史引用仍可核对。'}</small></div>}</li>)}</ol></section>}
-    </>}
+    </div>}
   </Dialog>
 }

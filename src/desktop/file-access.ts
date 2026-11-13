@@ -49,6 +49,14 @@ export function readSelectedFile(filePath: string, maxBytes: number, extensions:
 }
 
 export function writeNewText<T>(filePath: string, producer: (write: (chunk: string) => void) => T): { receipt: FileWriteReceipt; value: T } {
+  return writeNewFile(filePath, (write) => producer((chunk) => write(Buffer.from(chunk, 'utf8'))))
+}
+
+export function writeNewBinary(filePath: string, bytes: Uint8Array): FileWriteReceipt {
+  return writeNewFile(filePath, (write) => write(bytes)).receipt
+}
+
+function writeNewFile<T>(filePath: string, producer: (write: (chunk: Uint8Array) => void) => T): { receipt: FileWriteReceipt; value: T } {
   const requested = localPath(filePath)
   const name = basename(requested)
   if (!name || /[<>:"|?*]/.test(name) || /[ .]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) {
@@ -63,8 +71,7 @@ export function writeNewText<T>(filePath: string, producer: (write: (chunk: stri
     // wx 保证不会覆盖同名稿件。写入失败保留残留文件，供作者核对，不自动删除。
     fd = openSync(target, 'wx')
     created = true
-    const value = producer((chunk) => {
-      const buffer = Buffer.from(chunk, 'utf8')
+    const value = producer((buffer) => {
       let offset = 0
       while (offset < buffer.length) {
         const written = writeSync(fd!, buffer, offset, buffer.length - offset)

@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import { DomainError, requiredId, requiredInteger, type BookInput, type BookMutationInput } from '../../contracts/api'
+import { DomainError, requiredId, requiredInteger, requiredText, type BookInput, type BookMutationInput } from '../../contracts/api'
 import { parseManuscript } from '../../contracts/manuscript'
 import {
   MAX_REVIEW_ISSUES, MAX_SCENES, MAX_WORKBENCH_FIELDS_BYTES, MAX_WORKBENCH_SNAPSHOT_BYTES,
   MAX_WORKBENCH_DOCUMENT_BYTES, MAX_WORKBENCH_ANCHOR_BYTES, WORKBENCH_SCHEMA_VERSION, parseLogWritingSessionInput, parseApplyReviewIssueInput,
   parseReviewIssueFields, reviewReplacement, parseSaveBriefInput, parseSaveReviewIssueInput, parseSaveSceneInput,
-  parseSaveWritingGoalInput, parseSceneFields, parseWorkbenchBookInput, parseWritingBrief, parseWritingGoalFields,
+  parseSaveWritingGoalInput, parseSceneFields, parseWorkbenchBookInput, parseWritingBrief, parseWritingGoalFields, parseReorderScenesInput,
   type LogWritingSessionInput, type ManuscriptAnchor, type ReviewIssue, type SaveBriefInput, type SaveReviewIssueInput,
-  type SaveSceneInput, type SaveWritingGoalInput, type SceneCard, type WorkbenchSnapshot, type WritingDay, type WritingGoal, type ApplyReviewIssueInput, type ApplyReviewIssueReceipt,
+  type SaveSceneInput, type ReorderScenesInput, type SaveWritingGoalInput, type SceneCard, type WorkbenchSnapshot, type WritingDay, type WritingGoal, type ApplyReviewIssueInput, type ApplyReviewIssueReceipt,
 } from '../../contracts/workbench'
 import type { StudioRepository } from '../storage/studio-repository'
 import { localWritingDate } from './writing-activity'
@@ -69,6 +69,49 @@ function checkReviewSource(db: Database.Database, bookId: string, fields: Return
   if (!reviewSourceMatches(source, sourceRun)) return fail('审稿问题与固定候选内容不一致。')
   if (initial && (fields.anchor.chapterId !== run.chapterId || fields.anchor.revisionId !== run.context.chapterRevisionId ||
     JSON.stringify(fields.anchor.blockIds) !== JSON.stringify(source.item.blockIds) || fields.evidence !== source.item.quote)) return fail('审稿首次记录的原稿、引文或段落不匹配。')
+}
+function checkReviewApplication(db: Database.Database, issueId: string, revision: number, fields: ReturnType<typeof parseReviewIssueFields>, verified?: Set<string>): boolean | undefined {
+  const application = fields.application
+  if (!application) return undefined
+  if (application.issueRevision > revision) return fail('审稿应用凭据超出问题历史。')
+  const history = (at: number) => {
+    const row = db.prepare(`SELECT CASE WHEN length(CAST(fields_json AS BLOB)) <= ? THEN fields_json END AS fields_json
+      FROM workbench_revisions WHERE kind = 'review' AND entity_id = ? AND revision = ?`).get(MAX_WORKBENCH_FIELDS_BYTES, issueId, at) as { fields_json: string } | undefined
+    return parseReviewIssueFields(storedFields(row?.fields_json))
+  }
+  const applied = history(application.issueRevision), before = history(application.issueRevision - 1)
+  if (before.status !== 'open' || !reviewReplacement(before).trim() || !before.anchor.blockIds.length || before.candidateSource?.item.requirement ||
+    before.anchor.chapterId !== application.chapterId || before.anchor.revisionId !== application.sourceRevisionId ||
+    JSON.stringify(applied) !== JSON.stringify({ ...before, status: 'recheck', application }) ||
+    (revision === application.issueRevision && JSON.stringify(fields) !== JSON.stringify(applied))) return fail('审稿应用凭据与不可变问题历史不一致。')
+  const target = db.prepare(`SELECT r.parent_revision_id, r.reason, c.current_revision_id FROM chapter_revisions r
+    JOIN chapters c ON c.id = r.chapter_id WHERE r.chapter_id = ? AND r.id = ?`).get(application.chapterId, application.revisionId) as
+    { parent_revision_id: string | null; reason: string; current_revision_id: string } | undefined
+  if (!target || target.reason !== 'saved' || target.parent_revision_id !== application.sourceRevisionId) return fail('审稿应用凭据与正文修订不一致。')
+  const key = `${issueId}:${application.issueRevision}`
+  // 恢复时逐份核对真正写入的文档；有界缓存避免后续手工状态重复核对同一次应用。
+  if (verified && !verified.has(key)) {
+    const readDocument = (revisionId: string) => {
+      const row = db.prepare(`SELECT CASE WHEN length(CAST(document_json AS BLOB)) <= ? THEN document_json END AS document_json,
+        CASE WHEN length(CAST(content_hash AS BLOB)) = 64 THEN content_hash END AS content_hash
+        FROM chapter_revisions WHERE chapter_id = ? AND id = ?`).get(MAX_WORKBENCH_DOCUMENT_BYTES, application.chapterId, revisionId) as
+        { document_json: string; content_hash: string } | undefined
+      if (!row || typeof row.document_json !== 'string' || createHash('sha256').update(row.document_json, 'utf8').digest('hex') !== row.content_hash) return fail('审稿应用正文校验失败。')
+      return parseManuscript(JSON.parse(row.document_json))
+    }
+    const original = readDocument(application.sourceRevisionId), document = readDocument(application.revisionId)
+    const selected = new Set(before.anchor.blockIds)
+    const indexes = original.content.flatMap((block, index) => selected.has(block.attrs.id) ? [index] : [])
+    if (indexes.length !== selected.size || indexes.some((index, offset) => index !== indexes[0]! + offset)) return fail('审稿应用历史的原段落不连续。')
+    const replacement = textToDocument(reviewReplacement(before)).content.map((block, offset) => ({
+      ...block, attrs: { ...block.attrs, id: document.content[indexes[0]! + offset]?.attrs.id },
+    }))
+    const expected = { type: 'doc', content: [...original.content.slice(0, indexes[0]), ...replacement, ...original.content.slice(indexes[indexes.length - 1]! + 1)] }
+    if (JSON.stringify(document) !== JSON.stringify(expected)) return fail('审稿应用正文与当时确认的替换稿不一致。')
+    if (verified.size >= MAX_REVIEW_ISSUES) verified.delete(verified.values().next().value!)
+    verified.add(key)
+  }
+  return target.current_revision_id === application.revisionId
 }
 function anchorCache(): AnchorCache { return { revisions: new Map(), bytes: 0 } }
 function prepareAnchors(db: Database.Database, anchors: ManuscriptAnchor[], cache: AnchorCache): (anchor: ManuscriptAnchor) => boolean {
@@ -156,7 +199,7 @@ function readSnapshot(db: Database.Database, bookId: string, cache = anchorCache
   const current = state(db, bookId)
   const schemaVersion = Number(db.pragma('user_version', { simple: true }))
   const result: WorkbenchSnapshot = { bookId, bookRevision: current.revision, archived: current.archived_at !== null,
-    schemaVersion, requiresUpgrade: schemaVersion < WORKBENCH_SCHEMA_VERSION, brief: EMPTY_BRIEF, scenes: [], issues: [], goals: [], activity: [] }
+    schemaVersion, requiresUpgrade: schemaVersion < WORKBENCH_SCHEMA_VERSION, brief: EMPTY_BRIEF, scenes: [], sceneLabels: {}, issues: [], goals: [], activity: [] }
   if (result.requiresUpgrade) return result
   checkSnapshotBudget(db)
   result.brief = parseWritingBrief(db.prepare('SELECT premise, style, narrator, tense, rules FROM workbench_settings WHERE singleton = 1').get())
@@ -175,6 +218,14 @@ function readSnapshot(db: Database.Database, bookId: string, cache = anchorCache
   result.scenes = scenes.map(({ row, fields }): SceneCard => ({ ...fields, id: row.id, revision: row.revision,
     updatedAt: row.updated_at, stale: fields.anchor ? anchorState(fields.anchor) : false }))
     .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
+  const sceneEntities = [...new Set(result.scenes.flatMap((scene) => [...scene.characterIds, ...(scene.locationId ? [scene.locationId] : [])]))]
+  if (sceneEntities.length) {
+    const labels = db.prepare(`SELECT id, CASE WHEN length(CAST(name AS BLOB)) <= 480 THEN name END AS name
+      FROM knowledge_items WHERE book_id = ? AND id IN (SELECT value FROM json_each(?)) ORDER BY id LIMIT ?`)
+      .all(bookId, JSON.stringify(sceneEntities), sceneEntities.length + 1) as { id: string; name: string }[]
+    if (labels.length !== sceneEntities.length) return fail('场景关联的人物或地点资料缺失。')
+    result.sceneLabels = Object.fromEntries(labels.map((item) => [requiredId(item.id), requiredText(item.name, '关联资料名称', 120)]))
+  }
   const requirementOutlines = issues.some(({ fields }) => fields.candidateSource?.item.requirement)
     ? new Map(currentOutlineNodes(db, bookId).outlines.map((node) => [node.id, node])) : null
   result.issues = issues.map(({ row, fields }): ReviewIssue => {
@@ -184,6 +235,7 @@ function readSnapshot(db: Database.Database, bookId: string, cache = anchorCache
     const requirement = fields.candidateSource?.item.requirement
     const outline = requirement ? requirementOutlines?.get(requirement.outlineId) : undefined
     return { ...fields, id: row.id, revision: row.revision, updatedAt: row.updated_at,
+      ...(fields.application ? { applicationCurrent: checkReviewApplication(db, row.id, row.revision, fields) } : {}),
       stale: anchorState(fields.anchor) || Boolean(requirement && (outline?.revisionId !== requirement.revisionId || outline?.stale)),
       originalAnchor: original.anchor, originalEvidence: original.evidence, originalReason: original.reason }
   })
@@ -210,6 +262,7 @@ export function validateWorkbenchDatabase(db: Database.Database, bookId: string)
   const current = state(db, bookId)
   const cache = anchorCache()
   const snapshot = readSnapshot(db, bookId, cache)
+  const verifiedApplications = new Set<string>()
   const settings = db.prepare('SELECT revision FROM workbench_settings WHERE singleton = 1').get() as Record<string, unknown> | undefined
   if (!settings) return fail('缺少创作约定。')
   requiredInteger(settings.revision, '约定版本', current.revision)
@@ -233,6 +286,10 @@ export function validateWorkbenchDatabase(db: Database.Database, bookId: string)
   for (const fields of snapshot.issues) {
     requiredId(fields.id)
     validateIssue(fields)
+    checkReviewApplication(db, fields.id, fields.revision, parseReviewIssueFields(fields), verifiedApplications)
+    const latest = db.prepare(`SELECT CASE WHEN length(CAST(fields_json AS BLOB)) <= ? THEN fields_json END AS fields_json
+      FROM workbench_revisions WHERE kind = 'review' AND entity_id = ? AND revision = ?`).get(MAX_WORKBENCH_FIELDS_BYTES, fields.id, fields.revision) as { fields_json: string } | undefined
+    if (JSON.stringify(fields.application) !== JSON.stringify(parseReviewIssueFields(storedFields(latest?.fields_json)).application)) return fail('当前审稿记录的应用凭据与历史不一致。')
     const indexed = db.prepare('SELECT chapter_id FROM review_issues WHERE id = ?').get(fields.id) as { chapter_id: string }
     if (indexed.chapter_id !== fields.anchor.chapterId) return fail('审稿目录与来源不一致。')
   }
@@ -253,6 +310,12 @@ export function validateWorkbenchDatabase(db: Database.Database, bookId: string)
     else if (row.kind === 'review') {
       const issue = parseReviewIssueFields(fields)
       validateIssue(issue); checkReviewSource(db, bookId, issue, row.revision === 1)
+      checkReviewApplication(db, row.entity_id, row.revision, issue, verifiedApplications)
+      if (row.revision > 1 && issue.application?.issueRevision !== row.revision) {
+        const previous = db.prepare(`SELECT CASE WHEN length(CAST(fields_json AS BLOB)) <= ? THEN fields_json END AS fields_json
+          FROM workbench_revisions WHERE kind = 'review' AND entity_id = ? AND revision = ?`).get(MAX_WORKBENCH_FIELDS_BYTES, row.entity_id, row.revision - 1) as { fields_json: string } | undefined
+        if (JSON.stringify(issue.application) !== JSON.stringify(parseReviewIssueFields(storedFields(previous?.fields_json)).application)) return fail('审稿历史不能抹去或替换既有应用凭据。')
+      }
     }
     else if (row.kind === 'goal') parseWritingGoalFields(fields)
     else return fail('创作历史类型无效。')
@@ -315,6 +378,30 @@ export class WorkbenchRepository {
     })
   }
 
+  reorderScenes(input: ReorderScenesInput): WorkbenchSnapshot {
+    return perform(() => {
+      const data = parseReorderScenesInput(input)
+      return this.write(data, (db, now) => {
+        if (data.chapterId && !db.prepare('SELECT id FROM chapters WHERE id = ?').get(data.chapterId)) return fail('场景所属章节不存在。', 'INVALID_INPUT')
+        checkSnapshotBudget(db)
+        const scenes = entityRows(db, 'scene_cards', MAX_SCENES)
+          .map((row) => ({ row, fields: parseSceneFields(storedFields(row.fields_json)) }))
+          .filter(({ fields }) => !fields.archived && fields.chapterId === data.chapterId)
+        const byId = new Map(scenes.map((scene) => [scene.row.id, scene]))
+        // 整组身份与作品版本在同一事务内核对，拒绝跨章、归档或缺项的排序。
+        if (scenes.length !== data.sceneIds.length || data.sceneIds.some((id) => !byId.has(id))) return fail('本章场景集合已改变，请刷新后重新排序。', 'REVISION_CONFLICT')
+        data.sceneIds.forEach((id, index) => {
+          const scene = byId.get(id)!
+          const position = index + 1
+          if (scene.fields.position === position) return
+          this.entity(db, 'scene_cards', 'scene', MAX_SCENES, {
+            ...data, id, expectedRevision: scene.row.revision, fields: { ...scene.fields, position },
+          }, now)
+        })
+      })
+    })
+  }
+
   saveIssue(input: SaveReviewIssueInput): WorkbenchSnapshot {
     return perform(() => {
       const data = parseSaveReviewIssueInput(input)
@@ -326,6 +413,7 @@ export class WorkbenchRepository {
         checkReviewSource(db, data.bookId, data.fields)
         const previous = db.prepare('SELECT fields_json FROM review_issues WHERE id = ?').get(data.id) as { fields_json: string } | undefined
         const original = previous ? parseReviewIssueFields(storedFields(previous.fields_json)) : null
+        if (data.fields.application && JSON.stringify(data.fields.application) !== JSON.stringify(original?.application)) return fail('正文应用凭据只能由确认替换事务生成。', 'INVALID_INPUT')
         if (original && (original.candidateSource || data.fields.candidateSource) && (JSON.stringify(original.candidateSource) !== JSON.stringify(data.fields.candidateSource) || original.aiRunId !== data.fields.aiRunId)) return fail('首次登记的审稿候选来源不能被替换。', 'INVALID_INPUT')
         const source = data.fields.candidateSource
         if (source?.item.requirement && data.fields.status === 'resolved') {
@@ -344,7 +432,8 @@ export class WorkbenchRepository {
             .get(run.id, source.index) as { entity_id: string } | undefined
           if (prior) return fail('这一审稿建议已经登记，请在审稿清单中继续处理。', 'REVISION_CONFLICT')
         }
-        this.entity(db, 'review_issues', 'review', MAX_REVIEW_ISSUES, data, now)
+        const fields = { ...data.fields, ...(original?.application ? { application: original.application } : {}) }
+        this.entity(db, 'review_issues', 'review', MAX_REVIEW_ISSUES, { ...data, fields }, now)
       })
     })
   }
@@ -381,7 +470,10 @@ export class WorkbenchRepository {
         ] })
         // 正文与问题处理状态同事务提交，采用只进入待复核，不等同于问题已解决。
         const saved = this.studio.saveChapter({ bookId: data.bookId, chapterId: current.id, expectedRevisionId: data.expectedRevisionId, document }, fields.aiRunId ? 'ai' : 'manual')
-        this.entity(db, 'review_issues', 'review', MAX_REVIEW_ISSUES, { ...data, fields: { ...fields, status: 'recheck' } }, new Date().toISOString())
+        if (!saved.changed || saved.chapter.revisionId === data.expectedRevisionId) return fail('没有生成新的正文修订，未登记应用状态。')
+        this.entity(db, 'review_issues', 'review', MAX_REVIEW_ISSUES, { ...data, fields: { ...fields, status: 'recheck', application: {
+          chapterId: current.id, sourceRevisionId: data.expectedRevisionId, revisionId: saved.chapter.revisionId, issueRevision: row.revision + 1,
+        } } }, new Date().toISOString())
         return { chapter: saved.chapter, workbench: readSnapshot(db, data.bookId, cache) }
       }).immediate()
       this.studio.refreshKnowledgeCatalog(data.bookId)

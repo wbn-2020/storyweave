@@ -1,5 +1,5 @@
 import { readStudyCard, type StudyCardKind } from '../../contracts/study-card'
-import ui from './WorkbenchPanel.module.css'
+import ui from './stellar/Workspace.module.css'
 
 export function StudyCardEditor({ kind, body, disabled = false, onChange }: {
   kind: StudyCardKind; body: string; disabled?: boolean; onChange: (body: string) => void

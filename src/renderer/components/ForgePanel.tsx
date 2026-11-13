@@ -6,17 +6,19 @@ import { FORGE_KINDS, FORGE_LABELS, forgeUsesChapter, parseForgeAdoptInput, pars
 import { CHARACTER_PROFILE_FIELDS, CHARACTER_PROFILE_LABELS, type CharacterProfileField } from '../../contracts/character-profile'
 import { CharacterProfileView } from './CharacterProfileEditor'
 import { ForgeProposalEditor } from './ForgeProposalEditor'
+import { ForgeCharacterOverview } from './ForgeCharacterOverview'
 import { timeLabel } from './StoryFieldsEditor'
 import { useToolSession } from './workbench-ui'
 import { displayTime } from '../request'
-import shared from '../App.module.css'
-import styles from './ForgePanel.module.css'
+import shared from '../StellarShared.module.css'
+import styles from './StellarForge.module.css'
 
 interface Props {
   api: StudioApi; book: BookSnapshot; chapter: ChapterSnapshot | null; disabled: boolean
   initialPersonId?: string; initialKind?: ForgeKind
   onDirtyChange: (value: boolean) => void; onBookChange: (book: BookSnapshot) => void
-  onConfigure: () => void; onKnowledge: () => void; onRelations: () => void; onMedia: () => void; onRecover: () => void
+  onConfigure: () => void; onKnowledge: (personId: string | null) => void; onRelations: () => void; onMedia: () => void; onRecover: () => void
+  onClose?: () => void
 }
 const prompts: Record<ForgeKind, string> = {
   names: '给出有辨识度、便于区分的角色名字，解释创作意象，避开已有名字和谐音烂梗。',
@@ -32,7 +34,7 @@ const runLabels: Record<AiRun['state'], string> = { prepared: '等待发送', ru
 const toggle = (items: string[], id: string, checked: boolean) => checked ? [...items, id] : items.filter((item) => item !== id)
 const keysOf = (proposal: ForgeProposal | null) => proposal && proposal.kind !== 'names' ? (proposal.kind === 'relations' ? proposal.relations : proposal.cards).map((item) => item.key) : []
 
-export function ForgePanel({ api, book, chapter, disabled, initialPersonId, initialKind = 'cast', onDirtyChange, onBookChange, onConfigure, onKnowledge, onRelations, onMedia, onRecover }: Props) {
+export function ForgePanel({ api, book, chapter, disabled, initialPersonId, initialKind = 'cast', onDirtyChange, onBookChange, onConfigure, onKnowledge, onRelations, onMedia, onRecover, onClose }: Props) {
   const [snapshot, setSnapshot] = useState<ForgeSnapshot | null>(null)
   const [kind, setKind] = useState<ForgeKind>(initialKind)
   const [personId, setPersonId] = useState(initialPersonId ?? '')
@@ -55,10 +57,12 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
   const [uncertain, setUncertain] = useState(false), [pollStopped, setPollStopped] = useState(false)
   const [upgradeConfirmed, setUpgradeConfirmed] = useState(false), [backupPath, setBackupPath] = useState<string | null>(null)
   const [preserved, setPreserved] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'failed' | null>(null)
   const [lastAttempt, setLastAttempt] = useState<{ command: string; input: unknown } | null>(null)
   const guard = useRef({ tool: false, request: false, proposal: false, running: false, uncertain: false })
   const callbacks = useRef({ onDirtyChange, onBookChange }); callbacks.current = { onDirtyChange, onBookChange }
   const initialRead = useRef(true), mounted = useRef(true)
+  const taskControls = useRef<HTMLDetailsElement>(null)
   const report = () => callbacks.current.onDirtyChange(Object.values(guard.current).some(Boolean))
   const tool = useToolSession({ api, disabled, onDirtyChange: (value) => { guard.current.tool = value; report() } })
   const run = detail?.run ?? null
@@ -81,10 +85,10 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     if (!Number.isSafeInteger(value) || Math.abs(value) > 1_000_000_000) throw new Error('请填写明确的整数故事排序值。')
     return value
   }
-  async function readSnapshot() {
+  async function readSnapshot(targetId = personId) {
     let order: number | null
     try { order = parsedOrder() } catch { tool.setError('请填写有效的故事排序值，或留空查看未筛选历史。'); return false }
-    const id = personId || null
+    const id = targetId || null
     return tool.read(() => api.getForge({ bookId: book.book.id, personId: id, storyOrder: order }), (value) => {
       if (value.bookId !== book.book.id || id !== (value.person?.entity.id ?? null) && !value.requiresUpgrade) throw new Error('Forge identity mismatch')
       setSnapshot(value); setHistoryKey(`${id ?? ''}:${order ?? ''}`)
@@ -106,6 +110,23 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     if (requestDirty || proposalDirty || blocked) { tool.setError('请先保留或放弃当前未保存输入，再刷新资料。'); return }
     if (!await readSnapshot() || !mounted.current) return
     await readConnections()
+  }
+  function inspectPerson(id: string) {
+    if (blocked || requestDirty || proposalDirty) return
+    setPersonId(id); setProfileRevisionId(''); setTraitFields([]); setCognitionIds([]); setStateIds([])
+    if (needsPerson) setDirty('request', true)
+    void readSnapshot(id)
+  }
+  function prepareTask(next: ForgeKind) {
+    if (blocked || requestDirty || proposalDirty || ['fill', 'extract', 'audition'].includes(next) && !person) return
+    // 展开预置流程没有作者输入；保持可前往配置模型，实际编辑后再登记未保存状态。
+    setKind(next); setInstruction(prompts[next]); setDetail(null); setProposal(null); setSelectedKeys([]); setPreviewInput(null)
+    setProfileRevisionId(''); setTraitFields([]); setCognitionIds([]); setStateIds([]); setEntityIds([]); setReferenceRunId('')
+    if (taskControls.current) {
+      taskControls.current.open = true
+      taskControls.current.scrollIntoView({ block: 'start' })
+      taskControls.current.querySelector<HTMLElement>('select')?.focus({ preventScroll: true })
+    }
   }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; initialRead.current = true; callbacks.current.onDirtyChange(false) } }, [])
   useEffect(() => { if (!disabled && initialRead.current) { initialRead.current = false; void load() } }, [disabled])
@@ -214,7 +235,7 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     setDirty('request', false); setDirty('proposal', false); tool.setError(null)
   }
   async function copy(text: string) {
-    try { await navigator.clipboard.writeText(text); tool.setNotice('已复制，可返回正文粘贴后修改。') } catch { tool.setError('复制未成功，请选择下方原文手动复制。') }
+    try { await navigator.clipboard.writeText(text); setCopyStatus('copied') } catch { setCopyStatus('failed') }
   }
   let matchesPreview = false
   try { matchesPreview = previewInput !== null && JSON.stringify(requestInput()) === previewInput } catch { /* 尚未形成有效预览。 */ }
@@ -228,10 +249,15 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     pending: tool.pending ? { command: tool.pending.command, error: tool.pending.error } : null, readFailure: tool.readFailure }, null, 2) : ''
 
   return <div className={styles.panel} aria-busy={tool.busy}>
-    <div className={styles.toolbar}><div><p className={styles.eyebrow}>角色与世界工坊</p><h2>让人物有自己的欲望，让世界有自己的代价。</h2></div>
-      <div className={styles.actions}><button type="button" className={shared.button} disabled={!canLeave} onClick={onKnowledge}>手工设定与复核</button><button type="button" className={shared.button} disabled={!canLeave} onClick={onRelations}>关系画布</button><button type="button" className={shared.button} disabled={!canLeave} onClick={onMedia}>人物立绘</button><button type="button" className={shared.button} disabled={!canLeave} onClick={() => void load()}>刷新资料</button></div>
+    <div className={styles.toolbar}><div className={styles.identityTools}><h2>角色工坊</h2>
+      {snapshot && !snapshot.requiresUpgrade && <><label className={styles.personPicker}>人物<select aria-label="浏览人物档案" title={requestDirty || proposalDirty ? '请先保留或放弃当前未保存输入' : blocked ? '请先处理当前工坊任务' : '浏览本书人物档案'} value={personId} disabled={blocked || requestDirty || proposalDirty} onChange={(event) => inspectPerson(event.target.value)}><option value="">选择本书人物</option>{snapshot.entities.filter((item) => item.kind === 'person').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        {personId && !snapshot.entities.some((item) => item.id === personId) && <option value={personId}>{person?.entity.fields.name ?? personId}</option>}
+      </select></label><span className={styles.entityScope}>当前页 {snapshot.entities.filter((item) => item.kind === 'person').length} 位人物 · 实体总数 {snapshot.entityTotal}</span></>}
+      </div>
+      <div className={styles.actions}><button type="button" className={shared.button} disabled={!canLeave} onClick={() => onKnowledge(person?.entity.id ?? null)}>手工设定与复核</button><button type="button" className={shared.button} disabled={!canLeave} onClick={onRelations}>关系画布</button><button type="button" className={shared.button} disabled={!canLeave} onClick={onMedia}>人物立绘</button><button type="button" className={shared.button} disabled={!canLeave} onClick={() => void load()}>刷新资料</button>{onClose && <button type="button" className={shared.button} disabled={tool.locked || uncertain || run?.state === 'running'} onClick={onClose}>返回作品</button>}</div>
     </div>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}{tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
+    {copyStatus && <p className={copyStatus === 'copied' ? styles.notice : styles.error} role={copyStatus === 'copied' ? 'status' : 'alert'}>{copyStatus === 'copied' ? '已复制，可返回正文粘贴后修改。' : '复制未成功，请选择下方原文手动复制。'}</p>}
     {tool.pending && <div className={styles.callout}><p>写入结果尚未确认，当前输入已保留。</p><button type="button" className={shared.button} disabled={tool.busy || !tool.pending.error.requestId} onClick={() => void checkReceipt()}>核对原请求</button></div>}
     {tool.readFailure && <div className={styles.callout} role="status"><p>原读取或模型控制结果待核对。{tool.readFailure.requestId ? `请求编号：${tool.readFailure.requestId}` : '未取得可查询的编号，请留存后进入恢复。'}</p>
       <button type="button" className={shared.button} disabled={tool.locked || !tool.readFailure.requestId} onClick={() => void tool.checkReadReceipt()}>核对原读取请求</button></div>}
@@ -243,7 +269,15 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     </details>}
     {snapshot?.requiresUpgrade ? <section className={styles.callout}><h3>为本书启用角色与世界工坊</h3><p>会先保存本书数据库备份，再升级到 v17，加入工坊历史、采用回执、六维能力与关系层次。</p>
       <label className={styles.check}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意先备份本书，再升级格式</label><button type="button" className={shared.primaryButton} disabled={blocked || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用工坊</button></section>
-      : snapshot && <div className={styles.layout}>
+      : snapshot && <><ForgeCharacterOverview api={api} snapshot={snapshot} selectedId={personId} disabled={blocked || requestDirty || proposalDirty}
+        detail={detail} proposal={proposal} excluded={excluded} onPrepare={prepareTask}
+        onKnowledge={() => onKnowledge(person?.entity.id ?? null)} onMedia={onMedia} onCopy={(text) => void copy(text)} />
+      <details ref={taskControls} className={styles.taskControls} open={initialKind !== 'cast' ? true : undefined}><summary>工坊任务、发送与审阅{requestDirty || proposalDirty ? ' · 有未保存修改' : ''}</summary>
+      <div className={styles.taskTabs} role="group" aria-label="工坊任务类型">{FORGE_KINDS.map((value) => <button key={value} type="button" aria-pressed={kind === value} disabled={blocked || requestDirty || proposalDirty} onClick={() => edit(() => {
+        setKind(value); setInstruction(prompts[value]); setDetail(null); setProposal(null); setSelectedKeys([]); setPreviewInput(null)
+        setProfileRevisionId(''); setTraitFields([]); setCognitionIds([]); setStateIds([]); setEntityIds([]); setReferenceRunId('')
+        if (!['fill', 'extract', 'audition'].includes(value)) setPersonId('')
+      })}>{FORGE_LABELS[value]}</button>)}</div><div className={styles.layout}>
         <section className={styles.compose} aria-label="工坊任务">
           <label>这次做什么<select value={kind} disabled={blocked || proposalDirty} onChange={(event) => edit(() => {
             const next = event.target.value as ForgeKind
@@ -292,10 +326,10 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
             {proposal && proposal.kind !== 'names' && <><p className={styles.help}>{kind === 'fill' || kind === 'extract' ? '采用时只填入目标人物的空白字段，已有内容保持原值。' : '逐项选择与修改，采用后仍需在设定库或故事记录中完成冲突复核。'}</p><ForgeProposalEditor proposal={proposal} selected={selectedKeys} disabled={!editable} onChange={editProposal} onSelect={selected} /><button type="button" className={shared.primaryButton} disabled={!editable || !selectedKeys.length} onClick={() => void adopt()}>{detail?.adopted ? '已采用' : `采用所选 ${selectedKeys.length} 项`}</button></>}
             {run.outputText && <details open={detail?.request.kind === 'audition' || Boolean(detail?.parseError)}><summary>{detail?.request.kind === 'audition' ? '角色试戏 · 仅供作者核对' : '原始模型输出'}</summary><pre className={styles.output}>{run.outputText}</pre><button type="button" className={shared.button} onClick={() => void copy(run.outputText)}>复制原文</button></details>}
             {detail?.request.kind === 'world' && ['succeeded', 'adopted'].includes(run.state) && <button type="button" className={shared.button} disabled={blocked || proposalDirty} onClick={() => edit(() => { setKind('world'); setReferenceRunId(run.id); setInstruction('在上一轮构想基础上继续细化：'); setPreviewInput(null) })}>接着讨论这一轮世界构想</button>}
-          </> : <div className={styles.empty}><p className={styles.eyebrow}>从一个矛盾开始</p><h3>给反派一个必须行动的理由。</h3><p>也可以锻造世界规则、提炼正文关系，或选择人物在某一时点演一段对手戏。</p><p>先准备并核对发送内容，再调用模型。生成内容由作者逐项决定是否采用。</p></div>}
+          </> : <div className={styles.empty}><h3>尚无{FORGE_LABELS[kind]}提案</h3><p>填写创作要求并准备发送预览。</p></div>}
           <details className={styles.history}><summary>最近工坊任务 · {snapshot.runs.length}</summary>{snapshot.runs.map((item) => <button key={item.id} type="button" className={styles.runLink} disabled={blocked || requestDirty || proposalDirty} onClick={() => void refreshRun(item.id)}><span>{FORGE_LABELS[item.kind]} · {runLabels[item.state]}</span><small>{displayTime(item.createdAt)}</small></button>)}</details>
         </section>
-      </div>}
+      </div></details></>}
     {!snapshot && <p className={styles.help}>正在读取工坊资料。读取失败时可使用“刷新资料”重试。</p>}
     {backupPath && <p className={styles.meta}>升级前备份：{backupPath}</p>}
   </div>

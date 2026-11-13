@@ -79,8 +79,9 @@ function checkedEnvelope(value: unknown, request: LivingPrepareInput): LivingEnv
   const memories = parseLivingWritingContext({ version: 1, outlines: [], memories: value.sources.memories }).memories
   const entities = value.sources.entities.map((item) => {
     if (!isRecord(item) || Object.keys(item).some((key) => !['id', 'name', 'kind', 'nature', 'summary', 'revisionId'].includes(key))) return livingFailure()
+    // 实体快照沿用知识条目的说明上限，整体资料另受预览预算约束。
     return { id: requiredId(item.id).toLowerCase(), name: requiredText(item.name, '实体名称', 120), kind: requiredText(item.kind, '实体类型', 50),
-      nature: requiredText(item.nature, '知识性质', 50), summary: optionalText(item.summary, '实体说明', 8000), revisionId: requiredId(item.revisionId).toLowerCase() }
+      nature: requiredText(item.nature, '知识性质', 50), summary: optionalText(item.summary, '实体说明', 20_000), revisionId: requiredId(item.revisionId).toLowerCase() }
   })
   if (entities.length !== request.entityIds.length || entities.some((item, index) => item.id !== request.entityIds[index])) return livingFailure()
   let brief: LivingEnvelope['sources']['brief']
@@ -266,6 +267,8 @@ export class LivingRepository {
         targets, sources: { outlines: sources, memories, entities, ...(brief ? { brief } : {}) }, dependencies }
       const instruction = JSON.stringify(envelope)
       if (instruction.length > LIVING_INSTRUCTION_LIMIT) invalid('本次固定资料超过预览预算，请减少实体或缩小修纲范围；资料未被截断。')
+      // 写入前沿用重读校验，确保固定资料完整且序列化一致。
+      if (JSON.stringify(checkedEnvelope(envelope, data)) !== instruction) return livingFailure('固定创作资料无法完整重读，请核对来源后重新预览。')
       const connection = this.ai.listConnections({ bookId: data.bookId }).connections.find((item) => item.id === data.connectionId)
       if (!connection) invalid('请先保存本书的模型连接，或从 AI 开书后继续。')
       const run = this.ai.prepare({ bookId: data.bookId, chapterId: data.chapterId, expectedBookRevision: book.revision,

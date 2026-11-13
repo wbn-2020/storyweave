@@ -1,0 +1,153 @@
+.graph,.canvas { min-width: 0; border: 1px solid var(--color-line-strong); border-radius: var(--radius-lg); background: var(--bg-deep); color: var(--color-ink); overflow: hidden; }
+.graph { position: relative; border: 0; border-radius: 0; background: radial-gradient(ellipse at 45% 50%,var(--stellar-ai-haze),transparent 70%),var(--bg-canvas); }
+.graph .stage { height: max(300px,calc(100dvh - 600px)); min-height: 300px; }
+.graph .node { color: var(--galaxy-other); fill: currentColor; stroke: var(--color-ink); stroke-width: .8; }
+.graph .node[data-kind='person'] { color: var(--galaxy-person); }
+.graph .node[data-kind='place'] { color: var(--galaxy-place); }
+.graph .node[data-kind='organization'] { color: var(--galaxy-organization); }
+.graph .node[data-kind='object'] { color: var(--galaxy-object); }
+.graph .node[data-kind='event'] { color: var(--color-accent-2); }
+.graph .node[data-kind='foreshadow'] { color: var(--color-warning); }
+.graph .node[data-state='unknown'] { color: var(--color-muted); }
+.graph .node[data-state='review'] { color: var(--color-warning); }
+.graph .node[data-state='conflict'] { color: var(--color-danger); }
+.graph .node[data-focused='true'][data-state='known'] { color: var(--color-accent); }
+.graph .node > path { fill: currentColor; filter: drop-shadow(0 0 6px currentColor); }
+.graph .nodeDisc { fill: var(--bg-surface); stroke: currentColor; stroke-width: 1; }
+.graph .node:focus-visible { outline: none; }
+.graph .node:focus-visible .nodeDisc { stroke: var(--color-ink); stroke-width: 3; }
+.graph .selection { fill: none; stroke: currentColor; stroke-width: 1; }
+.outerHalo { fill: none; stroke: currentColor; stroke-width: 1; opacity: .35; stroke-dasharray: 2 6; }
+.symbolLine { fill: none !important; stroke: var(--bg-deep); stroke-width: 1.5; }
+.orbits { fill: none; stroke: var(--color-line-strong); stroke-width: .7; pointer-events: none; }
+.orbits > circle { stroke: var(--color-accent); opacity: .35; }
+.graph .label,.graph .activeLabel { font-size: var(--text-sm); }
+.graph .controls { gap: var(--space-1); border: 0; background: var(--bg-sidebar); }
+.graph .controls > button { display: grid; place-items: center; width: var(--control-compact); height: var(--control-compact); padding: 0; }
+.graph .controls > output { min-width: 48px; text-align: center; font: var(--text-xs)/1.5 var(--font-num); }
+.legend,.toolbar,.controls,.timeControls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3) var(--space-4); color: var(--color-muted); font-size: var(--text-xs); }
+.legend span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.legend span:last-child { margin-left: auto; }
+.toolbar { justify-content: space-between; }
+.stage { display: block; width: 100%; height: 480px; user-select: none; touch-action: pan-y; cursor: grab; }
+.canvas .stage { height: auto; max-width: none; }
+.stage:active { cursor: grabbing; }.stage[data-hovered='true'] { cursor: pointer; }.stage[data-disabled='true'] { cursor: default; }
+.edge { stroke: var(--color-line-strong); stroke-width: 1.2; }
+.activeEdge,.relationEdge { stroke: var(--color-accent); stroke-width: 1.8; }
+.node { fill: var(--galaxy-other); cursor: pointer; }
+.node[data-kind='person'] { fill: var(--galaxy-person); }
+.node[data-kind='event'] { fill: var(--color-ink-secondary); }
+.node[data-kind='place'] { fill: var(--galaxy-place); }
+.node[data-kind='organization'] { fill: var(--galaxy-organization); }
+.node[data-kind='object'] { fill: var(--galaxy-object); }
+.node[data-kind='foreshadow'] { fill: var(--color-warning); }
+.selection { fill: none; stroke: var(--color-accent); stroke-width: 2; }
+.label,.activeLabel,.edgeLabel { fill: var(--color-ink-secondary); font: 500 var(--text-xs) var(--font-ui); paint-order: stroke; stroke: var(--bg-deep); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.activeLabel { fill: var(--color-ink); font-weight: 600; }.edgeLabel { fill: var(--color-accent); }
+.controls { justify-content: center; border-top: 1px solid var(--color-line); }
+.controls button { min-height: var(--control-compact); padding: var(--space-1) var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--color-ink-secondary); }
+.controls button:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.help { color: var(--color-muted); font-size: var(--text-xs); line-height: 1.8; padding: var(--space-3) var(--space-4); }
+.viewport { max-height: 560px; overflow: auto; overscroll-behavior: contain; border-block: 1px solid var(--color-line); }
+.canvas .node { cursor: grab; touch-action: none; }
+.canvas .node rect { fill: var(--bg-surface); stroke: var(--color-line-strong); stroke-width: 1.5; rx: 8px; ry: 8px; }
+.canvas .node[data-relation='true'] rect { fill: var(--color-accent-soft); stroke: var(--color-accent); stroke-dasharray: 5 3; }
+.canvas .node:hover rect,.canvas .node[aria-pressed='true'] rect,.canvas .node[data-chosen='true'] rect { stroke: var(--color-accent); stroke-width: 2; }
+.canvas .node:focus-visible rect { stroke: var(--color-ink); stroke-width: 3; }
+.nodeTitle { fill: var(--color-ink); font: 600 var(--text-sm) var(--font-ui); pointer-events: none; }
+.nodeKind { fill: var(--color-muted); font: var(--text-xs) var(--font-ui); pointer-events: none; }
+.node[data-rejected='true'] .nodeKind { fill: var(--color-danger); }
+.node[data-layer='hidden'] > rect { stroke-dasharray: 6 3; }
+.node[data-state='inactive'] > rect { opacity: .45; }
+.relationEdge[data-state='active'] { stroke: var(--color-success); }
+.relationEdge[data-state='inactive'] { stroke: var(--color-muted); stroke-dasharray: 4 5; opacity: .45; }
+.relationEdge[data-state='unknown'] { stroke-dasharray: 2 4; }
+.relations { padding: var(--space-4); border-top: 1px solid var(--color-line); }
+.relations ul { list-style: none; padding: 0; margin: 0; }
+.relations li { display: flex; flex-wrap: wrap; gap: var(--space-3); padding-block: var(--space-3); border-bottom: 1px solid var(--color-line); }
+.relations li > span { color: var(--color-muted); font-size: var(--text-xs); }
+.relationName { border: 0; padding: var(--space-1) 0; background: transparent; color: var(--color-accent); text-align: left; }
+.layerFilter,.timeControls label { display: flex; align-items: center; gap: var(--space-2); color: var(--color-muted); font-size: var(--text-xs); }
+.timeControls input[type='number'] { width: 112px; }
+.timeControls input:is([type='range'],[type='checkbox']) { accent-color: var(--color-accent); }
+@media (max-width:699px) { .stage { height: 360px; } .viewport { max-height: 400px; } }
+.canvas { border: 0; border-radius: 0; background: transparent; }
+.relationshipToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); padding-block: var(--space-3); }
+.layerTabs { display: flex; align-items: center; border: 1px solid var(--color-line-strong); border-radius: var(--radius-pill); overflow: hidden; background: var(--bg-subtle); }
+.layerTabs > button { min-height: var(--control-height); padding: var(--space-2) var(--space-4); border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--color-muted); white-space: nowrap; }
+.layerTabs > button[aria-pressed='true'] { color: var(--color-accent); background: var(--color-accent-soft); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.canvas .layerTabs > select { width: auto; max-width: 88px; min-height: var(--control-height); padding: var(--space-2); border: 0; border-radius: 0; background: transparent; color: var(--color-muted); font-size: var(--text-xs); }
+.storyControls { display: flex; align-items: center; flex: 1 1 280px; gap: var(--space-4); min-width: 0; padding-inline: var(--space-4); border: 1px solid var(--color-line); border-radius: var(--radius-pill); background: var(--bg-sidebar); }
+.storyPoint { display: flex !important; flex-direction: row !important; align-items: center; gap: var(--space-3); white-space: nowrap; font-size: var(--text-sm); }
+.canvas .storyControls .storyPoint input[type='number'] { width: 64px; min-height: var(--control-height); padding-inline: var(--space-2); border: 0; background: transparent; font-family: var(--font-num); }
+.canvas .storyControls input.storySlider[type='range'] { appearance: none; flex: 1; min-width: 72px; width: auto; max-width: none; min-height: var(--control-height); padding: 0; border: 0; background: transparent; accent-color: var(--color-accent); }
+.storySlider::-webkit-slider-runnable-track { height: 2px; border-radius: var(--radius-pill); background: var(--color-line-strong); }
+.storySlider::-webkit-slider-thumb { appearance: none; width: var(--space-4); height: var(--space-4); margin-top: -7px; border: 0; border-radius: var(--radius-pill); background: var(--color-accent); box-shadow: 0 0 12px var(--color-accent-soft); }
+.scanButton { composes: button from './stellar/Workspace.module.css'; }
+.relationshipToolbar .scanButton { margin-left: auto; border-radius: var(--radius-pill); border-color: var(--galaxy-person); color: var(--color-ink); background: radial-gradient(ellipse at 50% 100%,var(--stellar-ai-haze),transparent),var(--bg-subtle); }
+.relationshipToolbar .scanButton > svg { color: var(--galaxy-person); filter: drop-shadow(0 0 4px currentColor); }
+.relationshipActions { position: absolute; right: var(--space-3); bottom: var(--space-3); z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); max-width: calc(100% - 240px); padding: var(--space-3); border: 1px solid var(--color-line-strong); border-radius: var(--radius-lg); background: var(--bg-sidebar); }
+.relationshipActions > button { min-height: var(--control-compact); padding-block: var(--space-1); }
+.relationshipActions > label { display: flex !important; flex-direction: row !important; align-items: center; gap: var(--space-2); font-size: var(--text-xs); }
+.relationshipActions > span { color: var(--color-muted); font-size: var(--text-xs); }
+.zoomButtons { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.zoomButtons > button { display: grid; place-items: center; width: var(--control-compact); height: var(--control-compact); padding: 0; border: 1px solid var(--color-line); border-radius: var(--radius-md); color: var(--color-ink-secondary); background: var(--bg-subtle); }
+.zoomButtons > button:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.zoomButtons > output { min-width: 48px; text-align: center; font: var(--text-xs)/1.5 var(--font-num); color: var(--color-muted); }
+.relationshipViewportShell { position: relative; isolation: isolate; background: radial-gradient(ellipse at 64% 70%,var(--stellar-ai-haze),transparent 66%),radial-gradient(ellipse at 24% 86%,var(--stellar-haze),transparent 62%); }
+.relationshipViewportShell::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .8; background: radial-gradient(1px 1px at 12% 18%,var(--stellar-star),transparent),radial-gradient(1px 1px at 45% 31%,var(--stellar-star),transparent),radial-gradient(1px 1px at 73% 16%,var(--stellar-star),transparent),radial-gradient(1px 1px at 88% 62%,var(--stellar-star),transparent),radial-gradient(1px 1px at 25% 74%,var(--stellar-star),transparent),radial-gradient(1px 1px at 60% 90%,var(--stellar-star),transparent); background-size: 191px 163px,227px 251px,281px 181px,211px 293px,337px 211px,271px 317px; }
+.relationshipViewport { overflow: auto; height: clamp(400px,calc(100dvh - 280px),960px); overscroll-behavior: contain; touch-action: none; cursor: grab; }
+.relationshipViewport:active { cursor: grabbing; }
+.relationshipStage { display: block; min-width: 640px; max-width: none; user-select: none; touch-action: none; }
+.relationshipOrbits { fill: none; stroke: var(--color-line-strong); stroke-width: .6; pointer-events: none; }
+.relationshipOrbits > ellipse:last-child { opacity: .5; }
+.badge { --badge-color: var(--galaxy-other); cursor: grab; touch-action: none; }
+.badge[data-kind='person'] { --badge-color: var(--color-accent); }
+.badge[data-kind='organization'] { --badge-color: var(--color-warning); }
+.badge[data-kind='place'] { --badge-color: var(--galaxy-person); }
+.badge[data-conflict='true'],.badge[data-rejected='true'] { --badge-color: var(--color-danger); }
+.badgeFrame { fill: var(--bg-raised); stroke: var(--badge-color); stroke-width: 2; filter: drop-shadow(0 0 5px color-mix(in srgb,var(--badge-color) 35%,transparent)); }
+.badge:hover .badgeFrame,.badge[aria-pressed='true'] .badgeFrame,.badge[data-chosen='true'] .badgeFrame { stroke-width: 3; filter: drop-shadow(0 0 6px var(--color-accent-soft)); }
+.badge:focus-visible { outline: none; }
+.badge:focus-visible .badgeFrame { stroke: var(--color-ink); stroke-width: 3; }
+.badgeInitial { fill: var(--badge-color); font: 600 32px var(--font-ui); pointer-events: none; }
+.badgePortrait { display: grid; place-items: center; width: 100%; height: 100%; border-radius: var(--radius-pill); overflow: hidden; font: 600 32px var(--font-ui); color: var(--badge-color); }
+.badgePortrait > img { width: 100%; height: 100%; object-fit: cover; }
+.badgePortrait > small { display: none; }
+.badgeNameplate { fill: var(--bg-subtle); stroke: var(--color-line-strong); stroke-width: 1; }
+.namedRelation { --relation-color: var(--color-muted); color: var(--relation-color); }
+[data-tone='mentor'] { --relation-color: var(--color-warning); }
+[data-tone='enemy'] { --relation-color: var(--color-danger); }
+[data-tone='ally'] { --relation-color: var(--color-accent); }
+[data-tone='affection'] { --relation-color: var(--color-accent-2); }
+[data-tone='kinship'] { --relation-color: var(--color-success); }
+[data-tone='friend'] { --relation-color: var(--galaxy-person); }
+[data-tone='unknown'] { --relation-color: var(--color-muted); }
+.namedRelation[data-state='unknown'] { --relation-color: var(--color-muted); }
+.namedRelation[data-conflict='true'] { --relation-color: var(--color-danger); }
+.namedRelation > path { fill: none; stroke: var(--relation-color); stroke-width: 2; filter: drop-shadow(0 0 3px color-mix(in srgb,var(--relation-color) 40%,transparent)); }
+.namedRelation[data-layer='hidden'] > path { stroke-dasharray: 8 6; }
+.namedRelation[data-state='inactive'] { opacity: .35; }
+.namedRelation[data-selected='true'] > path { stroke-width: 3; }
+.namedRelation > g { cursor: pointer; }
+.namedRelation:not([data-layer='hidden']):not([data-state='unknown']):not([data-conflict='true']):not([data-selected='true']):not(:hover) > g:not(:focus-visible) { opacity: 0; }
+.namedRelation > g:focus-visible { outline: none; }
+.namedRelation > g > rect { fill: var(--bg-surface); stroke: var(--relation-color); stroke-width: 1; }
+.namedRelation > g:focus-visible > rect { stroke: var(--color-ink); stroke-width: 2; }
+.namedRelation text { fill: var(--relation-color); font: 500 var(--text-sm) var(--font-ui); pointer-events: none; }
+.relationshipLegend { position: absolute; left: var(--space-3); bottom: var(--space-3); display: grid; gap: var(--space-2); max-width: 200px; padding: var(--space-3) var(--space-4); color: var(--color-ink-secondary); font-size: var(--text-xs); border: 1px solid var(--color-line); border-radius: var(--radius-lg); background: var(--bg-sidebar); pointer-events: none; }
+.relationshipLegend > span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.relationshipLegend i { display: block; width: var(--space-8); border-top: 2px solid var(--relation-color,var(--color-muted)); filter: drop-shadow(0 0 3px var(--relation-color,var(--color-muted))); }
+.relationshipLegend [data-layer='hidden'] i { border-top-style: dashed; }
+.relationPicker { position: fixed; width: 336px; height: auto; aspect-ratio: 1; max-width: calc(100dvw - var(--space-8)); max-height: calc(100dvh - var(--space-8)); margin: 0; padding: 0; border: 0; overflow: visible; background: transparent; color: var(--color-ink); }
+.relationPicker::backdrop { background: transparent; }
+.pickerWheel { position: relative; width: 100%; aspect-ratio: 1; border-radius: var(--radius-pill); background: radial-gradient(circle at 50% 0%,var(--stellar-ai-haze),transparent 68%),var(--bg-subtle); box-shadow: 0 0 24px var(--stellar-ai-haze); }
+.pickerWheel > svg { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: var(--color-line-strong); stroke-width: 1; pointer-events: none; }
+.pickerWheel > svg > circle:first-child { stroke: var(--galaxy-person); filter: drop-shadow(0 0 4px var(--color-accent-2)); }
+.pickerWheel > button { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-1); transform: translate(-50%,-50%); width: 20%; aspect-ratio: 1; padding: var(--space-1); border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--galaxy-person); font-size: var(--text-sm); }
+.pickerWheel > button > svg { filter: drop-shadow(0 0 4px currentColor); }
+.pickerWheel > button:hover { border-color: var(--color-line-strong); background: var(--stellar-ai-haze); color: var(--color-ink); }
+.pickerWheel .pickerClose { left: 50%; top: 50%; width: 32%; border-radius: var(--radius-pill); color: var(--galaxy-person); }
+@media(max-width:1199px) { .relationshipToolbar { gap: var(--space-2); } .layerTabs > button { padding-inline: var(--space-3); } .storyControls { flex-basis: 240px; padding-inline: var(--space-3); gap: var(--space-2); } }
+@media(max-width:999px) { .relationshipToolbar .scanButton { margin-left: 0; } .relationshipActions { position: static; max-width: none; border-inline: 0; border-radius: 0; background: transparent; } .relationshipViewport { height: clamp(400px,calc(100dvh - 380px),560px); } }
+@media(max-width:699px) { .storyControls { order: 1; flex-basis: 100%; } .relationshipActions > label { flex: 1; } .relationshipViewport { height: 480px; } .relationshipLegend { max-width: 160px; } }

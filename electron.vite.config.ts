@@ -2,9 +2,15 @@ import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'electron-vite'
+import { version } from './package.json'
 
 export default defineConfig(({ command }) => {
   const nonce = command === 'serve' ? randomBytes(18).toString('hex') : undefined
+  const builtAt = new Date()
+  const buildTime = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium',
+  }).format(builtAt)
+  const windowTitle = `织章 · StoryWeave v${version} · ${command === 'serve' ? '开发' : '构建'} ${buildTime} (UTC+8)`
   return {
     main: {
       build: {
@@ -47,9 +53,16 @@ export default defineConfig(({ command }) => {
           name: 'storyweave-content-security-policy',
           transformIndexHtml: {
             order: 'pre',
-            handler: (html) => html
-              .replace('__STORYWEAVE_SCRIPT_SOURCES__', nonce ? `'self' 'nonce-${nonce}'` : "'self'")
-              .replace('__STORYWEAVE_CONNECT_SOURCES__', nonce ? "'self' ws://127.0.0.1:5173" : "'none'"),
+            handler: (html) => ({
+              html: html
+                .replace('__STORYWEAVE_SCRIPT_SOURCES__', nonce ? `'self' 'nonce-${nonce}'` : "'self'")
+                .replace('__STORYWEAVE_CONNECT_SOURCES__', nonce ? "'self' ws://127.0.0.1:5173" : "'none'")
+                .replace('__STORYWEAVE_WINDOW_TITLE__', windowTitle),
+              tags: [
+                { tag: 'meta', attrs: { name: 'storyweave-version', content: version } },
+                { tag: 'meta', attrs: { name: 'storyweave-built-at', content: builtAt.toISOString() } },
+              ],
+            }),
           },
         },
       ],

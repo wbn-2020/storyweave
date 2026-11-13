@@ -155,6 +155,13 @@ export class StoryControlRepository {
           counts[choice(row.due, DUE_VALUES)] = count(row.count)
         }
         const total = Object.values(counts).reduce((sum, value) => sum + value, 0)
+        // 每页最多 20 条、每条最多一段节选；只投影原登记，不把说明文本当作正文引文。
+        const sourceStatement = db.prepare(`SELECT src.source_type AS sourceType, substr(src.quote, 1, 240) AS quote,
+          CASE WHEN src.source_type <> 'chapter_text' THEN NULL WHEN src.revision_id = c.current_revision_id THEN 'current' ELSE 'historical' END AS referenceState
+          FROM story_sources src LEFT JOIN chapters c ON c.id = src.chapter_id
+          WHERE src.book_id = ? AND src.record_id = ?
+          ORDER BY CASE WHEN src.revision_id = c.current_revision_id THEN 0 WHEN src.source_type = 'chapter_text' THEN 1 ELSE 2 END,
+            src.created_at DESC, src.id LIMIT 1`)
         const items = (db.prepare(`WITH ${cte} SELECT id, revision, title, description, stage, author_decision, freshness, conflict_state,
           plan_json, actual_json, due, CASE WHEN due = 'overdue' AND target_type <> 'volume'
             THEN progress_number - target_number END AS overdue_chapters FROM scoped
@@ -162,11 +169,16 @@ export class StoryControlRepository {
             WHEN 'unplaced' THEN 3 WHEN 'unconfirmed' THEN 4 ELSE 5 END, target_number, id LIMIT @limit OFFSET @offset`)
           .all({ ...params, limit: FORESHADOW_RADAR_PAGE, offset }) as { id: string; revision: number; title: string; description: string; stage: string;
             author_decision: string; freshness: string; conflict_state: string; plan_json: string; actual_json: string; due: string; overdue_chapters: number | null }[])
-          .map((row): ForeshadowRadarItem => ({ id: requiredId(row.id), revision: count(row.revision), title: requiredText(row.title, '伏笔名称', 120), description: row.description,
+          .map((row): ForeshadowRadarItem => {
+            const source = sourceStatement.get(data.bookId, row.id) as ForeshadowRadarItem['source'] | undefined
+            if (source && (typeof source.quote !== 'string' || !['chapter_text', 'author_input', 'external'].includes(source.sourceType) ||
+              (source.sourceType === 'chapter_text' ? !['current', 'historical'].includes(source.referenceState ?? '') : source.referenceState !== null))) throw failure()
+            return { id: requiredId(row.id), revision: count(row.revision), title: requiredText(row.title, '伏笔名称', 120), description: row.description,
             stage: choice(row.stage, FORESHADOW_STAGES), authorDecision: choice(row.author_decision, AUTHOR_DECISIONS), freshness: choice(row.freshness, KNOWLEDGE_FRESHNESS),
             conflictState: choice(row.conflict_state, CONFLICT_STATES),
             plannedPayoff: parsePlannedPayoff(JSON.parse(row.plan_json)), actualPayoff: parseDisclosure(JSON.parse(row.actual_json)),
-            due: choice(row.due, DUE_VALUES), overdueChapters: row.overdue_chapters === null ? null : count(row.overdue_chapters) }))
+            due: choice(row.due, DUE_VALUES), overdueChapters: row.overdue_chapters === null ? null : count(row.overdue_chapters), source: source ?? null }
+          })
         if (items.length !== Math.min(FORESHADOW_RADAR_PAGE, Math.max(0, total - offset))) throw failure()
         return { bookId: data.bookId, ...snapshot, asOfChapterId: data.asOfChapterId ?? null, scope, offset, items, counts, total,
           nextOffset: offset + items.length < total ? offset + items.length : null }

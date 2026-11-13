@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -11,8 +11,13 @@ import { DraftRecovery } from './draft-recovery'
 import { DraftImports, parseDraftTarget } from './draft-imports'
 import { AiSessions } from './ai-sessions'
 import { GenerationSessions } from './generation-sessions'
+import { ImageSessions } from './image-sessions'
+import { ConnectionProbes } from './connection-probes'
+import { parseConnectionProbeCancel, parseConnectionProbeInput } from '../../contracts/ai-connection-probe'
+import type { AiConnectionPage } from '../../contracts/ai'
 import { parseBookRecoveryExportInput, parseBookRecoveryRestoreInput } from '../../contracts/book-recovery'
-import { bookExportExtension, parseBookExportCommitInput } from '../../contracts/export'
+import { bookExportExtension, parseBookExportCommitInput, type BookExportReceipt } from '../../contracts/export'
+import { parseExportBookMediaInput } from '../../contracts/book-media'
 
 let mainWindow: BrowserWindow | null = null
 let service: ServiceClient | null = null
@@ -30,37 +35,44 @@ let recoveryService: ServiceClient | null = null
 let recoveredInstance: ServiceClient | null = null
 let recoveryRequestId: string | null = null
 const previousReceipts = new Map<string, CompletedRequest>()
+const exportedFiles = new Map<string, { root: string | null; filePath: string }>()
 let closeResponse: { id: string; resolve: (value: boolean) => void } | null = null
 let lastAiRecoveryNotice: string | null = null
 const draftRecovery = new DraftRecovery()
 const draftImports = new DraftImports()
 const generationSessions = new GenerationSessions()
+const connectionProbes = new ConnectionProbes()
 const aiSessions = new AiSessions((root, connection) => generationSessions.sessionKey(root, connection))
+const imageSessions = new ImageSessions()
 
 const rendererCommands = new Set<RendererCommand>([
   'living.get', 'living.archive', 'living.save', 'living.history', 'living.restore', 'living.prepare', 'living.run', 'living.adopt',
   'forge.get', 'forge.prepare', 'forge.run', 'forge.adopt',
   'generation.connections', 'generation.configure', 'generation.draft', 'generation.get', 'generation.prepare',
   'generation.start', 'generation.cancel', 'generation.select', 'generation.adopt',
+  'connection.probe', 'connection.probe.cancel',
   'workspace.get', 'workspace.select', 'book.create', 'book.get',
-  'workbench.get', 'workbench.brief', 'workbench.scene', 'workbench.issue', 'workbench.applyIssue', 'workbench.goal', 'workbench.session',
-  'inspiration.list', 'inspiration.save', 'inspiration.copy', 'inspiration.import',
+  'workbench.get', 'workbench.brief', 'workbench.scene', 'workbench.scenes.reorder', 'workbench.issue', 'workbench.applyIssue', 'workbench.goal', 'workbench.session',
+  'inspiration.list', 'inspiration.thumbnail', 'inspiration.upgrade', 'inspiration.save', 'inspiration.copy', 'inspiration.import',
   'calendar.get', 'calendar.save',
-  'study.adopt',
+  'weave.get', 'weave.mutate',
+  'realm.get', 'realm.mutate', 'realm.simulate',
+  'study.adopt', 'study.saved',
   'ai.presets.get', 'ai.presets.save',
-  'book.media.get', 'book.media.read', 'book.media.save',
+  'book.media.get', 'book.media.read', 'book.media.save', 'book.media.exportFile',
+  'book.image.list', 'book.image.get', 'book.image.start', 'book.image.cancel', 'book.image.discard',
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
-  'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.commitFile',
+  'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.commitFile', 'book.export.reveal',
   'import.select', 'import.reparse', 'import.chapter', 'import.commit', 'book.exportFile', 'draft.copy', 'service.restart',
   'recovery.exportFile', 'recovery.select', 'recovery.restore',
   'draft.checkpoint', 'draft.list', 'draft.rotate', 'draft.select', 'draft.preview', 'draft.commit',
   'knowledge.status', 'knowledge.upgrade', 'knowledge.list', 'knowledge.get', 'knowledge.create', 'knowledge.update',
-  'notes.list', 'notes.get', 'notes.create', 'notes.update', 'notes.promote',
-  'story.list', 'story.timeline', 'story.galaxy', 'story.matrix', 'story.radar', 'story.get', 'story.revision', 'story.create', 'story.update',
+  'notes.list', 'notes.get', 'notes.thumbnail', 'notes.create', 'notes.update', 'notes.promote', 'notes.chapters',
+  'story.list', 'story.timeline', 'story.galaxy', 'story.worldMap', 'story.matrix', 'story.radar', 'story.get', 'story.revision', 'story.create', 'story.update',
   'memory.status', 'memory.start', 'memory.step', 'memory.control', 'memory.search', 'memory.evidence',
-  'memory.vector.status', 'memory.vector.get', 'memory.vector.prepare', 'memory.vector.start', 'memory.vector.cancel', 'memory.vector.interrupt',
+  'memory.vector.list', 'memory.vector.status', 'memory.vector.get', 'memory.vector.prepare', 'memory.vector.start', 'memory.vector.cancel', 'memory.vector.interrupt',
   'ai.connection.list', 'ai.configure', 'ai.list', 'ai.get', 'ai.prepare', 'ai.start', 'ai.cancel', 'ai.interrupt', 'ai.reject', 'ai.adopt',
   'ai.context.summaries', 'ai.context.recommend',
   'ai.memory.adopt',
@@ -75,6 +87,11 @@ function createService(): ServiceClient {
       rememberedWorkspaceRoot = snapshot.rootPath
       if (draftRecovery.bind(snapshot.rootPath)) draftImports.clear()
     } else if (command === 'chapter.save' || command === 'revision.merge') draftRecovery.saved(root, output as SaveChapterOutput)
+    else if (command === 'book.export.commit') {
+      const receipt = output as BookExportReceipt
+      exportedFiles.set(receipt.exportId, { root, filePath: receipt.filePath })
+      if (exportedFiles.size > 32) exportedFiles.delete(exportedFiles.keys().next().value!)
+    }
   })
 }
 
@@ -157,6 +174,15 @@ function setupIpc(): void {
       return failure('INVALID_INPUT', '不支持此操作。')
     }
     try {
+      if (command === 'book.export.reveal') {
+        if (!isRecord(payload) || Object.keys(payload).some((key) => key !== 'exportId')) return failure('INVALID_INPUT', '导出标识无效。')
+        const saved = exportedFiles.get(requiredId(payload.exportId))
+        // 只定位本实例已确认、当前书库的导出回执；渲染层不能传入任意路径。
+        if (!saved || !saved.root || saved.root !== service?.getWorkspaceRoot()) return failure('NOT_FOUND', '当前窗口没有这份导出的已确认记录，请在保存位置核对文件。')
+        checkedLocalDirectory(dirname(saved.filePath))
+        shell.showItemInFolder(saved.filePath)
+        return { ok: true, data: null }
+      }
       if (command === 'request.status') {
         if (!isRecord(payload)) return failure('INVALID_INPUT', '原请求标识无效。')
         const requestId = requiredId(payload.requestId)
@@ -175,6 +201,10 @@ function setupIpc(): void {
         return { ok: true, data: status.state === 'completed' ? { ...status, response: decorateReceipt(status.response) } : status }
       }
       if (command === 'draft.copy') return await chooseDraftCopy(payload)
+      if (command === 'connection.probe.cancel') {
+        connectionProbes.cancel(parseConnectionProbeCancel(payload).requestId)
+        return { ok: true, data: null }
+      }
       // 检查点独立于业务进程；只有切库、关闭排空或恢复中才暂缓，防止保存到错误书库。
       if (command === 'draft.checkpoint' || command === 'draft.list' || command === 'draft.rotate') {
         if (choosingFile || restarting || draining) return failure('WORKSPACE_BUSY', '桌面正在切换或关闭，请稍后再处理草稿副本。')
@@ -185,10 +215,11 @@ function setupIpc(): void {
       if (command === 'service.restart') {
         if (payload !== undefined) return failure('INVALID_INPUT', '恢复服务不接受路径或重放请求。')
         // 已接收的模型结果保留在主进程，允许恢复已退出的服务后核对并补存。
-        if (pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false)) return failure('WORKSPACE_BUSY', '请先处理 AI 请求并核对结束状态，再恢复本地服务。')
+        if (pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false) || imageSessions.hasActive(false)) return failure('WORKSPACE_BUSY', '请先处理 AI 请求并核对结束状态，再恢复本地服务。')
         if (closing || draining || choosingFile || restarting) return failure('WORKSPACE_BUSY', '请先完成当前操作，再恢复本地服务。')
         if (!service?.hasExited() && service !== recoveryService && service !== recoveredInstance) return failure('WORKSPACE_BUSY', '原服务尚未确认退出。不能重启或向活动服务重放未知操作。')
         restarting = true
+        connectionProbes.abortAll()
         try {
           if (!service) return failure('SERVICE_UNAVAILABLE', '尚无可恢复的本地服务。')
           if (service.hasExited()) {
@@ -243,21 +274,44 @@ function setupIpc(): void {
       if (closing && !['chapter.save', 'chapter.read', 'workspace.get'].includes(command)) {
         return failure('SERVICE_UNAVAILABLE', '正在保存并关闭，请等待当前操作完成。')
       }
+      if (command === 'connection.probe') {
+        const input = parseConnectionProbeInput(payload), client = service, root = client.getWorkspaceRoot()
+        if (!root) return failure('WORKSPACE_REQUIRED', '请先选择作品库。')
+        return await connectionProbes.run(root, input, async () => {
+          // 先沿用原读取链路核对配置及迟到回执，密钥始终只在主进程内存中使用。
+          if (input.scope === 'studio') {
+            const page = await client.request('generation.connections', undefined)
+            if (!page.ok) return page
+            const connection = page.data.connections.find((item) => item.id === input.connectionId)
+            return connection ? { ok: true, data: { connection, apiKey: generationSessions.sessionKey(root, connection) } } : failure('NOT_FOUND', '模型连接已不存在，请刷新。')
+          }
+          const page = await aiSessions.handle('ai.connection.list', { bookId: input.bookId }, client) as Result<AiConnectionPage>
+          if (!page.ok) return page
+          const connection = page.data.connections.find((item) => item.id === input.connectionId)
+          return connection ? { ok: true, data: { connection, apiKey: aiSessions.sessionKey(root, input.bookId, connection) } } : failure('NOT_FOUND', '模型连接已不存在，请刷新。')
+        }, () => service === client ? client.getWorkspaceRoot() : null)
+      }
+      if (command.startsWith('book.image.')) {
+        if (command === 'book.image.start' && (aiSessions.hasActive() || generationSessions.hasActive())) return failure('WORKSPACE_BUSY', '其他模型任务尚未结束，请先核对。')
+        pendingAiCommands += 1
+        try { return await imageSessions.handle(command, payload, service, aiSessions) }
+        finally { pendingAiCommands -= 1 }
+      }
       if (command.startsWith('generation.')) {
-        if (['generation.start', 'generation.configure'].includes(command) && aiSessions.hasActive()) return failure('WORKSPACE_BUSY', '其他模型任务尚未结束，请先核对。')
+        if (['generation.start', 'generation.configure'].includes(command) && (aiSessions.hasActive() || imageSessions.hasActive())) return failure('WORKSPACE_BUSY', '其他模型任务尚未结束，请先核对。')
         pendingAiCommands += 1
         try { return await generationSessions.handle(command, payload, service) }
         finally { pendingAiCommands -= 1 }
       }
       if (command.startsWith('ai.') || command.startsWith('memory.vector.')) {
-        if (['ai.start', 'ai.configure', 'memory.vector.start'].includes(command) && generationSessions.hasActive()) return failure('WORKSPACE_BUSY', '开书任务或待存结果尚未处理，请先返回开书房核对。')
+        if (['ai.start', 'ai.configure', 'memory.vector.start'].includes(command) && (generationSessions.hasActive() || imageSessions.hasActive())) return failure('WORKSPACE_BUSY', '其他模型任务或待存结果尚未处理，请先核对。')
         // 多次 await 的上下文预览也固定书库，不能在读取配置后被切到另一作品库。
         pendingAiCommands += 1
         try { return await aiSessions.handle(command, payload, service) }
         finally { pendingAiCommands -= 1 }
       }
       if (command === 'workspace.select') {
-        if (pendingAiCommands > 0 || aiSessions.hasActive() || generationSessions.hasActive()) return failure('WORKSPACE_BUSY', 'AI 请求仍在进行，请先处理并核对结束状态，再切换作品库。')
+        if (pendingAiCommands > 0 || aiSessions.hasActive() || generationSessions.hasActive() || imageSessions.hasActive()) return failure('WORKSPACE_BUSY', 'AI 请求仍在进行，请先处理并核对结束状态，再切换作品库。')
         if (payload !== undefined) return failure('INVALID_INPUT', '请选择本地书库目录。')
         if (choosingFile) return failure('WORKSPACE_BUSY', '已有一个文件选择窗口，请先完成该操作。')
         const target = mainWindow
@@ -272,13 +326,14 @@ function setupIpc(): void {
           if (selection.canceled || selection.filePaths.length !== 1) return { ok: true, data: null }
           if (closing || draining) return failure('SERVICE_UNAVAILABLE', '正在关闭，未切换书库。')
           const rootPath = checkedWorkspaceDirectory(selection.filePaths[0]!)
+          connectionProbes.abortAll()
           const result = await service.request('workspace.open', { rootPath })
           if (result.ok) rememberedWorkspaceRoot = result.data.rootPath
           return await completeWorkspaceRead(service, result)
         } finally { choosingFile = false }
       }
       if (command === 'recovery.exportFile' || command === 'recovery.select' || command === 'recovery.restore') {
-        if (pendingAiCommands > 0 || aiSessions.hasActive() || generationSessions.hasActive()) return failure('WORKSPACE_BUSY', '请先处理并核对正在进行的模型请求，再备份或恢复作品。')
+        if (pendingAiCommands > 0 || aiSessions.hasActive() || generationSessions.hasActive() || imageSessions.hasActive()) return failure('WORKSPACE_BUSY', '请先处理并核对正在进行的模型请求，再备份或恢复作品。')
         if (!service.getWorkspaceRoot()) return failure('WORKSPACE_REQUIRED', '请先选择用于保存作品的本地书库。')
         const exporting = command === 'recovery.exportFile' ? parseBookRecoveryExportInput(payload) : null
         const restoring = command === 'recovery.restore' ? parseBookRecoveryRestoreInput(payload) : null
@@ -344,6 +399,21 @@ function setupIpc(): void {
           if (selection.canceled || selection.filePaths.length !== 1) return { ok: true, data: null }
           if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未读取导入文件。')
           return await service.request('import.prepare', { ...validated.payload, filePath: selection.filePaths[0]! })
+        } finally { choosingFile = false }
+      }
+      if (command === 'book.media.exportFile') {
+        const input = parseExportBookMediaInput(payload), target = mainWindow
+        if (!target) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
+        choosingFile = true
+        try {
+          const extension = input.mime === 'image/png' ? 'png' : input.mime === 'image/jpeg' ? 'jpg' : 'webp'
+          const selection = await dialog.showSaveDialog(target, {
+            title: '导出所选原图（仅新建文件）', buttonLabel: '导出原图',
+            defaultPath: `图片素材-${input.id}.${extension}`, filters: [{ name: '图片原图', extensions: [extension] }],
+          })
+          if (selection.canceled || !selection.filePath) return { ok: true, data: null }
+          if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未创建图片导出文件。')
+          return await service.request('book.media.export', { ...input, filePath: selection.filePath })
         } finally { choosingFile = false }
       }
       if (command === 'book.export.commitFile') {
@@ -435,7 +505,7 @@ function askRendererToSave(window: BrowserWindow): Promise<boolean> {
 }
 
 async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> {
-  if (!aiSessions.hasActive() && !generationSessions.hasActive()) return true
+  if (!aiSessions.hasActive() && !generationSessions.hasActive() && !imageSessions.hasActive()) return true
   choosingFile = true
   try {
     const decision = await dialog.showMessageBox(window, {
@@ -449,7 +519,8 @@ async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> 
       defaultPath: `模型结果留存-${Date.now()}.json`, filters: [{ name: '模型结果 JSON', extensions: ['json'] }],
     })
     if (selection.canceled || !selection.filePath) return false
-    const copied = generationSessions.hasActive() ? generationSessions.savePendingResult(selection.filePath) : aiSessions.savePendingResult(selection.filePath)
+    const copied = imageSessions.hasActive() ? imageSessions.savePendingResult(selection.filePath)
+      : generationSessions.hasActive() ? generationSessions.savePendingResult(selection.filePath) : aiSessions.savePendingResult(selection.filePath)
     await dialog.showMessageBox(window, {
       type: 'info', title: copied ? '模型结果已留存' : '原保存请求已确认',
       message: copied ? '已保存结果副本，请返回工作室核对原请求。' : '模型结果的原保存回执已确认，无需另存副本。请返回工作室读取原记录。',
@@ -468,11 +539,12 @@ async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> 
 async function requestClose(): Promise<void> {
   const window = mainWindow
   if (!window || window.isDestroyed() || closing) return
-  if (choosingFile || restarting || pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false)) {
+  if (choosingFile || restarting || pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false) || imageSessions.hasActive(false)) {
     try { window.webContents.send(CLOSE_CANCELLED_CHANNEL) } catch { /* 保留当前窗口和未完成操作。 */ }
     return
   }
   closing = true
+  connectionProbes.abortAll()
   try {
     if (!await preservePendingAiResult(window)) return
     // 仅首次加载失败且从未建立界面／书库会话时，才没有 renderer 草稿需要确认。
@@ -545,7 +617,7 @@ function createWindow(): void {
     event.preventDefault()
     void requestClose()
   })
-  window.on('closed', () => { aiSessions.abortAll(); generationSessions.abortAll(); mainWindow = null })
+  window.on('closed', () => { connectionProbes.abortAll(); aiSessions.abortAll(); generationSessions.abortAll(); imageSessions.abortAll(); mainWindow = null })
   window.once('ready-to-show', () => window.show())
   void window.loadURL(expectedRendererUrl).then(() => { rendererSessionStarted = true }).catch(() => {
     initialRendererLoadFailed = true

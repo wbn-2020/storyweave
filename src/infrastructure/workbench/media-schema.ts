@@ -36,3 +36,46 @@ export const MEDIA_SCHEMA = `
     OR (SELECT COALESCE(SUM(byte_length), 0) FROM book_media) + NEW.byte_length > ${MAX_BOOK_MEDIA_BYTES}
   BEGIN SELECT RAISE(ABORT, 'Book media budget exceeded'); END;
 `
+
+// v21 仅追加地点资产和跨表预算保护，v14 封面／立绘 DDL 继续用于旧恢复包。
+export const SCENE_MEDIA_SCHEMA = `
+  CREATE TABLE book_scene_media (
+    id TEXT PRIMARY KEY CHECK (length(id) = 36),
+    book_revision INTEGER NOT NULL UNIQUE CHECK (book_revision > 0),
+    kind TEXT NOT NULL CHECK (kind = 'scene'),
+    person_id TEXT CHECK (person_id IS NULL),
+    place_id TEXT NOT NULL REFERENCES knowledge_items(id),
+    title TEXT NOT NULL CHECK (length(title) > 0 AND length(CAST(title AS BLOB)) <= 480),
+    alt TEXT NOT NULL CHECK (length(CAST(alt AS BLOB)) <= 8000),
+    mime TEXT NOT NULL CHECK (mime IN ('image/png', 'image/jpeg', 'image/webp')),
+    byte_length INTEGER NOT NULL CHECK (byte_length BETWEEN 4 AND ${MAX_BOOK_MEDIA_ITEM_BYTES}),
+    data_base64 TEXT NOT NULL CHECK (length(CAST(data_base64 AS BLOB)) = ((byte_length + 2) / 3) * 4 AND length(data_base64) <= ${MAX_BOOK_MEDIA_BASE64_LENGTH}),
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^a-f0-9]*'),
+    created_at TEXT NOT NULL CHECK (length(created_at) = 24)
+  ) STRICT;
+  CREATE INDEX book_scene_media_by_place ON book_scene_media(place_id, book_revision DESC);
+  CREATE TRIGGER immutable_book_scene_media_update BEFORE UPDATE ON book_scene_media
+  BEGIN SELECT RAISE(ABORT, 'Scene media is immutable'); END;
+  CREATE TRIGGER immutable_book_scene_media_delete BEFORE DELETE ON book_scene_media
+  BEGIN SELECT RAISE(ABORT, 'Scene media is immutable'); END;
+  CREATE TRIGGER book_scene_media_place_insert BEFORE INSERT ON book_scene_media
+  WHEN NOT EXISTS (
+    SELECT 1 FROM knowledge_items WHERE id = NEW.place_id AND kind = 'place'
+      AND book_id = (SELECT id FROM book_meta WHERE singleton = 1)
+  )
+  BEGIN SELECT RAISE(ABORT, 'Scene requires a place in this book'); END;
+  CREATE TRIGGER book_scene_media_preserve_place BEFORE UPDATE OF id, kind, book_id ON knowledge_items
+  WHEN (NEW.id != OLD.id OR NEW.kind != 'place' OR NEW.book_id != OLD.book_id)
+    AND EXISTS (SELECT 1 FROM book_scene_media WHERE place_id = OLD.id)
+  BEGIN SELECT RAISE(ABORT, 'Place is referenced by immutable scene media'); END;
+  CREATE TRIGGER book_scene_media_budget_insert BEFORE INSERT ON book_scene_media
+  WHEN (SELECT COUNT(*) FROM book_media) + (SELECT COUNT(*) FROM book_scene_media) >= ${MAX_BOOK_MEDIA_ITEMS}
+    OR (SELECT COALESCE(SUM(byte_length), 0) FROM book_media) + (SELECT COALESCE(SUM(byte_length), 0) FROM book_scene_media) + NEW.byte_length > ${MAX_BOOK_MEDIA_BYTES}
+    OR EXISTS (SELECT 1 FROM book_media WHERE id = NEW.id OR book_revision = NEW.book_revision)
+  BEGIN SELECT RAISE(ABORT, 'Shared media budget or identity conflict'); END;
+  CREATE TRIGGER book_media_scene_budget_insert BEFORE INSERT ON book_media
+  WHEN (SELECT COUNT(*) FROM book_media) + (SELECT COUNT(*) FROM book_scene_media) >= ${MAX_BOOK_MEDIA_ITEMS}
+    OR (SELECT COALESCE(SUM(byte_length), 0) FROM book_media) + (SELECT COALESCE(SUM(byte_length), 0) FROM book_scene_media) + NEW.byte_length > ${MAX_BOOK_MEDIA_BYTES}
+    OR EXISTS (SELECT 1 FROM book_scene_media WHERE id = NEW.id OR book_revision = NEW.book_revision)
+  BEGIN SELECT RAISE(ABORT, 'Shared media budget or identity conflict'); END;
+`

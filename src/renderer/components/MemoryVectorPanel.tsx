@@ -3,17 +3,18 @@ import { DomainError, type CompletedRequest, type Result, type StudioApi } from 
 import type { AiConnection } from '../../contracts/ai'
 import { parseMemorySearchInput, type MemorySearchInput, type MemorySearchPage } from '../../contracts/memory'
 import {
-  parseMemoryVectorPrepareInput, parseMemoryVectorProfileInput,
+  isMemoryVectorRun, parseMemoryVectorPrepareInput, parseMemoryVectorProfileInput,
   type MemoryVectorKind, type MemoryVectorPrepareInput, type MemoryVectorRun, type MemoryVectorStatus,
 } from '../../contracts/memory-vector'
 import { displayTime, request } from '../request'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './MemoryPanel.module.css'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarMemory.module.css'
 
 interface Props {
   api: StudioApi
   bookId: string
+  initialRunId?: string
   archived: boolean
   publicationVersion: number
   disabled: boolean
@@ -39,7 +40,7 @@ function uncertain(result: Result<unknown>): boolean {
   return !result.ok && (result.error.code === 'REQUEST_TIMEOUT' || result.error.code === 'SERVICE_UNAVAILABLE')
 }
 function sameRun(before: MemoryVectorRun, after: MemoryVectorRun): boolean {
-  return before.id === after.id && before.bookId === after.bookId && before.kind === after.kind &&
+  return isMemoryVectorRun(after, before.bookId, before.id) && before.kind === after.kind &&
     before.context.contextHash === after.context.contextHash && JSON.stringify(before.context) === JSON.stringify(after.context)
 }
 function sameConnection(before: AiConnection, after: AiConnection): boolean {
@@ -57,7 +58,7 @@ function matchesPrepared(input: MemoryVectorPrepareInput, run: MemoryVectorRun):
       run.context.input.length === 1 && run.context.input[0] === input.search?.query)
 }
 
-export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, disabled, searchInput, onBusyChange, onResults, onRestoreSearch, onRecover }: Props) {
+export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publicationVersion, disabled, searchInput, onBusyChange, onResults, onRestoreSearch, onRecover }: Props) {
   const [connections, setConnections] = useState<AiConnection[]>([])
   const [connectionId, setConnectionId] = useState('')
   const [embeddingModel, setEmbeddingModel] = useState('')
@@ -69,18 +70,22 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
   const [checking, setChecking] = useState(false)
   const [pollStopped, setPollStopped] = useState(false)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
-  const [connectionsRequested, setConnectionsRequested] = useState(true)
+  const [connectionsRequested, setConnectionsRequested] = useState(!initialRunId)
+  const [initialRequested, setInitialRequested] = useState(Boolean(initialRunId))
+  const section = useRef<HTMLElement | null>(null)
+  const initialLocated = useRef(false)
   const mounted = useRef(true)
   const lock = useRef(false)
   const runRef = useRef<MemoryVectorRun | null>(null)
   const busyCallback = useRef(onBusyChange)
   busyCallback.current = onBusyChange
   const unresolved = pending !== null || run?.state === 'running'
-  const blocked = disabled || working || checking || pending !== null
+  const locatingInitial = Boolean(initialRunId && !run)
+  const blocked = disabled || working || checking || pending !== null || locatingInitial
   const selected = connections.find((item) => item.id === connectionId)
   const form = { bookId, connectionId, embeddingModel: embeddingModel.trim() }
   const recovery = JSON.stringify({ bookId, connectionId, connection: selected, embeddingModel, search: searchInput,
-    runId: run?.id, runVersion: run?.version, contextHash: run?.context.contextHash, publicationVersion,
+    runId: run?.id ?? initialRunId, runVersion: run?.version, contextHash: run?.context.contextHash, publicationVersion,
     requestId: pending?.requestId, pendingRunId: pending?.readRunId, operation: pending?.label }, null, 2)
 
   useEffect(() => {
@@ -91,7 +96,7 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
   useEffect(() => { setRecoveryConfirmed(false) }, [recovery])
 
   async function readConnections() {
-    if (lock.current || disabled || unresolved) return
+    if (lock.current || disabled || unresolved || locatingInitial) return
     lock.current = true; setWorking(true); setMessage(null)
     const result = await request(() => api.listAiConnections({ bookId }))
     if (mounted.current) {
@@ -102,10 +107,22 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
     lock.current = false
   }
   useEffect(() => {
-    if (connectionsRequested && !disabled && !unresolved && !lock.current) {
+    if (connectionsRequested && !disabled && !unresolved && !locatingInitial && !lock.current) {
       setConnectionsRequested(false); void readConnections()
     }
-  }, [api, bookId, connectionsRequested, disabled, unresolved])
+  }, [api, bookId, connectionsRequested, disabled, unresolved, locatingInitial])
+  useEffect(() => {
+    if (!initialRunId || !initialRequested || disabled || working || checking || pending || lock.current) return
+    setInitialRequested(false)
+    void readRun(initialRunId)
+  }, [initialRunId, initialRequested, disabled, working, checking, pending])
+  useEffect(() => {
+    if (!initialRunId || run?.id !== initialRunId || initialLocated.current) return
+    initialLocated.current = true
+    section.current?.focus()
+    section.current?.scrollIntoView({ block: 'nearest' })
+    setConnectionsRequested(true)
+  }, [initialRunId, run])
 
   async function refreshCoverage() {
     if (lock.current || blocked || unresolved) return
@@ -121,7 +138,7 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
   }
 
   function accept(value: MemoryVectorRun): boolean {
-    if (!mounted.current || value.bookId !== bookId || value.context.bookId !== bookId) return false
+    if (!mounted.current || !value || !isMemoryVectorRun(value, bookId, value.id)) return false
     runRef.current = value; setRun(value)
     setPollStopped(false)
     setStatus(null)
@@ -191,7 +208,7 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
     lock.current = true
     setWorking(true); busyCallback.current(true)
     const before = retry?.readBefore ?? (runRef.current?.id === id ? runRef.current : undefined)
-    const receive = (value: MemoryVectorRun) => value.id === id && value.bookId === bookId &&
+    const receive = (value: MemoryVectorRun) => isMemoryVectorRun(value, bookId, id) &&
       (!before || sameRun(before, value) && value.version >= before.version) && accept(value)
     const result = await request(() => api.getMemoryVectorRun({ bookId, runId: id }))
     if (mounted.current) {
@@ -238,7 +255,7 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
           } else setMessage('原连接读取回执的作品不符，已保留表单。')
         } else if (isRead && response.command === 'memory.vector.get') {
           const value = response.result.data
-          if (value.id === captured.readRunId && value.bookId === bookId &&
+          if (captured.readRunId && isMemoryVectorRun(value, bookId, captured.readRunId) &&
             (!captured.readBefore || sameRun(captured.readBefore, value) && value.version >= captured.readBefore.version) && accept(value)) {
             setPending(null); setPollStopped(true); setMessage('已核对原读取回执。请读取原请求以更新本机网络状态。')
           } else setMessage('原读取回执的对象或版本不符，已保留表单。')
@@ -267,8 +284,10 @@ export function MemoryVectorPanel({ api, bookId, archived, publicationVersion, d
     busyCallback.current(false); onRecover()
   }
 
-  return <section className={styles.vector} aria-label="向量整理与混合检索">
+  return <section ref={section} tabIndex={initialRunId ? -1 : undefined} className={styles.vector} aria-label="向量整理与混合检索">
     <div className={styles.taskHeading}><h3>向量整理与混合检索</h3><button type="button" className={shared.button} disabled={blocked || unresolved} onClick={() => void readConnections()}>刷新连接</button></div>
+    {locatingInitial && <div className={styles.actions} role="status"><p className={styles.note}>{working ? '正在读取指定向量任务' : '待核对指定向量任务'} · {initialRunId}</p>
+      <button type="button" className={shared.button} disabled={disabled || working || checking || pending !== null || initialRequested} onClick={() => void readRun(initialRunId!)}>重新读取指定任务</button></div>}
     <p className={styles.note}>先预览，明确发送后才向所选接口传递文本。每批最多 8 个有效片段；混合检索仅发送上方查询文字。后续批次需再次准备与发送，向量进度独立于本地索引覆盖。</p>
     <div className={styles.vectorForm}><label>模型连接<select value={connectionId} disabled={blocked || unresolved} onChange={(event) => { setConnectionId(event.target.value); setStatus(null) }}><option value="">选择本书连接</option>{connections.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}</select></label><label>向量模型<input value={embeddingModel} maxLength={200} disabled={blocked || unresolved} placeholder="填写接口支持的向量模型" onChange={(event) => { setEmbeddingModel(event.target.value); setStatus(null) }} /></label></div>
     {connections.length === 0 && <p className={styles.note}>请先在 AI 协作中保存本书连接。远端密钥只在本次应用会话使用；此处沿用相同连接。</p>}

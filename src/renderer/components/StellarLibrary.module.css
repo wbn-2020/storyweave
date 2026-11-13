@@ -1,0 +1,39 @@
+.bookCover { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); width: 100%; aspect-ratio: 3 / 4; min-width: 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--genre-accent) 40%, var(--color-line)); border-radius: var(--radius-md); background: linear-gradient(145deg, color-mix(in srgb, var(--genre-accent) 14%, var(--bg-surface)), var(--bg-deep)); color: var(--genre-accent); padding: var(--space-3); }
+.bookCover > svg { opacity: .8; }
+.coverTitle { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font: 600 var(--text-md)/1.6 var(--font-ui); text-align: center; color: var(--color-ink); overflow-wrap: anywhere; }
+.coverGenre { font-size: var(--text-xs); color: var(--genre-accent); }
+.featuredCover { min-height: 128px; }
+.coverImage { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; }
+.coverImage[data-ready='true'] { opacity: 1; }
+.outline { min-width: 0; color: var(--color-ink); padding: var(--space-4); }
+.railHeading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-4); }
+.railHeading strong { font-size: var(--text-lg); font-weight: 600; }
+.railHeading button, .smallActions button, .chapterMove button { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-md); color: var(--color-muted); background: transparent; padding: var(--space-1); font-size: var(--text-xs); }
+.railHeading button:hover, .smallActions button:hover:not(:disabled), .chapterMove button:hover:not(:disabled) { background: var(--bg-raised); color: var(--color-accent); }
+.outlineFilters { margin-bottom: var(--space-3); }
+.outlineFilters > summary { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; min-height: var(--control-compact); color: var(--color-muted); font-size: var(--text-xs); }
+.outlineFilters > input { margin-bottom: var(--space-2); }
+.outlineFilters :is(input, select) { width: 100%; min-width: 0; font-size: var(--text-xs); }
+.railEmpty { padding-block: var(--space-6); color: var(--color-muted); font-size: var(--text-xs); }
+.volumeGroup { padding-bottom: var(--space-3); }
+.volumeGroup + .volumeGroup { border-top: 1px solid var(--color-line); padding-top: var(--space-3); }
+.volumeHeading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2); }
+.volumeToggle { display: flex; align-items: center; flex: 1; min-width: 0; gap: var(--space-2); border: 0; background: transparent; color: var(--color-ink-secondary); padding: 0; text-align: left; }
+.volumeToggle strong { font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.volumeToggle span { color: var(--color-muted); font: var(--text-xs)/1 var(--font-num); }
+.smallActions { display: flex; gap: var(--space-1); }
+.chapterList { padding: 0; margin: 0; list-style: none; }
+.chapterList li + li { margin-top: var(--space-1); }
+.chapterList > li > button { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; column-gap: var(--space-2); width: 100%; min-height: 44px; padding: var(--space-2); text-align: left; border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--color-ink-secondary); }
+.chapterList > li > button:hover:not(:disabled) { background: var(--bg-raised); }
+.chapterList > li > .chapterActive { background: var(--color-accent-soft); border-color: var(--color-line-strong); color: var(--color-accent); }
+.chapterList button > span { font: var(--text-xs)/1.6 var(--font-num); color: var(--color-muted); }
+.chapterList strong { font-size: var(--text-sm); line-height: 1.6; font-weight: 500; overflow-wrap: anywhere; }
+.chapterList small { display: none; }
+.statusDot { width: var(--space-1); height: var(--space-1); border-radius: var(--radius-pill); background: var(--color-muted); flex-shrink: 0; }
+.statusDot[data-status='finalized'] { background: var(--color-success); }
+.statusDot[data-status='review'] { background: var(--color-warning); }
+.statusDot[data-status='writing'] { background: var(--color-accent); }
+.chapterMove { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.addChapter { display: flex; align-items: center; justify-content: center; width: 100%; margin-top: var(--space-2); padding: var(--space-2); border: 1px dashed var(--color-line); border-radius: var(--radius-md); background: transparent; color: var(--color-muted); font-size: var(--text-xs); }
+.addChapter:hover:not(:disabled) { color: var(--color-accent); border-color: var(--color-accent); }

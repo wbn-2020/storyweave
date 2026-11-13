@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { StudioApi } from '../../contracts/api'
 import { readStudyCard, type BeatCardSource, type StudyBeat } from '../../contracts/study-card'
 import { request } from '../request'
-import ui from './WorkbenchPanel.module.css'
+import ui from './stellar/Workspace.module.css'
 
 export function BeatCardPicker({ api, disabled, onApply }: { api: StudioApi; disabled: boolean; onApply: (source: BeatCardSource, beats: StudyBeat[]) => void }) {
   const [query, setQuery] = useState('')

@@ -1,0 +1,19 @@
+.dialog { width: min(640px,calc(100vw - var(--space-8))); }
+.steps { display: flex; justify-content: center; gap: var(--space-5); padding-block: var(--space-5); border-bottom: 1px solid var(--color-line); }
+.steps button { display: flex; align-items: center; gap: var(--space-2); border: 0; background: transparent; color: var(--color-muted); padding: var(--space-1); }
+.steps span { display: grid; place-items: center; border: 1px solid var(--color-line); border-radius: var(--radius-pill); width: var(--control-compact); height: var(--control-compact); font-family: var(--font-num); }
+.steps [aria-current='step'] { color: var(--color-accent); }
+.steps [aria-current='step'] span { background: var(--color-accent-soft); border-color: var(--color-accent); }
+.form { display: grid; gap: var(--space-5); padding-top: var(--space-5); }
+.form > label { display: grid; gap: var(--space-2); }
+.form :is(input:not([type='checkbox']),textarea) { width: 100%; min-width: 0; }
+.modes { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-4); }
+.modes button { display: grid; justify-items: start; gap: var(--space-3); padding: var(--space-5); border: 1px solid var(--color-line); border-radius: var(--radius-lg); background: var(--bg-subtle); color: var(--color-muted); }
+.modes [aria-pressed='true'] { color: var(--color-accent); border-color: var(--color-accent); background: var(--color-accent-soft); }
+.note { color: var(--color-muted); font-size: var(--text-xs); line-height: 1.8; }
+.preview { padding-block: var(--space-4); color: var(--color-accent); }
+.preview h3 { margin-top: var(--space-3); font-size: var(--text-title); color: var(--color-ink); overflow-wrap: anywhere; }
+.preview dl { display: grid; grid-template-columns: 80px minmax(0,1fr); gap: var(--space-4); margin-top: var(--space-5); font-size: var(--text-sm); }
+.preview dt { color: var(--color-muted); }.preview dd { color: var(--color-ink); margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.actions { display: flex; justify-content: space-between; gap: var(--space-3); padding-top: var(--space-5); border-top: 1px solid var(--color-line); }
+.importButton { display: inline-flex; align-items: center; gap: var(--space-2); justify-self: start; padding: var(--space-2); border: 0; color: var(--color-accent); background: transparent; }

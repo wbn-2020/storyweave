@@ -5,10 +5,12 @@ import { DomainError, isRecord, requiredId } from '../../contracts/api'
 import { parseAiFinishInput, type AiFinishInput } from '../../contracts/ai'
 import { parseMemoryVectorFinishInput, type MemoryVectorFinishInput } from '../../contracts/memory-vector'
 import { parseGenerationFinishInput, type GenerationFinishInput } from '../../contracts/generation'
+import { parseImageGenerationRun, type ImageGenerationRun } from '../../contracts/image-generation'
 import { checkedLocalDirectory, readSelectedFile, writeNewText } from '../file-access'
 
 export type PendingAiPayload = { contextHash: string } & (
-  { command: 'ai.finish'; input: AiFinishInput } | { command: 'memory.vector.finish'; input: MemoryVectorFinishInput } | { command: 'generation.finish'; input: GenerationFinishInput }
+  { command: 'ai.finish'; input: AiFinishInput } | { command: 'memory.vector.finish'; input: MemoryVectorFinishInput } | { command: 'generation.finish'; input: GenerationFinishInput } |
+  { command: 'book.image.result'; input: ImageGenerationRun }
 )
 interface PendingAiVolume { id: string; hash: string | null; sequence: number; identity: string }
 interface Capacity { files: number; bytes: number }
@@ -51,6 +53,11 @@ function parsePayload(value: unknown): PendingAiPayload {
   if (value.command === 'ai.finish') return { command: value.command, contextHash: value.contextHash, input: parseAiFinishInput(value.input) }
   if (value.command === 'memory.vector.finish') return { command: value.command, contextHash: value.contextHash, input: parseMemoryVectorFinishInput(value.input) }
   if (value.command === 'generation.finish') return { command: value.command, contextHash: value.contextHash, input: parseGenerationFinishInput(value.input) }
+  if (value.command === 'book.image.result') {
+    const input = parseImageGenerationRun(value.input)
+    if (input.contextHash !== value.contextHash) invalid('图片留存记录与上下文指纹不符。')
+    return { command: value.command, contextHash: value.contextHash, input }
+  }
   return invalid('待存模型结果的命令不受支持。')
 }
 
@@ -60,9 +67,9 @@ function read(path: string, maximum: number): Uint8Array {
   return readSelectedFile(path, maximum, ['.json'])
 }
 
-/** 只写终态数据白名单；会话连接对象、请求头和密钥不能进入恢复日志。 */
+/** 只写规定的任务／结果白名单；认证会话对象、请求头和密钥不能进入恢复日志。 */
 export class PendingAiResults {
-  constructor(private readonly directoryName: 'pending-model-results' | 'pending-generation-results' = 'pending-model-results') {}
+  constructor(private readonly directoryName: 'pending-model-results' | 'pending-generation-results' | 'pending-image-results' = 'pending-model-results') {}
   private directory(root: string, create: boolean): string | null {
     const parent = checkedLocalDirectory(root)
     const directory = join(parent, this.directoryName)

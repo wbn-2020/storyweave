@@ -1,0 +1,37 @@
+.panel { composes: panel from './stellar/Workspace.module.css'; }
+.toolbar { composes: toolbar from './stellar/Workspace.module.css'; padding-block: var(--space-2); }
+.tabs { composes: tabs from './stellar/Workspace.module.css'; margin: 0; border: 0; }
+.tabs button { padding: var(--space-2) var(--space-3); }
+.actions { composes: actions from './stellar/Workspace.module.css'; }
+.button { composes: button from './stellar/Workspace.module.css'; }
+.primaryButton { composes: primaryButton from './stellar/Workspace.module.css'; }
+.muted { composes: muted from './stellar/Workspace.module.css'; }
+.error { composes: error from './stellar/Workspace.module.css'; }
+.warning { composes: warning from './stellar/Workspace.module.css'; }
+.notice { composes: notice from './stellar/Workspace.module.css'; }
+.empty { composes: empty from './stellar/Workspace.module.css'; }
+.editor { composes: editor from './stellar/Workspace.module.css'; padding-bottom: var(--space-6); }
+.editor fieldset { margin-block: var(--space-4); display: grid; gap: var(--space-4); }
+.fieldGrid { composes: fieldGrid from './stellar/Workspace.module.css'; }
+.check { composes: check from './stellar/Workspace.module.css'; }
+.connections { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-4); margin-block: var(--space-5); }
+.connection { position: relative; display: grid; grid-template-columns: minmax(0,1fr) minmax(104px,.65fr); gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: linear-gradient(135deg,var(--stellar-ai-haze),var(--bg-surface) 65%); min-width: 0; }
+.connection:nth-child(3n+1) { background: linear-gradient(135deg,var(--color-accent-soft),var(--bg-surface) 65%); }.connection:nth-child(3n) { background: linear-gradient(135deg,var(--color-warning-soft),var(--bg-surface) 65%); }
+.connection[data-default='true'] { border-color: var(--color-warning); }
+.connection header { display: flex; align-items: center; gap: var(--space-3); grid-column: 1; grid-row: 1; min-width: 0; }.connection header > div { min-width: 0; }.connection header :is(h3,p) { overflow-wrap: anywhere; }
+.connection header svg { color: var(--color-accent-2); flex-shrink: 0; }
+.connection header p { color: var(--color-muted); margin-top: var(--space-1); }
+.connection dl { display: grid; grid-column: 2; grid-row: 1; gap: var(--space-2); margin: 0; padding-left: var(--space-4); border-left: 1px solid var(--color-line); }
+.connection dt { font-size: var(--text-xs); color: var(--color-muted); }
+.connection dd { margin: var(--space-1) 0 0; font: 600 var(--text-md)/1.5 var(--font-num); }
+.connection footer { display: flex; grid-column: 1 / -1; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: 0; }
+.endpoint { grid-column: 1 / -1; color: var(--color-muted); font-size: var(--text-xs); margin: 0; overflow-wrap: anywhere; }
+.probeStatus { grid-column: 1 / -1; min-height: 1.6em; margin: 0; font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
+.probeStatus[data-state='succeeded'] { color: var(--color-success); }
+.probeStatus[data-state='failed'] { color: var(--color-danger); }
+.tag { position: absolute; top: var(--space-1); right: var(--space-3); display: inline-flex; align-items: center; gap: var(--space-1); color: var(--color-warning); font-size: var(--text-xs); white-space: nowrap; }
+.connection[data-default='true'] { padding-top: var(--space-6); }
+.securityNote { display: flex; gap: var(--space-3); align-items: center; padding-block: var(--space-5); border-top: 1px solid var(--color-line); color: var(--color-muted); }
+.securityNote svg { flex-shrink: 0; color: var(--color-success); }
+@media(max-width:1199px) { .connections { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media(max-width:699px) { .connections { grid-template-columns: minmax(0,1fr); } }

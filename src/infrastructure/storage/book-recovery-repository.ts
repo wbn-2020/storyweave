@@ -12,9 +12,10 @@ import {
 import { countCharacters, documentToText, MAX_CHAPTER_LENGTH, parseManuscript } from '../../contracts/manuscript'
 import { parseKnowledgeFields, parseKnowledgeSource } from '../../contracts/knowledge'
 import { parseStoryFields } from '../../contracts/story'
-import { parseNoteFields } from '../../contracts/notes'
+import { parseNoteFields, parseNoteMaterial } from '../../contracts/notes'
 import { parseMemoryVectorValues } from '../../contracts/memory-vector'
 import { NotesRepository } from '../notes/notes-repository'
+import { validateNoteThumbnails } from '../notes/thumbnail-repository'
 import { AiRepository } from '../ai/ai-repository'
 import { GenerationRepository } from '../ai/generation-repository'
 import { LivingRepository } from '../workbench/living-repository'
@@ -26,6 +27,8 @@ import { MemoryVectorRepository } from '../memory/vector-repository'
 import { validateWorkbenchDatabase } from '../workbench/workbench-repository'
 import { WORKBENCH_SCHEMA } from '../workbench/schema'
 import { validateCalendarDatabase } from '../workbench/calendar-repository'
+import { validateWeaveDatabase } from '../workbench/weave-repository'
+import { validateRealmDatabase } from '../workbench/realm-repository'
 import { validateAiPresetsDatabase } from '../ai/preset-repository'
 import { validateMediaDatabase } from '../workbench/media-repository'
 import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
@@ -36,7 +39,7 @@ import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memor
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
 import { NOTES_SCHEMA } from '../notes/schema'
-import { BOOK_APPLICATION_ID, BOOK_BASE_SCHEMA, BOOK_V14_SCHEMA, BOOK_V15_SCHEMA, BOOK_V16_SCHEMA, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
+import { BOOK_APPLICATION_ID, BOOK_BASE_SCHEMA, BOOK_V14_SCHEMA, BOOK_V15_SCHEMA, BOOK_V16_SCHEMA, BOOK_V17_SCHEMA, BOOK_V18_SCHEMA, BOOK_V19_SCHEMA, BOOK_V20_SCHEMA, BOOK_V21_SCHEMA, BOOK_V22_SCHEMA, BOOK_SCHEMA, BOOK_SCHEMA_VERSION } from './schema'
 import { ForgeRepository } from '../workbench/forge-repository'
 import { BOOK_RECOVERY_COMPLETE, BOOK_RECOVERY_PENDING, StudioRepository } from './studio-repository'
 
@@ -265,6 +268,12 @@ function expectedSchema(version: number): Map<string, SchemaObject> {
   if (version === 14) ddl = BOOK_V14_SCHEMA
   if (version === 15) ddl = BOOK_V15_SCHEMA
   if (version === 16) ddl = BOOK_V16_SCHEMA
+  if (version === 17) ddl = BOOK_V17_SCHEMA
+  if (version === 18) ddl = BOOK_V18_SCHEMA
+  if (version === 19) ddl = BOOK_V19_SCHEMA
+  if (version === 20) ddl = BOOK_V20_SCHEMA
+  if (version === 21) ddl = BOOK_V21_SCHEMA
+  if (version === 22) ddl = BOOK_V22_SCHEMA
   // 新建和备份升级采用相同追加结构，避免格式版本增加后误用新字段验证旧恢复包。
   if (version === BOOK_SCHEMA_VERSION) ddl = BOOK_SCHEMA
   // 只执行程序自带 DDL 构造私有参照库，FTS5 影子表与隐式索引由同一 SQLite 版本生成。
@@ -465,6 +474,10 @@ function verifyNonManuscriptData(db: Database.Database, version: number, book: B
         const fields = parseNoteFields({ category: row.category, title: row.title, body: row.body })
         if (fields.title !== row.title) invalid('恢复包笔记标题不符合存储格式。')
         requiredInteger(row.revision, '笔记版本', book.revision)
+      } else if (table.name === 'note_materials') {
+        if (parseNoteMaterial({ source: row.source, tags: [] }).source !== row.source) invalid('恢复包素材出处不符合存储格式。')
+      } else if (table.name === 'note_tags') {
+        if (parseNoteMaterial({ source: '', tags: [row.tag] }).tags[0] !== row.tag) invalid('恢复包素材标签不符合存储格式。')
       } else if (table.name === 'note_promotions') parseNoteFields(parsed(row.fields_json))
       else if (table.name === 'memory_vectors') {
         const vector = parseMemoryVectorValues(parsed(row.vector_json))
@@ -521,6 +534,9 @@ function verifyNonManuscriptData(db: Database.Database, version: number, book: B
   if (version >= 15) new GenerationRepository(studio).validateBook(book.id)
   if (version >= 16) new LivingRepository(studio, ai).validateBook(book.id)
   if (version >= 17) new ForgeRepository(studio, ai).validateBook(book.id)
+  if (version >= 18) validateWeaveDatabase(db, book.id)
+  if (version >= 19) validateRealmDatabase(db, book.id)
+  if (version >= 23) validateNoteThumbnails(db, book.id)
   if (version >= 12) eachId('notes', (id) => { notes.get({ bookId: book.id, id }) })
 }
 

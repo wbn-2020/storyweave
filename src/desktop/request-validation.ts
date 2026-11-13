@@ -5,8 +5,11 @@ import { parseCreateKnowledgeItem, parseKnowledgeItemInput, parseKnowledgeStatus
 import { parseCreateStoryRecord, parseListStoryRecords, parseStoryRecordInput, parseStoryRevisionInput, parseUpdateStoryRecord } from '../contracts/story'
 import { parseStoryTimelineInput } from '../contracts/story-timeline'
 import { parseStoryGalaxyInput } from '../contracts/story-galaxy'
+import { parseWorldMapInput } from '../contracts/world-map'
 import { parseAppearanceMatrixInput, parseForeshadowRadarInput } from '../contracts/story-control'
-import { parseCreateNoteInput, parseListNotesInput, parseNoteInput, parsePromoteNoteInput, parseUpdateNoteInput } from '../contracts/notes'
+import { parseCreateNoteInput, parseListNotesInput, parseNoteInput, parsePromoteNoteInput, parseSetNoteChaptersInput, parseUpdateNoteInput } from '../contracts/notes'
+import { parseReadNoteThumbnailInput } from '../contracts/note-thumbnail'
+import { parseReadInspirationThumbnailInput, parseUpgradeInspirationsInput } from '../contracts/inspiration-thumbnail'
 import { parseMemoryBookInput, parseMemoryControlInput, parseMemoryEvidenceInput, parseMemorySearchInput, parseMemoryStartInput, parseMemoryTaskInput } from '../contracts/memory'
 import { parseAiAdoptInput, parseAiBookInput, parseAiCheckpointInput, parseAiConnectionSaveInput, parseAiFinishInput, parseAiListInput, parseAiMemoryAdoptInput, parseAiPrepareServiceInput, parseAiRunInput, parseAiStartInput, parseAiVersionInput } from '../contracts/ai'
 import { parseAiMemoryTaskControlInput, parseAiMemoryTaskInput, parseAiMemoryTaskReadInput, parseAiMemoryTaskStartInput } from '../contracts/ai-memory-task'
@@ -17,12 +20,14 @@ import { parseAiContextRecommendationInput } from '../contracts/ai-context-recom
 import { parseMemoryVectorFinishInput, parseMemoryVectorPrepareServiceInput, parseMemoryVectorProfileServiceInput, parseMemoryVectorReadInput, parseMemoryVectorStartInput, parseMemoryVectorVersionInput } from '../contracts/memory-vector'
 import { parseBookRecoveryExportServiceInput, parseBookRecoveryPrepareInput, parseBookRecoveryRestoreInput } from '../contracts/book-recovery'
 import { parseCopyInspirationInput, parseListInspirationInput, parseLogWritingSessionInput, parseSaveBriefInput, parseSaveInspirationInput, parseSaveReviewIssueInput, parseSaveSceneInput, parseSaveWritingGoalInput, parseWorkbenchBookInput } from '../contracts/workbench'
-import { parseApplyReviewIssueInput } from '../contracts/workbench'
+import { parseApplyReviewIssueInput, parseReorderScenesInput } from '../contracts/workbench'
 import { parseImportInspirationsInput } from '../contracts/workbench'
 import { parseGetWritingCalendarInput, parseSaveCalendarEntryInput } from '../contracts/writing-calendar'
-import { parseStudyAdoptInput } from '../contracts/study'
+import { parseWeaveReadInput, parseWeaveMutationInput } from '../contracts/weave-system'
+import { parseRealmReadInput, parseRealmMutationInput, parseRealmSimulationInput } from '../contracts/realm'
+import { parseStudyAdoptInput, parseStudySavedInput } from '../contracts/study'
 import { parseGetAiPresetsInput, parseSaveAiPresetInput } from '../contracts/ai-presets'
-import { parseGetBookMediaInput, parseReadBookMediaInput, parseSaveBookMediaInput } from '../contracts/book-media'
+import { parseGetBookMediaInput, parseReadBookMediaInput, parseSaveBookMediaInput, parseExportBookMediaServiceInput } from '../contracts/book-media'
 import { parseRevisionMergeInput } from '../contracts/revision-merge'
 import { parseBookExportPrepareInput, parseBookExportChapterInput, parseBookExportCommitServiceInput } from '../contracts/export'
 import { parseStudioAiConnectionInput, parseKickstartDraftInput, parseGenerationReadInput, parseGenerationPrepareInput, parseGenerationStartInput, parseGenerationCheckpointInput, parseGenerationFinishInput, parseGenerationVersionInput, parseGenerationSelectionInput, parseGenerationAdoptInput } from '../contracts/generation'
@@ -71,22 +76,32 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'workbench.get': return { id, command, payload: parseWorkbenchBookInput(payload) }
     case 'workbench.brief': return { id, command, payload: parseSaveBriefInput(payload) }
     case 'workbench.scene': return { id, command, payload: parseSaveSceneInput(payload) }
+    case 'workbench.scenes.reorder': return { id, command, payload: parseReorderScenesInput(payload) }
     case 'workbench.issue': return { id, command, payload: parseSaveReviewIssueInput(payload) }
     case 'workbench.applyIssue': return { id, command, payload: parseApplyReviewIssueInput(payload) }
     case 'workbench.goal': return { id, command, payload: parseSaveWritingGoalInput(payload) }
     case 'workbench.session': return { id, command, payload: parseLogWritingSessionInput(payload) }
     case 'inspiration.list': return { id, command, payload: parseListInspirationInput(payload) }
+    case 'inspiration.thumbnail': return { id, command, payload: parseReadInspirationThumbnailInput(payload) }
+    case 'inspiration.upgrade': return { id, command, payload: parseUpgradeInspirationsInput(payload) }
     case 'inspiration.save': return { id, command, payload: parseSaveInspirationInput(payload) }
     case 'inspiration.copy': return { id, command, payload: parseCopyInspirationInput(payload) }
     case 'inspiration.import': return { id, command, payload: parseImportInspirationsInput(payload) }
     case 'calendar.get': return { id, command, payload: parseGetWritingCalendarInput(payload) }
     case 'calendar.save': return { id, command, payload: parseSaveCalendarEntryInput(payload) }
+    case 'weave.get': return { id, command, payload: parseWeaveReadInput(payload) }
+    case 'weave.mutate': return { id, command, payload: parseWeaveMutationInput(payload) }
+    case 'realm.get': return { id, command, payload: parseRealmReadInput(payload) }
+    case 'realm.mutate': return { id, command, payload: parseRealmMutationInput(payload) }
+    case 'realm.simulate': return { id, command, payload: parseRealmSimulationInput(payload) }
     case 'study.adopt': return { id, command, payload: parseStudyAdoptInput(payload) }
+    case 'study.saved': return { id, command, payload: parseStudySavedInput(payload) }
     case 'ai.presets.get': return { id, command, payload: parseGetAiPresetsInput(payload) }
     case 'ai.presets.save': return { id, command, payload: parseSaveAiPresetInput(payload) }
     case 'book.media.get': return { id, command, payload: parseGetBookMediaInput(payload) }
     case 'book.media.read': return { id, command, payload: parseReadBookMediaInput(payload) }
     case 'book.media.save': return { id, command, payload: parseSaveBookMediaInput(payload) }
+    case 'book.media.export': return { id, command, payload: parseExportBookMediaServiceInput(payload) }
     case 'recovery.export': return { id, command, payload: parseBookRecoveryExportServiceInput(payload) }
     case 'recovery.prepare': return { id, command, payload: parseBookRecoveryPrepareInput(payload) }
     case 'recovery.restore': return { id, command, payload: parseBookRecoveryRestoreInput(payload) }
@@ -123,6 +138,7 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'memory.control': return { id, command, payload: parseMemoryControlInput(payload) }
     case 'memory.search': return { id, command, payload: parseMemorySearchInput(payload) }
     case 'memory.evidence': return { id, command, payload: parseMemoryEvidenceInput(payload) }
+    case 'memory.vector.list': return { id, command, payload: parseMemoryBookInput(payload) }
     case 'memory.vector.status': return { id, command, payload: parseMemoryVectorProfileServiceInput(payload) }
     case 'memory.vector.get': return { id, command, payload: parseMemoryVectorReadInput(payload) }
     case 'memory.vector.prepare': return { id, command, payload: parseMemoryVectorPrepareServiceInput(payload) }
@@ -133,6 +149,7 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'story.list': return { id, command, payload: parseListStoryRecords(payload) }
     case 'story.timeline': return { id, command, payload: parseStoryTimelineInput(payload) }
     case 'story.galaxy': return { id, command, payload: parseStoryGalaxyInput(payload) }
+    case 'story.worldMap': return { id, command, payload: parseWorldMapInput(payload) }
     case 'story.matrix': return { id, command, payload: parseAppearanceMatrixInput(payload) }
     case 'story.radar': return { id, command, payload: parseForeshadowRadarInput(payload) }
     case 'story.get': return { id, command, payload: parseStoryRecordInput(payload) }
@@ -147,9 +164,11 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
     case 'knowledge.update': return { id, command, payload: parseUpdateKnowledgeItem(payload) }
     case 'notes.list': return { id, command, payload: parseListNotesInput(payload) }
     case 'notes.get': return { id, command, payload: parseNoteInput(payload) }
+    case 'notes.thumbnail': return { id, command, payload: parseReadNoteThumbnailInput(payload) }
     case 'notes.create': return { id, command, payload: parseCreateNoteInput(payload) }
     case 'notes.update': return { id, command, payload: parseUpdateNoteInput(payload) }
     case 'notes.promote': return { id, command, payload: parsePromoteNoteInput(payload) }
+    case 'notes.chapters': return { id, command, payload: parseSetNoteChaptersInput(payload) }
     case 'workspace.open':
       return { id, command, payload: { rootPath: requiredText(payload.rootPath, '书库目录', 32767) } }
     case 'book.create':

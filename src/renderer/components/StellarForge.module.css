@@ -1,0 +1,44 @@
+.panel { composes: panel from './stellar/Workspace.module.css'; }
+.toolbar { composes: heading from './stellar/Workspace.module.css'; }
+.panel .toolbar { margin-bottom: var(--space-4); padding-bottom: 0; }
+.toolbar h2 { font-size: var(--text-lg); }
+.identityTools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); min-width: 0; }
+.panel .personPicker { flex-direction: row; align-items: center; gap: var(--space-2); width: 200px; font-size: var(--text-xs); }
+.personPicker > select { flex: 1; min-height: var(--control-compact); padding: var(--space-1) var(--space-2); }
+.entityScope { color: var(--color-muted); font-size: var(--text-xs); }
+.toolbar .actions > button { min-height: var(--control-compact); padding: var(--space-1) var(--space-2); font-size: var(--text-xs); }
+.eyebrow { color: var(--color-accent-2); font-size: var(--text-xs); margin-bottom: var(--space-2); }
+.layout { display: grid; grid-template-columns: 304px minmax(0,1fr); gap: var(--space-5); align-items: start; }
+.compose { display: grid; gap: var(--space-4); padding-right: var(--space-5); border-right: 1px solid var(--color-line); min-width: 0; }
+.panel fieldset { display: grid; gap: var(--space-3); border: 1px solid var(--color-line); padding: var(--space-3); border-radius: var(--radius-md); }
+.panel small { display: block; color: var(--color-muted); font-size: var(--text-xs); }
+.panel details { padding-block: var(--space-3); border-top: 1px solid var(--color-line); }
+.check { composes: check from './stellar/Workspace.module.css'; align-items: start; }
+.check small { max-height: 9em; overflow: auto; }
+.columns { composes: fieldGrid from './stellar/Workspace.module.css'; }
+.actions { composes: actions from './stellar/Workspace.module.css'; }
+.help { composes: muted from './stellar/Workspace.module.css'; }
+.meta { composes: identity from './stellar/Workspace.module.css'; }
+.history { display: grid; gap: var(--space-3); min-width: 0; }
+.sourceList { display: grid; gap: var(--space-2); max-height: 240px; overflow: auto; }
+.result { display: grid; gap: var(--space-4); min-width: 0; }
+.resultHeader { composes: heading from './stellar/Workspace.module.css'; padding: 0; }
+.resultHeader span { color: var(--color-accent-2); font-size: var(--text-xs); }
+.proposals { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,280px),1fr)); gap: var(--space-4); align-items: start; }
+.card { composes: card from './stellar/Workspace.module.css'; display: grid; gap: var(--space-3); }
+.output { white-space: pre-wrap; font: var(--text-md)/1.9 var(--font-manuscript); max-height: 520px; overflow: auto; padding: var(--space-4); background: var(--bg-subtle); }
+.preview { white-space: pre-wrap; font: var(--text-xs)/1.7 var(--font-num); max-height: 320px; overflow: auto; }
+.empty { composes: empty from './stellar/Workspace.module.css'; min-height: 280px; justify-content: center; align-items: center; text-align: center; }
+.error { composes: error from './stellar/Workspace.module.css'; }
+.notice { composes: notice from './stellar/Workspace.module.css'; }
+.callout { composes: warning from './stellar/Workspace.module.css'; }
+.names { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: var(--space-4); }
+.names li { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-line); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.names strong { font-size: 20px; }
+.names span { color: var(--color-muted); }
+.runLink { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); border: 0; border-bottom: 1px solid var(--color-line); background: transparent; color: var(--color-ink-secondary); padding-block: var(--space-3); text-align: left; }
+.taskTabs { composes: tabs from './stellar/Workspace.module.css'; margin-bottom: var(--space-5); }
+.taskControls { margin-top: var(--space-5); }
+.taskControls > summary { color: var(--color-accent-2); padding-block: var(--space-4); }
+.taskControls[open] > summary { margin-bottom: var(--space-4); }
+@media(max-width:999px) { .layout { grid-template-columns: minmax(0,1fr); } .compose { padding: 0 0 var(--space-5); border-right: 0; border-bottom: 1px solid var(--color-line); } }

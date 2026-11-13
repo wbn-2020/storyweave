@@ -6,13 +6,15 @@ import { AI_SUMMARY_NODE_PAGE, AI_SUMMARY_PLAN_PAGE, AI_SUMMARY_PROMPT_VERSION, 
 import type { KnowledgeStatus } from '../../contracts/knowledge'
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './AiPanel.module.css'
+import { SummaryOverview } from './SummaryOverview'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarAi.module.css'
 
 interface Props {
   api: StudioApi
   book: BookSnapshot
+  initialTaskId?: string
   busy: boolean
   error?: string | null
   pendingMessage?: string | null
@@ -20,6 +22,8 @@ interface Props {
   onCheckReceipt: () => void
   onRecover: () => void
   onClose: () => void
+  onNavigate: (chapterId: string) => void
+  onForeshadow: () => void
   onDirtyChange: (dirty: boolean) => void
   onUpgrade: (accept: (status: KnowledgeStatus) => void) => Promise<void>
   onAdoptSummary: (input: AiSummaryAdoptInput, source: AiRun, previous: AiSummaryTaskSummary, accept: (receipt: AiSummaryAdoptReceipt) => boolean) => Promise<void>
@@ -89,7 +93,7 @@ function SummaryPreview({ context }: { context: AiContextPacket }) {
 
 export function AiSummaryPanel(props: Props) { return <AiSummarySession key={props.book.book.id} {...props} /> }
 
-function AiSummarySession({ api, book, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onAdoptSummary }: Props) {
+function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onNavigate, onForeshadow, onDirtyChange, onUpgrade, onAdoptSummary }: Props) {
   const [status, setStatus] = useState<AiSummaryStatus | null>(null)
   const [connections, setConnections] = useState<AiConnectionPage | null>(null)
   const [task, setTask] = useState<AiSummaryTaskDetail | null>(null)
@@ -127,6 +131,7 @@ function AiSummarySession({ api, book, busy, error, pendingMessage, checkingRece
   const formDirtyRef = useRef(false)
   const reviewDirtyRef = useRef(false)
   const callback = useRef(onDirtyChange)
+  const taskControls = useRef<HTMLDetailsElement>(null)
   callback.current = onDirtyChange
   const run = node?.run ?? null
   const archived = Boolean(book.book.archivedAt)
@@ -203,10 +208,20 @@ function AiSummarySession({ api, book, busy, error, pendingMessage, checkingRece
     if (reviewDirtyRef.current) setDiscard({ label, proceed: () => { resetReview(nodeRef.current?.run ?? null); proceed() } })
     else proceed()
   }
-  function close() {
+  function leave(proceed: () => void) {
     if (blocked || lock.current || pendingRef.current || requestedRef.current || generating) return
-    if (formDirtyRef.current || reviewDirtyRef.current) { setDiscard({ label: '放弃本页未保存的任务要求和摘要修改，并关闭？已保存的任务、采用记录与原输出会保留。', proceed: () => { markFormDirty(false); markReviewDirty(false); callback.current(false); onClose() } }); return }
-    callback.current(false); onClose()
+    if (formDirtyRef.current || reviewDirtyRef.current) { setDiscard({ label: '放弃本页未保存的任务要求和摘要修改，并离开？已保存的任务、采用记录与原输出会保留。', proceed: () => { markFormDirty(false); markReviewDirty(false); callback.current(false); proceed() } }); return }
+    callback.current(false); proceed()
+  }
+  function close() { leave(onClose) }
+  function revealTaskControls() {
+    if (taskControls.current) { taskControls.current.open = true; taskControls.current.scrollIntoView({ block: 'start' }) }
+  }
+  function prepareScope(scope: string) {
+    if (formLocked) return
+    if (scope !== form.scope) { setForm({ ...form, scope }); markFormDirty(true) }
+    revealTaskControls()
+    taskControls.current?.querySelector<HTMLSelectElement>('select')?.focus({ preventScroll: true })
   }
 
   useEffect(() => {
@@ -307,7 +322,7 @@ function AiSummarySession({ api, book, busy, error, pendingMessage, checkingRece
       const [statusResult, connectionResult] = results
       if (connectionResult.status !== 'fulfilled' || !connectionResult.value.ok || !acceptConnections(connectionResult.value.data)) setMessage(connectionResult.status === 'fulfilled' && !connectionResult.value.ok ? connectionResult.value.error.message : '连接读取失败或作品身份不符。')
       if (statusResult.status !== 'fulfilled' || !statusResult.value.ok || !acceptStatus(statusResult.value.data)) { setMessage(statusResult.status === 'fulfilled' && !statusResult.value.ok ? statusResult.value.error.message : '汇总状态读取失败或作品身份不符。'); return }
-      const value = statusResult.value.data; const id = taskRef.current?.id ?? value.activeTask?.id ?? value.recentTasks[0]?.id
+      const value = statusResult.value.data; const id = taskRef.current?.id ?? initialTaskId ?? value.activeTask?.id ?? value.recentTasks[0]?.id
       if (!value.requiresUpgrade && value.schemaVersion >= 9 && id) await readTaskData(id, taskRef.current?.id === id ? pageAfter : undefined, at, currentTicket)
     } finally { if (active(at) && ticket.current === currentTicket) { lock.current = false; setLoading(false) } }
   }
@@ -506,9 +521,7 @@ function AiSummarySession({ api, book, busy, error, pendingMessage, checkingRece
   const canStep = activeView && task?.sourceCurrent && ['planning', 'ready'].includes(task.state) &&
     (task.phase === 'planning' || !task.currentNode?.runId || needsCheckpoint)
 
-  return <Dialog title="卷与全书分层汇总" wide busy={blocked || generating} onClose={close} error={panelError}>
-    <div className={layout.intro}><p>《{book.book.title}》</p><span>固定已采用章节摘要 → 逐层汇总 → 作者逐节点审阅</span></div>
-    <p className={styles.note}>每次只发送一组完整下层摘要。缺少当前稿的章节摘要时先补齐章节整理；上层须等下层全部采用。本页保存独立汇总资料，采用不会自动写入知识条目。</p>
+  return <Dialog title="全书分层汇总" wide busy={blocked || generating} onClose={close} error={panelError}>
     {operation && <p className={styles.note} role="status">{operation}…</p>}
     {(pending || pendingMessage) && <section className={layout.pending} role="alert"><h3>本次操作结果未确认</h3><p>{pendingMessage ?? `${pending?.label}尚未收到确定回执，新的写入已暂停。`}</p><p>查询原请求只核对已保存的结果，不会重新发送或采用。</p>
       <label>任务、候选与本页编辑的恢复副本<textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={8} onFocus={(event) => event.target.select()} /></label>
@@ -522,12 +535,17 @@ function AiSummarySession({ api, book, busy, error, pendingMessage, checkingRece
     {status?.requiresUpgrade && <section className={layout.upgrade}><h3>为本书启用分层汇总</h3><p>当前作品格式 v{status.schemaVersion}。先建立独立数据库备份，再升级到当前作品格式，保存汇总任务、分层节点与不可变尝试。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意为本书创建数据库备份并升级</label><button type="button" className={shared.primaryButton} disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
     {backupPath && <p className={layout.backupPath}>升级前数据库副本：{backupPath}</p>}
     {ready && <>
+      <SummaryOverview api={api} book={book} status={status} disabled={blocked || generating} onNavigate={(chapterId) => leave(() => onNavigate(chapterId))}
+        onForeshadow={() => leave(onForeshadow)} onPrepare={prepareScope} onTask={(id) => { revealTaskControls(); openTask(id) }} />
+      <details ref={taskControls} className={styles.summaryControls}><summary>汇总任务、发送与审阅{edited ? ' · 有未保存修改' : task ? ` · ${taskLabels[task.state]}` : ''}</summary>
+      <p className={styles.note}>每次只发送一组完整下层摘要。缺少当前稿的章节摘要时先补齐章节整理；上层须等下层全部采用。本页保存独立汇总资料，采用不会自动写入知识条目。</p>
+      <div className={styles.summaryWorkspace}>
       <section className={styles.composer} aria-label="新建汇总任务"><div className={styles.heading}><h3>新建分层汇总</h3><span>{status.activeTask ? '已有活动任务' : '同时保留一个活动任务'}</span></div>
         <form className={layout.editorForm} onSubmit={(event) => void start(event)}>
           <div className={layout.twoColumns}><label>汇总范围<select value={form.scope} disabled={formLocked} onChange={(event) => { setForm({ ...form, scope: event.target.value }); markFormDirty(true) }}><option value="book">全书章节</option>{book.volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.title}</option>)}<option value="ungrouped">未分卷章节</option></select></label><label>每组完整摘要数<select value={form.fanIn} disabled={formLocked} onChange={(event) => { setForm({ ...form, fanIn: Number(event.target.value) as 2 | 4 | 8 }); markFormDirty(true) }}><option value={2}>2 份</option><option value={4}>4 份</option><option value={8}>8 份</option></select></label></div>
           <label>已保存的模型连接<select value={form.connectionId} disabled={formLocked} onChange={(event) => { setForm({ ...form, connectionId: event.target.value }); markFormDirty(true) }}><option value="" disabled>请选择连接</option>{connections.connections.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}</select></label>
           <p className={styles.note}>连接与本次会话的密钥在“AI 创作协作”管理。当前范围含 {selectedChapters.toLocaleString()} 章；全书已有 {status.availableChapterSummaries.toLocaleString()}／{status.totalChapters.toLocaleString()} 章具备当前稿、当前标题的已采用摘要，创建时逐章核对所选范围。</p>
-          <label>每层汇总要求<textarea value={form.instruction} rows={4} maxLength={6000} required disabled={formLocked} onChange={(event) => { setForm({ ...form, instruction: event.target.value }); markFormDirty(true) }} /></label>
+          <label>每层汇总要求<textarea aria-label="每层汇总要求" value={form.instruction} rows={4} maxLength={6000} required disabled={formLocked} onChange={(event) => { setForm({ ...form, instruction: event.target.value }); markFormDirty(true) }} /></label>
           <p className={styles.note}>来源超预算会拒绝准备，请选择较小分组或调整连接预算。一次最多规划 {AI_SUMMARY_PLAN_PAGE} 个节点，所有发送均需逐节点确认。</p>
           <div className={styles.actions}><button type="submit" className={shared.primaryButton} disabled={formLocked || Boolean(status.activeTask) || !form.connectionId || !form.instruction.trim() || selectedChapters === 0}>创建本地汇总任务</button><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setRefreshRequested(true)}>刷新状态</button></div>
         </form>
@@ -573,7 +591,7 @@ function AiSummarySession({ api, book, busy, error, pendingMessage, checkingRece
       {sourceNode && <section className={styles.run} aria-label="下层来源追溯"><div className={styles.heading}><h3>下层来源 · {sourceNode.title}</h3><button type="button" className={shared.button} disabled={blocked} onClick={() => setSourceNode(null)}>收起来源</button></div><p className={layout.body}>{sourceNode.acceptedText}</p><SummarySources sources={sourceNode.sources} disabled={blocked} onInspect={(source) => void inspectSource(source, sourceNode.level)} /></section>}
       {status.recentTasks.length > 0 && <details className={styles.history}><summary>最近 {Math.min(10, status.recentTasks.length)} 份汇总任务</summary><ul>{status.recentTasks.slice(0, 10).map((item) => <li key={item.id}><button type="button" className={styles.historyItem} disabled={blocked || generating} aria-current={task?.id === item.id ? 'true' : undefined} onClick={() => openTask(item.id)}><span><strong>{item.scopeTitle} · 每组 {item.fanIn} 份</strong><small>已采用 {item.approvedNodes}／{item.totalNodes} 个节点 · {item.sourceCurrent ? '来源当前' : '历史来源'}</small></span><span>{taskLabels[item.state]}<small>{displayTime(item.updatedAt)}</small></span></button></li>)}</ul></details>}
       {archived && <p className={styles.note}>作品已归档，可读取历史与来源；解除归档后可继续汇总。</p>}
-    </>}
+    </div></details></>}
     {discard && <section className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setDiscard(null)}>保留当前内容</button><button type="button" className={shared.primaryButton} disabled={blocked || generating} onClick={() => { const proceed = discard.proceed; setDiscard(null); proceed() }}>确认并继续</button></div></section>}
     <div className={styles.footer}><button type="button" className={shared.button} disabled={blocked || generating} onClick={close}>关闭</button></div>
   </Dialog>

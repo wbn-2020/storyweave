@@ -1,0 +1,26 @@
+.canvasDialogSurface { min-width: 0; max-width: 1600px; margin-inline: auto; color: var(--color-ink); }
+.canvasDialogHeader { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); margin-bottom: var(--space-5); min-width: 0; }
+.canvasDialogTitleGroup { min-width: 0; }
+.canvasToolbarHeader { align-items: flex-start; gap: var(--space-3); }
+.canvasToolbarHeader > .canvasDialogTitleGroup { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.canvasDialogHeader h2 { font-size: var(--text-title); line-height: 1.3; overflow-wrap: anywhere; }
+.canvasDialogBody { min-width: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.canvasCloseButton { display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-compact); border: 0; border-radius: var(--radius-md); padding: var(--space-2); background: transparent; color: var(--color-muted); white-space: nowrap; }
+.canvasCloseButton:hover:not(:disabled) { background: var(--bg-raised); color: var(--color-accent); }
+.canvasHeaderActions { display: flex; align-items: center; gap: var(--space-2); }
+.drawerDialogSurface { display: flex; flex-direction: column; min-width: 0; padding: var(--space-4); container-type: inline-size; }
+.drawerDialogHeader { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-line); margin-bottom: var(--space-4); }
+.drawerDialogHeader h2 { font-size: var(--text-md); }
+.drawerDialogBody { min-width: 0; }
+.inlineForm { width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); padding: var(--space-6); background: var(--bg-surface); color: var(--color-ink); box-shadow: var(--shadow-md); }
+.inlineForm::backdrop { background: var(--overlay-backdrop); backdrop-filter: blur(18px) saturate(120%); }
+.wideDialog { width: min(1200px, calc(100vw - 48px)); }
+.formHeading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding-bottom: var(--space-4); margin-bottom: var(--space-5); border-bottom: 1px solid var(--color-line); }
+.formHeading h2 { font-size: 20px; line-height: 1.4; }
+.formHeading > button { display: grid; place-items: center; width: var(--control-compact); height: var(--control-compact); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-muted); }
+.inlineForm label { display: block; color: var(--color-ink-secondary); margin-bottom: var(--space-3); font-size: var(--text-sm); }
+.inlineForm input:not([type='checkbox']):not([type='radio']):not([type='range']), .inlineForm textarea, .inlineForm select { display: block; width: 100%; min-width: 0; margin-top: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--bg-subtle); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); color: var(--color-ink); }
+.inlineForm textarea { resize: vertical; }
+.formError { color: var(--color-danger); background: var(--color-danger-soft); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+@media (prefers-reduced-transparency: reduce) { .inlineForm::backdrop { backdrop-filter: none; } }
+@media (max-width: 599px) { .inlineForm { padding: var(--space-4); } .canvasDialogHeader h2 { font-size: 20px; } }

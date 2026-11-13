@@ -14,6 +14,8 @@ export interface StudyProposal { version: 1; items: StudyProposalItem[] }
 export interface StudyAdoptEntry { index: number; id: string; title: string; body: string }
 export interface StudyAdoptInput { bookId: string; runId: string; expectedVersion: number; entries: StudyAdoptEntry[] }
 export interface StudyAdoptReceipt { bookId: string; runId: string; items: InspirationItem[] }
+export interface StudySavedInput { bookId: string; runId: string; expectedVersion: number }
+export interface StudySavedResults extends StudySavedInput { items: { index: number; origin: string; item: InspirationItem }[] }
 
 export const STUDY_SYSTEM_RULES = `你正在帮助作者审阅其明确选定的参考原文，输出可逐项核对的拆书建议。
 只返回一个 JSON 对象，格式严格为 {"version":1,"items":[{"kind":"observation|excerpt|technique|method","title":"标题","body":"分析或方法","quote":"逐字引文","sourceId":"参考资料的固定 ID"}]}。
@@ -47,6 +49,13 @@ function text(value: unknown, label: string, maximum: number): string {
   return value.trim()
 }
 function id(value: unknown): string { return requiredId(value).toLowerCase() }
+
+export function parseStudySavedInput(value: unknown): StudySavedInput {
+  const data = record(value, ['bookId', 'runId', 'expectedVersion'])
+  const expectedVersion = requiredInteger(data.expectedVersion, '拆书候选版本')
+  if (expectedVersion < 1) return invalid('拆书候选版本必须大于零。')
+  return { bookId: id(data.bookId), runId: id(data.runId), expectedVersion }
+}
 
 export function parseStudyProposal(output: string, context: AiContextPacket): StudyProposal {
   if (context.kind !== 'plan' || context.purpose !== 'study') return invalid('只有拆书任务可以解析为拆书结果。')
@@ -110,7 +119,7 @@ export function isStudyAdoptReceiptFor(input: StudyAdoptInput, run: AiRun, recei
     return input.entries.every((entry, index) => {
       const original = proposal.items[entry.index]
       const saved = receipt.items[index]
-      if (!original || !saved || saved.id !== entry.id || saved.revision !== 1 || typeof saved.createdAt !== 'string' ||
+      if (!original || !saved || saved.id !== entry.id || saved.revision !== 1 || saved.thumbnail !== null || typeof saved.createdAt !== 'string' ||
         !Number.isFinite(Date.parse(saved.createdAt)) || saved.updatedAt !== saved.createdAt) return false
       const expected = studyInspirationFields(input, run.context, original, entry)
       // 原始回执字段逐一比较，避免规范化隐藏截断、来源替换或多余关联。

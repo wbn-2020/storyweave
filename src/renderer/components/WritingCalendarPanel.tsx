@@ -6,7 +6,9 @@ import {
   type CalendarEntry, type CalendarEntryFields, type CalendarSnapshot, type SaveCalendarEntryInput, type WritingCalendarApi,
 } from '../../contracts/writing-calendar'
 import { localDate, sameFields, useToolSession } from './workbench-ui'
-import styles from './WritingCalendarPanel.module.css'
+import { CalendarYearHeatmap } from './CalendarYearHeatmap'
+import { StudioIcon } from './StudioIcon'
+import styles from './StellarCalendar.module.css'
 
 export interface WritingCalendarPanelProps {
   api: StudioApi & WritingCalendarApi
@@ -16,6 +18,7 @@ export interface WritingCalendarPanelProps {
   onBookChange: (book: BookSnapshot) => void
   onUnknown?: (error: AppError) => void
   onRecover?: () => void
+  onClose: () => void
 }
 
 const kindLabels: Record<CalendarEntryFields['kind'], string> = { writing: '写作计划', deadline: '截止日期', publication: '发布计划', idea: '灵感整理' }
@@ -33,7 +36,7 @@ export function WritingCalendarPanel(props: WritingCalendarPanelProps) {
   return <CalendarContent key={props.book.book.id} {...props} />
 }
 
-function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onUnknown, onRecover }: WritingCalendarPanelProps) {
+function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onUnknown, onRecover, onClose }: WritingCalendarPanelProps) {
   const bookId = book.book.id
   const prefix = useId()
   const [month, setMonth] = useState(() => localDate().slice(0, 7))
@@ -66,6 +69,10 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   })), [dates, snapshot, today])
   const selected = days.get(selectedDate)
   const statistics = snapshot ? calendarStatistics(snapshot.events, snapshot.activity, today) : null
+  const activeDates = new Set(snapshot?.activity.filter((item) => item.added > 0 || item.removed > 0).map((item) => item.date)).size
+  const trendMaximum = Math.max(1, ...dates.map((date) => Math.abs(days.get(date)?.statistics.net ?? 0)))
+  const sourceTotals = Object.entries(sourceLabels).map(([source, label]) => ({ source, label, added: snapshot?.activity.filter((item) => item.source === source).reduce((total, item) => total + item.added, 0) ?? 0 }))
+  const totalAdded = sourceTotals.reduce((total, item) => total + item.added, 0)
   const conflictEntry = conflict?.events.find((entry) => entry.id === draft?.id)
 
   function receive(value: CalendarSnapshot) { snapshotRef.current = value; setSnapshot(value) }
@@ -149,6 +156,13 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     if (tool.hasChanges() && !discard) { setDiscard(true); return }
     setDraft(null); setConflict(null); setDiscard(false); tool.setDirty(false); tool.setError(null)
   }
+  function closePanel() {
+    if (!tool.canLeave() || syncRef.current) {
+      tool.setError('日程还有未保存修改或待核对请求，请先保存、明确放弃更改或核对回执后再返回。')
+      return
+    }
+    onClose()
+  }
   function saved(value: CalendarSnapshot) {
     receive(value)
     setDraft(null); setConflict(null); setDiscard(false)
@@ -198,8 +212,9 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   }
 
   return <section className={styles.panel} aria-label="创作日历">
-    <header className={styles.heading}><div><h3>创作日历</h3><p className={styles.muted}>安排写作、截止日期与发布计划。日程由你完成标记，不会自动投稿或发送外部提醒。</p></div>
-      <button type="button" className={styles.button} disabled={tool.locked || tool.dirty} onClick={() => void reload()}>{syncRequired ? '重试同步' : '刷新日历'}</button></header>
+    <header className={styles.heading}><div><h3>创作数据</h3><p className={styles.muted}>{book.book.title}</p></div>
+      <div className={styles.actions}><button type="button" className={styles.button} disabled={tool.locked || tool.dirty} onClick={() => void reload()}><StudioIcon name="refresh" size={16} />{syncRequired ? '重试同步' : '刷新日历'}</button>
+        <button type="button" className={styles.button} disabled={tool.locked} onClick={closePanel}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />返回</button></div></header>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
     {tool.pending && <div className={styles.warning}><p>保存结果尚未确认，当前输入已保留。核对原请求前暂停提交。</p>
@@ -212,19 +227,24 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     {syncRequired && <p className={styles.warning} role="status">写入已经确认，正在等待作品目录同步；同步失败时可点“重试同步”。</p>}
     {externalChange && <p className={styles.warning}>作品已有新版本，当前输入仍保留。可读取最新日程作比较，或处理输入后刷新。</p>}
     {readonly && <p className={styles.warning}>作品已归档，日历仅供查看。</p>}
-    <nav className={styles.monthNav} aria-label="选择月份">
-      <button type="button" className={styles.button} disabled={navigationBlocked || month === MIN_CALENDAR_MONTH} onClick={() => changeMonth(adjacentMonth(month, -1))}>上一月</button>
-      <label>月份<input type="month" min={MIN_CALENDAR_MONTH} max={MAX_CALENDAR_MONTH} value={month} disabled={navigationBlocked} onChange={(event) => changeMonth(event.target.value)} /></label>
-      <button type="button" className={styles.button} disabled={navigationBlocked || month === MAX_CALENDAR_MONTH} onClick={() => changeMonth(adjacentMonth(month, 1))}>下一月</button>
-      <button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => changeMonth(today.slice(0, 7), today)}>今天</button>
-    </nav>
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取本月日程与写作记录…' : '尚未取得本月日历，请点击“刷新日历”重试。'}</p>
       : snapshot.requiresUpgrade ? <div className={styles.empty}><h4>启用这部作品的创作日历</h4><p>备份并升级作品后，即可保存日程和查看月度写作记录。</p>
         <button type="button" className={styles.primaryButton} disabled={tool.locked || readonly} onClick={() => void upgrade()}>备份并升级作品</button></div>
         : <>
-          <p className={styles.monthSummary} role="status">{monthLabel(month)} · {statistics?.scheduled} 条日程，已完成 {statistics?.completed} 条，逾期 {statistics?.overdue} 条</p>
-          <div className={styles.layout}>
-            <div className={styles.calendar}>
+          <div className={styles.metrics} aria-label="本月创作指标">
+            <div><span><StudioIcon name="spark" size={20} />本月净增</span><strong>{signed(statistics?.net ?? 0)}<small>字</small></strong><small>已保存版本 · {monthLabel(month)}</small></div>
+            <div><span><StudioIcon name="calendar" size={20} />本月活跃日期</span><strong>{activeDates}<small>天</small></strong><small>有新增或删除记录的日期</small></div>
+            <div><span><StudioIcon name="clock" size={20} />本月记录时长</span><strong>{statistics?.minutes.toLocaleString() ?? 0}<small>分钟</small></strong><small>作者登记的写作时段</small></div>
+          </div>
+          <div className={styles.dashboard}>
+            <section className={styles.calendar} aria-label="月度创作日历">
+              <header className={styles.calendarHeading}><h4><StudioIcon name="calendar" size={20} />创作日历</h4>
+                <nav className={styles.monthNav} aria-label="选择月份">
+                  <button type="button" className={styles.iconButton} aria-label="上一月" title="上一月" disabled={navigationBlocked || month === MIN_CALENDAR_MONTH} onClick={() => changeMonth(adjacentMonth(month, -1))}><StudioIcon name="chevron" size={16} style={{ transform: 'rotate(180deg)' }} /></button>
+                  <label><span className={styles.visuallyHidden}>月份</span><input type="month" min={MIN_CALENDAR_MONTH} max={MAX_CALENDAR_MONTH} value={month} disabled={navigationBlocked} onChange={(event) => changeMonth(event.target.value)} /></label>
+                  <button type="button" className={styles.iconButton} aria-label="下一月" title="下一月" disabled={navigationBlocked || month === MAX_CALENDAR_MONTH} onClick={() => changeMonth(adjacentMonth(month, 1))}><StudioIcon name="chevron" size={16} /></button>
+                </nav>
+              </header>
               <div className={styles.weekdays} aria-hidden="true">{weekdays.map((day) => <span key={day}>{day}</span>)}</div>
               <div className={styles.grid} role="group" aria-label={`${monthLabel(month)}，方向键选择日期`}>
                 {Array.from({ length: leading }, (_, index) => <span key={`empty-${index}`} aria-hidden="true" />)}
@@ -235,15 +255,25 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
                     tabIndex={date === selectedDate ? 0 : -1} aria-pressed={date === selectedDate} aria-current={date === today ? 'date' : undefined}
                     aria-label={`${date}，${day.events.length} 条日程${due ? '，有待完成截止日程' : ''}，计划 ${day.statistics.plannedCharacters} 字，净增 ${day.statistics.net} 字`}
                     disabled={navigationBlocked} onClick={() => selectDate(date)} onKeyDown={(event) => navigateDay(event, index)}>
-                    <span className={styles.dayNumber}>{Number(date.slice(8))}{date === today && <span className={styles.today}>今</span>}</span>
-                    <span className={styles.dayEvents}>{day.events.length ? `${day.events.length} 项${due ? ' · 截止' : ''}` : '—'}</span>
-                    {day.activity.length > 0 && <span className={styles.dayCount}>{signed(day.statistics.net)} 字</span>}
+                    <span className={styles.dayNumber}>{Number(date.slice(8))}</span>
+                    <span className={styles.dayMarker} data-active={day.activity.length > 0} data-due={due} data-event={day.events.length > 0} aria-hidden="true" />
+                    <span className={styles.visuallyHidden}>{day.events.length} 项日程 · 净增 {signed(day.statistics.net)} 字</span>
                   </button>
                 })}
               </div>
-              <p className={styles.muted}>本月计划 {statistics?.plannedCharacters.toLocaleString()} 字 · 实际净增 {signed(statistics?.net ?? 0)} 字</p>
-              <p className={styles.muted}>字数取自保存记录；计划完成标记不增加实际字数。全书日程 {snapshot.totalEntries.toLocaleString()} / 2,000 条。</p>
-            </div>
+              <footer className={styles.calendarFooter}><span>{statistics?.scheduled} 条日程 · 已完成 {statistics?.completed} · 逾期 {statistics?.overdue}</span>
+                <button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => changeMonth(today.slice(0, 7), today)}>今天</button></footer>
+            </section>
+            <CalendarYearHeatmap key={`${bookId}:${month.slice(0, 4)}`} api={api} bookId={bookId} bookRevision={book.book.revision} month={month} today={today} disabled={navigationBlocked || externalChange}>
+              <section className={styles.composition} aria-label="本月产出构成"><h4><StudioIcon name="layers" size={20} />产出构成<span>{Number(month.slice(5))} 月新增</span></h4>
+                {!totalAdded && <p className={styles.muted}>本月尚无已保存的新增字数。</p>}
+                <ul className={styles.sources}>{sourceTotals.map((item) => <li key={item.source}><span>{item.label}</span><progress aria-label={`${item.label}新增字数占比`} value={item.added} max={Math.max(1, totalAdded)} /><strong>{item.added.toLocaleString()} 字</strong></li>)}</ul>
+                <p className={styles.muted}>常规编辑含手工记录；AI 仅计已采用内容。恢复与导入按保存来源分别统计。</p>
+              </section>
+            </CalendarYearHeatmap>
+          </div>
+          <p className={styles.scopeNote}>当前作品 · 字数取自已保存版本，净增＝新增－删除；时长为手工登记。计划完成不增加产出，全书日程 {snapshot.totalEntries.toLocaleString()} / 2,000 条。</p>
+          <div className={styles.detailLayout}>
             <section className={styles.dayDetails} aria-label={`${selectedDate} 日程和记录`}>
               <div className={styles.heading}><h4><time dateTime={selectedDate}>{selectedDate}</time></h4>
                 <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty || snapshot.totalEntries >= MAX_CALENDAR_ENTRIES} onClick={() => edit()}>添加日程</button></div>
@@ -261,6 +291,12 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
                 <span>{day.minutes} 分钟 · 改稿 {day.revisedChapters} 章</span>
               </li>)}</ul>}
             </section>
+            <details className={styles.dailyTrend}><summary>本月每日净增</summary><svg className={styles.trend} viewBox="0 0 620 160" role="img" aria-label={`${monthLabel(month)}每日保存字数净增，零线上方新增、下方减少`}>
+            <line x1="0" y1="76" x2="620" y2="76" />
+            {dates.map((date, index) => { const net = days.get(date)?.statistics.net ?? 0, height = Math.abs(net) / trendMaximum * 60, x = index * 620 / dates.length; return <g key={date}>
+              <rect x={x + 2} y={net >= 0 ? 76 - height : 76} width={620 / dates.length - 4} height={height} rx="2" data-negative={net < 0}><title>{date}：{signed(net)} 字</title></rect>
+              {(index % 5 === 0 || index === dates.length - 1) && <text x={x + 4} y="154">{index + 1}</text>}</g> })}
+            </svg></details>
           </div>
         </>}
     {draft && <form ref={editorRef} className={styles.editor} tabIndex={-1} onSubmit={(event) => void save(event)} aria-label="编辑日程">

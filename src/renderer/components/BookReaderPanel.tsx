@@ -5,9 +5,9 @@ import { DISPLAY_FONT_SIZES, DISPLAY_LINE_HEIGHTS, PAPER_TONE_LABELS, displayPre
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
 import { paginateReaderDocument, type ReaderBlock, type ReaderPage } from './reader-pages'
-import shared from '../App.module.css'
+import shared from '../StellarShared.module.css'
 import paperStyles from './PaperSurface.module.css'
-import styles from './BookReaderPanel.module.css'
+import styles from './StellarReader.module.css'
 
 export interface BookReaderPanelProps {
   api: StudioApi

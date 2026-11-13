@@ -6,16 +6,18 @@ import { GENERATION_BOOK_UPGRADE, STUDIO_GENERATION_SCHEMA } from '../ai/generat
 import { AI_MEMORY_MAINTENANCE_SCHEMA, AI_MEMORY_TASK_SCHEMA } from '../ai/memory-task-schema'
 import { AI_SUMMARY_SCHEMA } from '../ai/summary-schema'
 import { MEMORY_VECTOR_SCHEMA } from '../memory/vector-schema'
-import { NOTES_SCHEMA } from '../notes/schema'
+import { NOTES_SCHEMA, NOTE_CHAPTER_SCHEMA, NOTE_MATERIAL_SCHEMA, NOTE_THUMBNAIL_SCHEMA } from '../notes/schema'
 import { WORKBENCH_SCHEMA } from '../workbench/schema'
 import { CALENDAR_SCHEMA } from '../workbench/calendar-schema'
 import { AI_PRESETS_SCHEMA } from '../ai/preset-schema'
-import { MEDIA_SCHEMA } from '../workbench/media-schema'
+import { MEDIA_SCHEMA, SCENE_MEDIA_SCHEMA } from '../workbench/media-schema'
 import { LIVING_SCHEMA } from '../workbench/living-schema'
 import { FORGE_SCHEMA } from '../workbench/forge-schema'
+import { WEAVE_SCHEMA } from '../workbench/weave-schema'
+import { REALM_SCHEMA } from '../workbench/realm-schema'
 
 export const STUDIO_SCHEMA_VERSION = 3
-export const BOOK_SCHEMA_VERSION = 17
+export const BOOK_SCHEMA_VERSION = 23
 export const STUDIO_APPLICATION_ID = 0x53545753
 export const BOOK_APPLICATION_ID = 0x53545742
 
@@ -145,4 +147,10 @@ export const BOOK_V14_SCHEMA = `
 
 export const BOOK_V15_SCHEMA = `${BOOK_V14_SCHEMA}${GENERATION_BOOK_UPGRADE}`
 export const BOOK_V16_SCHEMA = `${BOOK_V15_SCHEMA}${LIVING_SCHEMA}`
-export const BOOK_SCHEMA = `${BOOK_V16_SCHEMA}${FORGE_SCHEMA}`
+export const BOOK_V17_SCHEMA = `${BOOK_V16_SCHEMA}${FORGE_SCHEMA}`
+export const BOOK_V18_SCHEMA = `${BOOK_V17_SCHEMA}${WEAVE_SCHEMA}`
+export const BOOK_V19_SCHEMA = `${BOOK_V18_SCHEMA}${REALM_SCHEMA}`
+export const BOOK_V20_SCHEMA = `${BOOK_V19_SCHEMA}${NOTE_CHAPTER_SCHEMA}`
+export const BOOK_V21_SCHEMA = `${BOOK_V20_SCHEMA}${SCENE_MEDIA_SCHEMA}`
+export const BOOK_V22_SCHEMA = `${BOOK_V21_SCHEMA}${NOTE_MATERIAL_SCHEMA}`
+export const BOOK_SCHEMA = `${BOOK_V22_SCHEMA}${NOTE_THUMBNAIL_SCHEMA}`

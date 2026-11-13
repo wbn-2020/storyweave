@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { DomainError, requiredId, requiredInteger, requiredText } from '../../contracts/api'
 import { AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_NATURES } from '../../contracts/knowledge'
-import { COGNITION_CHANGES, FORESHADOW_STAGES, MAX_FORESHADOW_MILESTONES, MAX_STORY_RECORDS, parseDisclosure, parseStoryTime, type Disclosure } from '../../contracts/story'
+import { COGNITION_CHANGES, FORESHADOW_STAGES, MAX_FORESHADOW_MILESTONES, MAX_STORY_LINKS, MAX_STORY_RECORDS, parseDisclosure, parseStoryTime, type Disclosure } from '../../contracts/story'
 import {
   MAX_TIMELINE_ITEMS, MAX_TIMELINE_PAGE_SIZE, TIMELINE_TRACKS, parseStoryTimelineInput, timelineItemId,
   type StoryTimelineInput, type StoryTimelineItem, type StoryTimelinePage, type TimelineDisclosure,
@@ -133,7 +133,7 @@ function timelineItem(row: TimelineRow, bookId: string): StoryTimelineItem {
       bookId, title: requiredText(row.title, '记录名称', 120), description: row.description,
       nature: storedChoice(row.nature, KNOWLEDGE_NATURES), authorDecision: storedChoice(row.author_decision, AUTHOR_DECISIONS),
       freshness: storedChoice(row.freshness, KNOWLEDGE_FRESHNESS), conflictState: storedChoice(row.conflict_state, CONFLICT_STATES),
-      time, disclosure, ...(stage === undefined ? {} : { stage }), ...(cognitionChange === undefined ? {} : { cognitionChange }) }
+      time, disclosure, people: [], ...(stage === undefined ? {} : { stage }), ...(cognitionChange === undefined ? {} : { cognitionChange }) }
   } catch {
     // 契约解析器用于检查存储行，格式错误属于存储损坏，不应报告为调用方输入错误。
     throw storageFailure()
@@ -187,6 +187,30 @@ export class StoryTimelineRepository {
         const items = rows.map((row) => timelineItem(row, data.bookId))
         if (items.length !== Math.min(limit, Math.max(0, total - offset)) ||
             new Set(items.map((item) => item.id)).size !== items.length) throw storageFailure()
+        // 人物与事件顺序共用当前事务；只联接本页身份，不逐条读取完整档案或正文。
+        if (items.length) {
+          const maximum = items.length * MAX_STORY_LINKS
+          const people = db.prepare(`SELECT DISTINCT ref.record_id, k.id, k.name
+            FROM story_entity_refs ref JOIN knowledge_items k ON k.id = ref.entity_id AND k.book_id = ref.book_id AND k.kind = 'person'
+            JOIN story_records s ON s.id = ref.record_id AND s.book_id = ref.book_id
+            WHERE ref.book_id = @bookId AND ref.record_id IN (SELECT value FROM json_each(@ids))
+              AND (s.kind = 'event' AND ref.role = 'participant'
+                OR s.kind = 'cognition' AND ref.role = 'cognition_subject'
+                OR s.kind = 'relation' AND ref.role IN ('relation_from', 'relation_to')
+                OR s.kind = 'foreshadow' AND ref.role = 'foreshadow_entity')
+            ORDER BY k.name, k.id LIMIT @maximum`)
+            .all({ bookId: data.bookId, ids: JSON.stringify([...new Set(items.map((item) => item.sourceRecordId))]), maximum: maximum + 1 }) as
+            { record_id: string; id: string; name: string }[]
+          if (people.length > maximum) throw storageFailure()
+          const byRecord = new Map<string, StoryTimelineItem['people']>()
+          for (const row of people) {
+            const recordId = requiredId(row.record_id)
+            const entries = byRecord.get(recordId) ?? []
+            entries.push({ id: requiredId(row.id), name: requiredText(row.name, '人物名称', 120) })
+            byRecord.set(recordId, entries)
+          }
+          for (const item of items) item.people = byRecord.get(item.sourceRecordId) ?? []
+        }
         return { bookId: data.bookId, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision,
           order: data.order, tracks, items, total, nextOffset: offset + items.length < total ? offset + items.length : null }
       })()

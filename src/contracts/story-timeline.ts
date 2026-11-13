@@ -43,6 +43,8 @@ export interface StoryTimelineItem extends Pick<StoryRecordFields, 'title' | 'de
   bookId: string
   time: StoryTime
   disclosure: TimelineDisclosure
+  /** 同一快照中登记关联的人物；事件只取参与者，不把提及或状态变化当作参与。 */
+  people: { id: string; name: string }[]
   stage?: ForeshadowStage
   cognitionChange?: CognitionChangeKind
 }

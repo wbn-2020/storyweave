@@ -16,6 +16,7 @@ interface NodeRow extends TargetRow {
   book_id: unknown; kind: unknown; title: unknown; excerpt: unknown; metadata_valid: unknown
   nature: unknown; author_decision: unknown; freshness: unknown; conflict_state: unknown
   relation_layer: unknown; relation_from_json: unknown; relation_until_json: unknown
+  relation_type: unknown; relation_direction: unknown
 }
 interface EdgeRow { from_id: unknown; to_source: unknown; to_id: unknown; role: unknown }
 
@@ -104,7 +105,10 @@ function storedNode(row: NodeRow, bookId: string): GalaxyNode {
       nature: storedChoice(row.nature, KNOWLEDGE_NATURES), authorDecision: storedChoice(row.author_decision, AUTHOR_DECISIONS),
       freshness: storedChoice(row.freshness, KNOWLEDGE_FRESHNESS), conflictState: storedChoice(row.conflict_state, CONFLICT_STATES),
       ...(row.relation_layer == null ? {} : { relationLayer: storedChoice(row.relation_layer, ['surface', 'hidden'] as const) }),
-      ...(target.source === 'story' && row.kind === 'relation' ? { relationTime: {
+      ...(target.source === 'story' && row.kind === 'relation' ? {
+        relationType: requiredText(row.relation_type, '关系类型', 120),
+        relationDirection: storedChoice(row.relation_direction, ['directed', 'mutual'] as const),
+        relationTime: {
         from: parseStoryTime(JSON.parse(requiredText(row.relation_from_json, '关系开始时间', 1000))),
         until: parseStoryTime(JSON.parse(requiredText(row.relation_until_json, '关系结束时间', 1000))),
       } } : {}) }
@@ -122,6 +126,7 @@ function readNodes(db: Database.Database, bookId: string, targets: GalaxyTarget[
     SELECT p.position, 'knowledge' AS source, k.id, k.book_id, k.kind, k.name AS title,
       substr(k.summary, 1, 240) AS excerpt, k.nature, k.author_decision, k.freshness, k.conflict_state,
       NULL AS relation_layer, NULL AS relation_from_json, NULL AS relation_until_json,
+      NULL AS relation_type, NULL AS relation_direction,
       CASE WHEN json_type(k.aliases_json) = 'array' AND json_array_length(k.aliases_json) <= 50
         AND NOT EXISTS (SELECT 1 FROM json_each(k.aliases_json) a WHERE a.type <> 'text')
         THEN 1 ELSE 0 END AS metadata_valid
@@ -136,6 +141,8 @@ function readNodes(db: Database.Database, bookId: string, targets: GalaxyTarget[
       json_extract(s.fields_json, '$.layer') AS relation_layer,
       json_extract(s.fields_json, '$.validFrom') AS relation_from_json,
       json_extract(s.fields_json, '$.validUntil') AS relation_until_json,
+      substr(json_extract(s.fields_json, '$.relationType'), 1, 121) AS relation_type,
+      substr(json_extract(s.fields_json, '$.direction'), 1, 9) AS relation_direction,
       CASE WHEN json_type(s.fields_json) = 'object'
         AND json_type(s.fields_json, '$.kind') = 'text' AND json_extract(s.fields_json, '$.kind') = s.kind
         AND json_type(s.fields_json, '$.title') = 'text' AND json_extract(s.fields_json, '$.title') = s.title

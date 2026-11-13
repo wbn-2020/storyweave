@@ -7,13 +7,14 @@ import type { KnowledgeStatus } from '../../contracts/knowledge'
 import { displayTime, request } from '../request'
 import { Dialog } from './Dialog'
 import { AiMemoryReview, aiMemoryReviewEntries, createAiMemoryDrafts, type AiMemoryDraft } from './AiMemoryReview'
-import shared from '../App.module.css'
-import layout from './KnowledgePanel.module.css'
-import styles from './AiPanel.module.css'
+import shared from '../StellarShared.module.css'
+import layout from './StellarKnowledge.module.css'
+import styles from './StellarAi.module.css'
 
 interface Props {
   api: StudioApi
   book: BookSnapshot
+  initialTaskId?: string
   busy: boolean
   error?: string | null
   pendingMessage?: string | null
@@ -70,7 +71,7 @@ function TaskContextPreview({ context }: { context: AiContextPacket }) {
 
 export function AiMemoryTasksPanel(props: Props) { return <AiMemoryTasksSession key={props.book.book.id} {...props} /> }
 
-function AiMemoryTasksSession({ api, book, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onAdoptMemory }: Props) {
+function AiMemoryTasksSession({ api, book, initialTaskId, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onUpgrade, onAdoptMemory }: Props) {
   const [status, setStatus] = useState<AiMemoryTaskStatus | null>(null)
   const [connections, setConnections] = useState<AiConnectionPage | null>(null)
   const [task, setTask] = useState<AiMemoryTaskDetail | null>(null)
@@ -361,7 +362,7 @@ function AiMemoryTasksSession({ api, book, busy, error, pendingMessage, checking
       if (connectionResult.status !== 'fulfilled' || !connectionResult.value.ok || !acceptConnections(connectionResult.value.data)) setMessage(connectionResult.status === 'fulfilled' && !connectionResult.value.ok ? connectionResult.value.error.message : '连接列表读取失败或作品身份不符。')
       if (statusResult.status !== 'fulfilled' || !statusResult.value.ok || !acceptStatus(statusResult.value.data)) { setMessage(statusResult.status === 'fulfilled' && !statusResult.value.ok ? statusResult.value.error.message : '任务状态读取失败或身份不符。'); return }
       const value = statusResult.value.data
-      const id = taskRef.current?.id ?? value.activeTask?.id ?? value.recentTasks[0]?.id
+      const id = taskRef.current?.id ?? initialTaskId ?? value.activeTask?.id ?? value.recentTasks[0]?.id
       if (!value.requiresUpgrade && value.schemaVersion >= 8 && id) await readDetailData(id, taskRef.current?.id === id ? pageAfter : undefined, at, currentTicket)
     } finally { if (active(at) && ticket.current === currentTicket) { lock.current = false; setLoading(false) } }
   }
@@ -627,7 +628,7 @@ function AiMemoryTasksSession({ api, book, busy, error, pendingMessage, checking
           <button type="button" className={shared.button} disabled={blocked} onClick={() => { if (taskRef.current && runUnitRef.current) void readRun({ task: taskRef.current, unit: runUnitRef.current }) }}>只读刷新候选</button>
         </div>
         {run.state === 'running' && run.active === false && <p className={styles.note}>本地记录仍为生成中，但桌面进程没有对应活动请求。先只读核对，再明确标记中断；不会自动重发。</p>}
-        <AiMemoryReview api={api} run={run} drafts={drafts} disabled={blocked || archived || !canEditRun || staleRun} onChange={(value) => { setDrafts(value); markDraftDirty(true) }} onAdopt={() => void adoptMemory()} />
+        <AiMemoryReview api={api} run={run} drafts={drafts} disabled={blocked || archived || !canEditRun || staleRun} error={pendingMessage ?? panelError} onChange={(value) => { setDrafts(value); markDraftDirty(true) }} onAdopt={adoptMemory} />
       </section>}
       {status.recentTasks.length > 0 && <details className={styles.history}><summary>最近 {Math.min(10, status.recentTasks.length)} 份任务记录</summary><ul>{status.recentTasks.slice(0, 10).map((item) => <li key={item.id}><button type="button" className={styles.historyItem} disabled={blocked || generating} aria-current={task?.id === item.id ? 'true' : undefined} onClick={() => openTask(item.id)}><span><strong>{kindLabels[item.kind]} · {item.scopeTitle}</strong><small>{item.selection === 'pending_review' ? '增量维护' : '全范围整理'} · 固定 {item.totalChapters} 章 · {item.reviewedChapters} 章已登记 · {item.skippedChapters} 章跳过</small></span><span>{taskLabels[item.state]}<small>{displayTime(item.updatedAt)}</small></span></button></li>)}</ul></details>}
       {archived && <p className={styles.note}>作品已归档，可读取任务与原输出；解除归档后可继续整理。</p>}

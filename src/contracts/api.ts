@@ -1,4 +1,6 @@
 import type { ManuscriptDocument } from './manuscript'
+import type { AiConnectionProbeInput, AiConnectionProbeResult } from './ai-connection-probe'
+import type { ImageGenerationApi } from './image-generation'
 import type { LivingApi, LivingSnapshot, LivingRunDetail, LivingPrepareInput, LivingRunInput, LivingAdoptInput, LivingAdoptReceipt, SaveOutlineInput, OutlineHistoryInput, OutlineHistoryPage, RestoreOutlineInput, MemoryArchiveInput, MemoryArchivePage } from './living'
 import type { ForgeApi, ForgeSnapshot, ForgeReadInput, ForgePrepareInput, ForgeRunInput, ForgeRunDetail, ForgeAdoptInput, ForgeAdoptReceipt } from './forge'
 import type { GenerationApi, StudioAiConnections, StudioAiConnection, StudioAiConnectionInput, KickstartDraftInput, KickstartSnapshot, GenerationReadInput, GenerationPrepareInput, GenerationRun, GenerationStartInput, GenerationVersionInput, GenerationCheckpointInput, GenerationFinishInput, GenerationSelectionInput, GenerationAdoptInput } from './generation'
@@ -6,8 +8,11 @@ import type { CreateKnowledgeItemInput, KnowledgeItemDetail, KnowledgeItemInput,
 import type { CreateStoryRecordInput, ListStoryRecordsInput, StoryRecordDetail, StoryRecordInput, StoryRecordPage, StoryRevision, StoryRevisionInput, UpdateStoryRecordInput } from './story'
 import type { StoryTimelineInput, StoryTimelinePage } from './story-timeline'
 import type { StoryGalaxyInput, StoryGalaxyPage } from './story-galaxy'
+import type { WorldMapInput, WorldMapPage } from './world-map'
 import type { AppearanceMatrixInput, AppearanceMatrixPage, ForeshadowRadarInput, ForeshadowRadarPage } from './story-control'
-import type { CreateNoteInput, ListNotesInput, NoteDetail, NoteInput, NotePage, PromoteNoteInput, UpdateNoteInput } from './notes'
+import type { CreateNoteInput, ListNotesInput, NoteDetail, NoteInput, NotePage, PromoteNoteInput, SetNoteChaptersInput, UpdateNoteInput } from './notes'
+import type { NoteThumbnailImage, ReadNoteThumbnailInput } from './note-thumbnail'
+import type { InspirationThumbnailImage, ReadInspirationThumbnailInput, UpgradeInspirationsInput, UpgradeInspirationsReceipt } from './inspiration-thumbnail'
 import type { MemoryBookInput, MemoryControlInput, MemoryEvidence, MemoryEvidenceInput, MemorySearchInput, MemorySearchPage, MemoryStartInput, MemoryStatus, MemoryTaskInput, MemoryTaskReceipt } from './memory'
 import type { AiAdoptInput, AiAdoptReceipt, AiBookInput, AiCheckpointInput, AiConfigureInput, AiConnection, AiConnectionPage, AiConnectionSaveInput, AiFinishInput, AiListInput, AiMemoryAdoptInput, AiMemoryAdoptReceipt, AiPrepareInput, AiPrepareServiceInput, AiRun, AiRunInput, AiRunPage, AiStartInput, AiVersionInput } from './ai'
 import type { AiMemoryTaskControlInput, AiMemoryTaskDetail, AiMemoryTaskInput, AiMemoryTaskReadInput, AiMemoryTaskReceipt, AiMemoryTaskStartInput, AiMemoryTaskStatus } from './ai-memory-task'
@@ -15,16 +20,18 @@ import type { AiMemoryMaintenanceInput, AiMemoryMaintenancePage } from './ai-mem
 import type { AiSummaryAdoptInput, AiSummaryAdoptReceipt, AiSummaryControlInput, AiSummaryNodeDetail, AiSummaryNodeInput, AiSummaryReadInput, AiSummaryReceipt, AiSummaryStartInput, AiSummaryStatus, AiSummaryTaskDetail, AiSummaryTaskInput } from './ai-summary'
 import type { AiContextSummaryInput, AiContextSummaryPage } from './ai-context-summary'
 import type { AiContextRecommendationInput, AiContextRecommendationPage } from './ai-context-recommendation'
-import type { MemoryVectorFinishInput, MemoryVectorPrepareInput, MemoryVectorPrepareServiceInput, MemoryVectorProfileInput, MemoryVectorProfileServiceInput, MemoryVectorReadInput, MemoryVectorRun, MemoryVectorStartInput, MemoryVectorStatus, MemoryVectorVersionInput } from './memory-vector'
+import type { MemoryVectorFinishInput, MemoryVectorPrepareInput, MemoryVectorPrepareServiceInput, MemoryVectorProfileInput, MemoryVectorProfileServiceInput, MemoryVectorReadInput, MemoryVectorRun, MemoryVectorRunPage, MemoryVectorStartInput, MemoryVectorStatus, MemoryVectorVersionInput } from './memory-vector'
 import type { BookRecoveryExportInput, BookRecoveryExportServiceInput, BookRecoveryExportReceipt, BookRecoveryPrepareInput, BookRecoveryPreview, BookRecoveryRestoreInput, BookRecoveryRestoreReceipt } from './book-recovery'
 import type { RecoveryDraftInventory, RecoveryDraftListInput, RecoveryDraftRotateInput } from './book-recovery'
-import type { CopyInspirationInput, InspirationItem, InspirationPage, ListInspirationInput, LogWritingSessionInput, SaveBriefInput, SaveInspirationInput, SaveReviewIssueInput, SaveSceneInput, SaveWritingGoalInput, WorkbenchSnapshot } from './workbench'
+import type { CopyInspirationInput, InspirationItem, InspirationPage, ListInspirationInput, LogWritingSessionInput, ReorderScenesInput, SaveBriefInput, SaveInspirationInput, SaveReviewIssueInput, SaveSceneInput, SaveWritingGoalInput, WorkbenchSnapshot } from './workbench'
 import type { ApplyReviewIssueInput, ApplyReviewIssueReceipt } from './workbench'
 import type { ImportInspirationsInput, ImportInspirationsReceipt } from './workbench'
 import type { GetWritingCalendarInput, SaveCalendarEntryInput, CalendarSnapshot } from './writing-calendar'
-import type { StudyAdoptInput, StudyAdoptReceipt } from './study'
+import type { WeaveSystemApi, WeaveMutationInput, WeaveSnapshot } from './weave-system'
+import type { RealmApi, RealmMutationInput, RealmSimulationInput, RealmSimulation, RealmSnapshot } from './realm'
+import type { StudyAdoptInput, StudyAdoptReceipt, StudySavedInput, StudySavedResults } from './study'
 import type { AiPresetsApi, AiPresetsSnapshot, GetAiPresetsInput, SaveAiPresetInput } from './ai-presets'
-import type { BookMediaApi, BookMediaImage, BookMediaSnapshot, GetBookMediaInput, ReadBookMediaInput, SaveBookMediaInput } from './book-media'
+import type { BookMediaApi, BookMediaImage, BookMediaSnapshot, GetBookMediaInput, ReadBookMediaInput, SaveBookMediaInput, ExportBookMediaServiceInput, BookMediaExportReceipt } from './book-media'
 import type { RevisionMergeInput, RevisionMergeOutput } from './revision-merge'
 import type { BookExportPrepareInput, BookExportPreview, BookExportChapterInput, BookExportChapterPreview, BookExportCommitInput, BookExportCommitServiceInput, BookExportReceipt } from './export'
 
@@ -232,22 +239,32 @@ export interface CommandMap {
   'workbench.get': { input: BookInput; output: WorkbenchSnapshot }
   'workbench.brief': { input: SaveBriefInput; output: WorkbenchSnapshot }
   'workbench.scene': { input: SaveSceneInput; output: WorkbenchSnapshot }
+  'workbench.scenes.reorder': { input: ReorderScenesInput; output: WorkbenchSnapshot }
   'workbench.issue': { input: SaveReviewIssueInput; output: WorkbenchSnapshot }
   'workbench.applyIssue': { input: ApplyReviewIssueInput; output: ApplyReviewIssueReceipt }
   'workbench.goal': { input: SaveWritingGoalInput; output: WorkbenchSnapshot }
   'workbench.session': { input: LogWritingSessionInput; output: WorkbenchSnapshot }
   'inspiration.list': { input: ListInspirationInput; output: InspirationPage }
+  'inspiration.thumbnail': { input: ReadInspirationThumbnailInput; output: InspirationThumbnailImage }
+  'inspiration.upgrade': { input: UpgradeInspirationsInput; output: UpgradeInspirationsReceipt }
   'inspiration.save': { input: SaveInspirationInput; output: InspirationItem }
   'inspiration.copy': { input: CopyInspirationInput; output: NoteDetail }
   'inspiration.import': { input: ImportInspirationsInput; output: ImportInspirationsReceipt }
   'calendar.get': { input: GetWritingCalendarInput; output: CalendarSnapshot }
   'calendar.save': { input: SaveCalendarEntryInput; output: CalendarSnapshot }
+  'weave.get': { input: BookInput; output: WeaveSnapshot }
+  'weave.mutate': { input: WeaveMutationInput; output: WeaveSnapshot }
+  'realm.get': { input: BookInput; output: RealmSnapshot }
+  'realm.mutate': { input: RealmMutationInput; output: RealmSnapshot }
+  'realm.simulate': { input: RealmSimulationInput; output: RealmSimulation }
   'study.adopt': { input: StudyAdoptInput; output: StudyAdoptReceipt }
+  'study.saved': { input: StudySavedInput; output: StudySavedResults }
   'ai.presets.get': { input: GetAiPresetsInput; output: AiPresetsSnapshot }
   'ai.presets.save': { input: SaveAiPresetInput; output: AiPresetsSnapshot }
   'book.media.get': { input: GetBookMediaInput; output: BookMediaSnapshot }
   'book.media.read': { input: ReadBookMediaInput; output: BookMediaImage }
   'book.media.save': { input: SaveBookMediaInput; output: BookMediaSnapshot }
+  'book.media.export': { input: ExportBookMediaServiceInput; output: BookMediaExportReceipt }
   'workspace.get': { input: undefined; output: WorkspaceSnapshot }
   'workspace.open': { input: { rootPath: string }; output: WorkspaceSnapshot }
   'book.create': { input: CreateBookInput; output: BookSnapshot }
@@ -284,12 +301,15 @@ export interface CommandMap {
   'knowledge.update': { input: UpdateKnowledgeItemInput; output: KnowledgeItemDetail }
   'notes.list': { input: ListNotesInput; output: NotePage }
   'notes.get': { input: NoteInput; output: NoteDetail }
+  'notes.thumbnail': { input: ReadNoteThumbnailInput; output: NoteThumbnailImage }
   'notes.create': { input: CreateNoteInput; output: NoteDetail }
   'notes.update': { input: UpdateNoteInput; output: NoteDetail }
   'notes.promote': { input: PromoteNoteInput; output: NoteDetail }
+  'notes.chapters': { input: SetNoteChaptersInput; output: NoteDetail }
   'story.list': { input: ListStoryRecordsInput; output: StoryRecordPage }
   'story.timeline': { input: StoryTimelineInput; output: StoryTimelinePage }
   'story.galaxy': { input: StoryGalaxyInput; output: StoryGalaxyPage }
+  'story.worldMap': { input: WorldMapInput; output: WorldMapPage }
   'story.matrix': { input: AppearanceMatrixInput; output: AppearanceMatrixPage }
   'story.radar': { input: ForeshadowRadarInput; output: ForeshadowRadarPage }
   'story.get': { input: StoryRecordInput; output: StoryRecordDetail }
@@ -302,6 +322,7 @@ export interface CommandMap {
   'memory.control': { input: MemoryControlInput; output: MemoryTaskReceipt }
   'memory.search': { input: MemorySearchInput; output: MemorySearchPage }
   'memory.evidence': { input: MemoryEvidenceInput; output: MemoryEvidence }
+  'memory.vector.list': { input: MemoryBookInput; output: MemoryVectorRunPage }
   'memory.vector.status': { input: MemoryVectorProfileServiceInput; output: MemoryVectorStatus }
   'memory.vector.get': { input: MemoryVectorReadInput; output: MemoryVectorRun }
   'memory.vector.prepare': { input: MemoryVectorPrepareServiceInput; output: MemoryVectorRun }
@@ -359,25 +380,30 @@ export type RequestStatus =
   | { state: 'completed'; response: CompletedRequest }
 
 // renderer 只能选择目录并调用领域命令，不能传入任意磁盘路径或 SQL。
-export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, LivingApi, ForgeApi {
+export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, ImageGenerationApi, LivingApi, ForgeApi, WeaveSystemApi, RealmApi {
   mergeRevision(input: RevisionMergeInput): Promise<Result<RevisionMergeOutput>>
   prepareBookExport(input: BookExportPrepareInput): Promise<Result<BookExportPreview>>
   readBookExportChapter(input: BookExportChapterInput): Promise<Result<BookExportChapterPreview>>
   commitBookExport(input: BookExportCommitInput): Promise<Result<BookExportReceipt | null>>
+  revealBookExport(input: { exportId: string }): Promise<Result<null>>
   getWorkbench(input: BookInput): Promise<Result<WorkbenchSnapshot>>
   saveWritingBrief(input: SaveBriefInput): Promise<Result<WorkbenchSnapshot>>
   saveScene(input: SaveSceneInput): Promise<Result<WorkbenchSnapshot>>
+  reorderScenes(input: ReorderScenesInput): Promise<Result<WorkbenchSnapshot>>
   saveReviewIssue(input: SaveReviewIssueInput): Promise<Result<WorkbenchSnapshot>>
   applyReviewIssue(input: ApplyReviewIssueInput): Promise<Result<ApplyReviewIssueReceipt>>
   saveWritingGoal(input: SaveWritingGoalInput): Promise<Result<WorkbenchSnapshot>>
   logWritingSession(input: LogWritingSessionInput): Promise<Result<WorkbenchSnapshot>>
   listInspirations(input: ListInspirationInput): Promise<Result<InspirationPage>>
+  readInspirationThumbnail(input: ReadInspirationThumbnailInput): Promise<Result<InspirationThumbnailImage>>
+  upgradeInspirations(input: UpgradeInspirationsInput): Promise<Result<UpgradeInspirationsReceipt>>
   saveInspiration(input: SaveInspirationInput): Promise<Result<InspirationItem>>
   copyInspirationToNote(input: CopyInspirationInput): Promise<Result<NoteDetail>>
   importInspirations(input: ImportInspirationsInput): Promise<Result<ImportInspirationsReceipt>>
   getWritingCalendar(input: GetWritingCalendarInput): Promise<Result<CalendarSnapshot>>
   saveCalendarEntry(input: SaveCalendarEntryInput): Promise<Result<CalendarSnapshot>>
   adoptStudyResults(input: StudyAdoptInput): Promise<Result<StudyAdoptReceipt>>
+  readSavedStudyResults(input: StudySavedInput): Promise<Result<StudySavedResults>>
   getWorkspace(): Promise<Result<WorkspaceSnapshot>>
   selectWorkspace(): Promise<Result<WorkspaceSnapshot | null>>
   createBook(input: CreateBookInput): Promise<Result<BookSnapshot>>
@@ -420,12 +446,15 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Li
   updateKnowledgeItem(input: UpdateKnowledgeItemInput): Promise<Result<KnowledgeItemDetail>>
   listNotes(input: ListNotesInput): Promise<Result<NotePage>>
   getNote(input: NoteInput): Promise<Result<NoteDetail>>
+  readNoteThumbnail(input: ReadNoteThumbnailInput): Promise<Result<NoteThumbnailImage>>
   createNote(input: CreateNoteInput): Promise<Result<NoteDetail>>
   updateNote(input: UpdateNoteInput): Promise<Result<NoteDetail>>
   promoteNote(input: PromoteNoteInput): Promise<Result<NoteDetail>>
+  setNoteChapters(input: SetNoteChaptersInput): Promise<Result<NoteDetail>>
   listStoryRecords(input: ListStoryRecordsInput): Promise<Result<StoryRecordPage>>
   listStoryTimeline(input: StoryTimelineInput): Promise<Result<StoryTimelinePage>>
   listStoryGalaxy(input: StoryGalaxyInput): Promise<Result<StoryGalaxyPage>>
+  getWorldMap(input: WorldMapInput): Promise<Result<WorldMapPage>>
   readAppearanceMatrix(input: AppearanceMatrixInput): Promise<Result<AppearanceMatrixPage>>
   listForeshadowRadar(input: ForeshadowRadarInput): Promise<Result<ForeshadowRadarPage>>
   getStoryRecord(input: StoryRecordInput): Promise<Result<StoryRecordDetail>>
@@ -438,6 +467,7 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Li
   controlMemoryTask(input: MemoryControlInput): Promise<Result<MemoryTaskReceipt>>
   searchMemory(input: MemorySearchInput): Promise<Result<MemorySearchPage>>
   readMemoryEvidence(input: MemoryEvidenceInput): Promise<Result<MemoryEvidence>>
+  listMemoryVectorRuns(input: MemoryBookInput): Promise<Result<MemoryVectorRunPage>>
   getMemoryVectorStatus(input: MemoryVectorProfileInput): Promise<Result<MemoryVectorStatus>>
   getMemoryVectorRun(input: MemoryVectorReadInput): Promise<Result<MemoryVectorRun>>
   prepareMemoryVectorRun(input: MemoryVectorPrepareInput): Promise<Result<MemoryVectorRun>>
@@ -446,6 +476,8 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Li
   interruptMemoryVectorRun(input: MemoryVectorVersionInput): Promise<Result<MemoryVectorRun>>
   listAiConnections(input: AiBookInput): Promise<Result<AiConnectionPage>>
   configureAiConnection(input: AiConfigureInput): Promise<Result<AiConnectionPage>>
+  testAiConnection(input: AiConnectionProbeInput): Promise<Result<AiConnectionProbeResult>>
+  cancelAiConnectionTest(input: { requestId: string }): Promise<Result<null>>
   listAiRuns(input: AiListInput): Promise<Result<AiRunPage>>
   getAiRun(input: AiRunInput): Promise<Result<AiRun>>
   prepareAiRun(input: AiPrepareInput): Promise<Result<AiRun>>
@@ -476,12 +508,15 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Li
   onCloseCancelled(handler: () => void): () => void
 }
 
-export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare' | 'generation.connection.save' | 'generation.claim' | 'generation.checkpoint' | 'generation.finish' | 'generation.interrupt'>
+export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'book.media.export' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare' | 'generation.connection.save' | 'generation.claim' | 'generation.checkpoint' | 'generation.finish' | 'generation.interrupt'>
   | 'workspace.select' | 'request.status' | 'import.select' | 'book.exportFile' | 'draft.copy' | 'service.restart'
   | 'recovery.exportFile' | 'recovery.select'
-  | 'book.export.commitFile'
+  | 'book.export.commitFile' | 'book.export.reveal'
+  | 'book.media.exportFile'
+  | 'book.image.list' | 'book.image.get' | 'book.image.start' | 'book.image.cancel' | 'book.image.discard'
   | 'draft.checkpoint' | 'draft.list' | 'draft.rotate' | 'draft.select' | 'draft.preview' | 'draft.commit'
   | 'ai.configure' | 'ai.start' | 'ai.cancel'
+  | 'connection.probe' | 'connection.probe.cancel'
   | 'generation.configure' | 'generation.start' | 'generation.cancel'
   | 'memory.vector.start'
 

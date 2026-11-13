@@ -84,7 +84,6 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
               return false
             }
             result = receipt.data.response.result
-            uncertainSave.current = null
           } else {
             let document
             try { document = parseManuscript(captured.draft) } catch (error) {
@@ -107,16 +106,18 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
           }
           if (!result.ok) {
             if (result.error.code === 'REQUEST_TIMEOUT' || result.error.code === 'SERVICE_UNAVAILABLE') {
-              uncertainSave.current = { captured, requestId: result.error.requestId }
-            }
+              uncertainSave.current = { captured, requestId: result.error.requestId ?? uncertainSave.current?.requestId }
+            } else uncertainSave.current = null
             publish({ ...latest, saving: false, error: result.error })
             return false
           }
           if (result.data.chapter.id !== captured.chapter.id || result.data.chapter.bookId !== captured.chapter.bookId) {
-            uncertainSave.current = { captured }
+            // 身份核对失败仍保留原请求，允许继续核对，不能退化成无编号或重发保存。
+            uncertainSave.current ??= { captured }
             publish({ ...latest, saving: false, error: { code: 'STORAGE_ERROR', message: '保存回执的作品或章节不匹配，当前草稿已保留。' } })
             return false
           }
+          uncertainSave.current = null
           const dirty = latest.editSequence !== captured.editSequence
           const chapter = latest.chapter.revisionId === result.data.chapter.revisionId && latest.chapter.bookRevision > result.data.chapter.bookRevision
             ? latest.chapter : result.data.chapter
