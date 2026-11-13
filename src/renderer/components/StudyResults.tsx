@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DomainError, requiredId, type AppError, type BookSnapshot, type StudioApi } from '../../contracts/api'
 import type { AiRun } from '../../contracts/ai'
 import { MAX_CREATIVE_RESOURCES, type CreativeResourceRef } from '../../contracts/creative-resources'
 import {
-  MAX_STUDY_BODY, MAX_STUDY_TITLE, isStudyAdoptReceiptFor, parseStudyAdoptInput, parseStudyProposal, studyInspirationFields,
+  MAX_STUDY_BODY, MAX_STUDY_ITEMS, MAX_STUDY_TITLE, isStudyAdoptReceiptFor, parseStudyAdoptInput, parseStudyProposal, studyInspirationFields,
   type StudyAdoptInput, type StudyProposal, type StudyProposalItem,
 } from '../../contracts/study'
 import { useToolSession } from './workbench-ui'
@@ -27,11 +27,18 @@ export interface StudyResultsProps {
   onUnknown?: (error: AppError) => void
   onRecover?: () => void
   onUse?: (chapterId: string, refs: CreativeResourceRef[]) => void
+  taskControls?: { disabled: boolean; onCancel: () => void; onInterrupt: () => void; onRefresh: () => void; onRetry?: () => void }
 }
 interface Draft { id: string; kind: InspirationFields['kind']; title: string; body: string; selected: boolean; saved: boolean; archived: boolean }
 const kindLabels: Record<StudyProposalItem['kind'], string> = {
   observation: '场景观察', excerpt: '摘录', technique: '手法分析', method: '方法卡', beat: '节拍骨架', style: '文风卡',
 }
+const categories = [
+  { key: 'beat', label: '节拍骨架', kinds: ['beat'] },
+  { key: 'style', label: '文风 DNA', kinds: ['style'] },
+  { key: 'method', label: '技法公式', kinds: ['method', 'technique', 'observation'] },
+  { key: 'excerpt', label: '佳句与词汇包', kinds: ['excerpt'] },
+]
 function readProposal(run: AiRun): { proposal: StudyProposal | null; error: string | null } {
   try {
     if (run.state !== 'succeeded' || run.purpose !== 'study' || run.bookId !== run.context.bookId) throw new Error('Invalid study run')
@@ -41,7 +48,106 @@ function readProposal(run: AiRun): { proposal: StudyProposal | null; error: stri
   }
 }
 
-export function StudyResults({ api, run, book, chapterId, disabled, error, onDirtyChange, onUnknown, onRecover, onUse }: StudyResultsProps) {
+function readPreviewItems(run: AiRun): StudyProposalItem[] {
+  if (run.purpose !== 'study' || run.bookId !== run.context.bookId || run.outputText.length > 60_000 || run.outputText.includes('\0')) return []
+  try { return parseStudyProposal(run.outputText, run.context).items } catch { /* 检查点可能尚未收到完整外层对象。 */ }
+  const raw = run.outputText.trimStart().replace(/^```(?:json)?[ \t]*\r?\n/i, '')
+  const header = /^\{[ \t\r\n]*"version"[ \t\r\n]*:[ \t\r\n]*1[ \t\r\n]*,[ \t\r\n]*"items"[ \t\r\n]*:[ \t\r\n]*\[/.exec(raw)
+  if (!header) return []
+  const items: StudyProposalItem[] = []
+  let offset = header[0].length
+  // 只截取标准顺序中完整闭合的条目；字符串里的括号和转义不参与边界判断，未完成条目不修补。
+  while (offset < raw.length) {
+    while (offset < raw.length && /[ \t\r\n]/.test(raw[offset]!)) offset++
+    if (offset === raw.length || raw[offset] === ']') break
+    if (raw[offset] !== '{' || items.length >= MAX_STUDY_ITEMS) break
+    const start = offset, stack = ['{']
+    let quoted = false, escaped = false
+    for (offset++; offset < raw.length && stack.length; offset++) {
+      const character = raw[offset]!
+      if (quoted) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') quoted = false
+      } else if (character === '"') quoted = true
+      else if (character === '{' || character === '[') stack.push(character)
+      else if (character === '}' || character === ']') {
+        if (stack.pop() !== (character === '}' ? '{' : '[')) return items
+      }
+    }
+    if (stack.length) break
+    // 每个完整条目独立校验来源、逐字引文和卡片字段；后续坏条目不抹去先前可预览的条目。
+    try { items.push(parseStudyProposal(JSON.stringify({ version: 1, items: [JSON.parse(raw.slice(start, offset))] }), run.context).items[0]!) } catch { break }
+    while (offset < raw.length && /[ \t\r\n]/.test(raw[offset]!)) offset++
+    if (offset === raw.length || raw[offset] === ']') break
+    if (raw[offset] !== ',') break
+    offset++
+  }
+  return items
+}
+
+function StudyCardPreview({ kind, body }: { kind: string; body: string }) {
+  if (!isStudyCardKind(kind)) return <p tabIndex={0}>{body}</p>
+  try {
+    const card = readStudyCard(kind, body, true)
+    return 'beats' in card ? <ol className={styles.beats} tabIndex={0} aria-label="节拍顺序">{card.beats.map((beat, at) => <li key={at} title={`行动：${beat.action || '待填写'}；变化：${beat.outcome || '待填写'}`}><span>{at + 1}</span><strong title={beat.title}>{beat.title || '待填写'}</strong></li>)}</ol>
+      : <dl className={styles.styleFacts}>{([['rhythm', '句式节奏'], ['dialogue', '对白组织'], ['senses', '感官偏好'], ['diction', '措辞与动词']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd tabIndex={0}>{card[key] || '尚未提供'}</dd></div>)}</dl>
+  } catch { return <p className={ui.warning}>当前编辑需要核对格式，完整内容保留在审阅详情。</p> }
+}
+
+export function StudyResults(props: StudyResultsProps) {
+  const [expanded, setExpanded] = useState(true)
+  const [sourceId, setSourceId] = useState(() => props.run.context.creativeResources?.items[0]?.id ?? '')
+  const { run, disabled, error, taskControls } = props
+  const items = useMemo(() => run.state === 'succeeded' ? [] : readPreviewItems(run), [run.state, run.purpose, run.bookId, run.outputText, run.context])
+  // 完成前不挂载固定候选编辑器，避免将流式检查点冻结为可入库的来源。
+  if (run.state === 'succeeded') return <StudyCompletedResults {...props} expanded={expanded} onExpandedChange={setExpanded} sourceId={sourceId} onSourceChange={setSourceId} />
+  const running = run.state === 'running', orphaned = running && run.active === false
+  const state = running ? orphaned ? '拆解待核对' : '拆解中'
+    : ({ prepared: '等待发送', failed: '拆解失败', cancelled: '已取消', interrupted: '已中断', rejected: '已拒绝', adopted: '已采用', succeeded: '待审阅' } as const)[run.state]
+  const notice = running ? orphaned ? '任务记录尚未结束，当前桌面已无活动请求。请核对后明确标记中断。' : '正在拆解固定参考，完整条目随已保存输出出现；任务完成后再核对入库。'
+    : run.state === 'rejected' ? '作者已拒绝这份提议，固定参考和原输出继续保留。'
+      : '本次拆解未成功结束，固定参考和已保存输出继续保留；预览条目尚不能入库或套用。'
+  const locked = taskControls?.disabled ?? disabled
+  const references = run.context.creativeResources?.items ?? []
+  const reference = references.find((item) => item.id === sourceId) ?? references[0]
+  const canRetry = Boolean(taskControls?.onRetry && ['failed', 'cancelled', 'interrupted'].includes(run.state))
+  function retry() { if (!locked && canRetry) { setExpanded(false); taskControls?.onRetry?.() } }
+  return <section className={`${ui.panel} ${styles.panel}`} aria-label="拆书任务状态">
+    <button type="button" className={ui.button} onClick={() => setExpanded(true)}><StudioIcon name="layers" />打开拆书工坊 · {state}</button>
+    {expanded && createPortal(<DialogDisplayContext.Provider value="modal"><Dialog title="拆书工坊" className={`${ui.panel} ${styles.dialog}`} wide onClose={() => setExpanded(false)}>
+      {error && <p className={ui.error} role="alert">{error}</p>}
+      {run.error && run.error !== error && <p className={ui.error} role="alert">{run.error}</p>}
+      <p className={ui.muted} role="status">{state} · {notice}{items.length > 0 && ` 已接收 ${items.length} 项可预览条目。`}</p>
+      <div className={styles.workspace}>
+        <aside className={styles.reference} aria-label="固定参考片段">
+          <header><StudioIcon name="read" size={24} /><h3>参考片段 · 授权文本</h3><button type="button" className={ui.button} disabled={locked || !canRetry} onClick={retry}><StudioIcon name="layers" size={20} />{running ? state : '重新准备拆解'}</button></header>
+          {references.length > 1 && <label>固定参考<select value={reference?.id ?? ''} onChange={(event) => setSourceId(event.target.value)}>{references.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>}
+          <p className={`${ui.muted} ${styles.sourceMeta}`} title={reference?.title}>来源：{reference?.title ?? '固定来源缺失'} · v{reference?.revision ?? '未知'}</p>
+          <div className={styles.referenceText} tabIndex={0} role="region" aria-label="固定参考原文">{reference?.text ?? '这份任务没有可读取的固定参考原文。'}</div>
+        </aside>
+        <div className={styles.analysis}>{categories.map((category) => {
+          const entries = items.filter((item) => category.kinds.includes(item.kind))
+          return <section className={styles.analysisSection} data-kind={category.key} key={category.key} aria-label={category.label}>
+            <h3><i aria-hidden="true" />{category.label}</h3>
+            {!entries.length && <div className={styles.waitingCard}><span aria-hidden="true" /><span aria-hidden="true" /><p className={ui.muted}>{running ? orphaned ? '等待核对任务，尚无完整卡片。' : '等待完整卡片…' : '尚无可预览的完整卡片。'}</p></div>}
+            {entries.map((item, index) => <div className={styles.analysisItem} key={index}><h4 className={styles.previewTitle} title={item.title}>{item.title}</h4><StudyCardPreview kind={item.kind} body={item.body} /><p className={styles.previewNotice}>{running ? '已接收 · 待任务成功后审阅' : '仅供预览 · 本次任务未成功'}</p></div>)}
+          </section>
+        })}</div>
+      </div>
+      <details className={ui.details}><summary>任务标识与已保存输出 · {run.outputText.length.toLocaleString()} 字符</summary><p className={ui.identity}>任务 {run.id} · 版本 {run.version} · 上下文 {run.context.contextHash}</p><pre className={styles.original} tabIndex={0}>{run.outputText || '尚无已保存输出。'}</pre></details>
+      <footer className={`${styles.footer} ${ui.actions}`}>
+        {taskControls && running && <><button type="button" className={ui.button} disabled={locked} onClick={taskControls.onRefresh}><StudioIcon name="refresh" size={18} />核对任务状态</button><button type="button" className={ui.button} disabled={locked} onClick={orphaned ? taskControls.onInterrupt : taskControls.onCancel}>{orphaned ? '标记中断并保留输出' : '取消拆解并保留输出'}</button></>}
+        {canRetry && <button type="button" className={ui.button} disabled={locked} onClick={retry}>重新准备本次要求</button>}
+        <button type="button" className={ui.button} onClick={() => setExpanded(false)}>收起拆书工坊</button>
+      </footer>
+    </Dialog></DialogDisplayContext.Provider>, document.body)}
+  </section>
+}
+
+function StudyCompletedResults({ api, run, book, chapterId, disabled, error, onDirtyChange, onUnknown, onRecover, onUse, expanded, onExpandedChange: setExpanded, sourceId, onSourceChange: setSourceId }: StudyResultsProps & {
+  expanded: boolean; onExpandedChange: (value: boolean) => void; sourceId: string; onSourceChange: (value: string) => void
+}) {
   // 一次审阅固定原候选与客户端 UUID；迟到回执必须核对这份快照，不能套用到新候选。
   const [source] = useState(run)
   const [parsed] = useState(() => readProposal(run))
@@ -52,8 +158,6 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
   const [submitted, setSubmitted] = useState<StudyAdoptInput | null>(null)
   const [discard, setDiscard] = useState(false)
   const [preserved, setPreserved] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState(true)
-  const [sourceId, setSourceId] = useState(() => run.context.creativeResources?.items[0]?.id ?? '')
   const [savedResources, setSavedResources] = useState<CreativeResourceRef[]>([])
   const [targetChapter, setTargetChapter] = useState(chapterId)
   const [useIds, setUseIds] = useState<string[]>([])
@@ -144,12 +248,6 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
   const references = source.context.creativeResources?.items ?? []
   const reference = references.find((item) => item.id === sourceId) ?? references[0]
   const sourceItems = parsed.proposal?.items.filter((item) => item.sourceId === reference?.id) ?? []
-  const categories = [
-    { key: 'beat', label: '节拍骨架', kinds: ['beat'] },
-    { key: 'style', label: '文风 DNA', kinds: ['style'] },
-    { key: 'method', label: '技法公式', kinds: ['method', 'technique', 'observation'] },
-    { key: 'excerpt', label: '佳句与词汇包', kinds: ['excerpt'] },
-  ]
   function openEditor(index: number) {
     const element = editors.current.get(index)
     if (!element) return
@@ -175,12 +273,7 @@ export function StudyResults({ api, run, book, chapterId, disabled, error, onDir
   }
   function preview(index: number) {
     const draft = drafts[index]!
-    if (!isStudyCardKind(draft.kind)) return <p tabIndex={0}>{draft.body}</p>
-    try {
-      const card = readStudyCard(draft.kind, draft.body, true)
-      return 'beats' in card ? <ol className={styles.beats} tabIndex={0} aria-label="节拍顺序">{card.beats.map((beat, at) => <li key={at} title={`行动：${beat.action || '待填写'}；变化：${beat.outcome || '待填写'}`}><span>{at + 1}</span><strong title={beat.title}>{beat.title || '待填写'}</strong></li>)}</ol>
-        : <dl className={styles.styleFacts}>{([['rhythm', '句式节奏'], ['dialogue', '对白组织'], ['senses', '感官偏好'], ['diction', '措辞与动词']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd tabIndex={0}>{card[key] || '尚未提供'}</dd></div>)}</dl>
-    } catch { return <p className={ui.warning}>当前编辑需要核对格式，完整内容保留在审阅详情。</p> }
+    return <StudyCardPreview kind={draft.kind} body={draft.body} />
   }
 
   return <section className={`${ui.panel} ${styles.panel}`} aria-label="拆书结果审阅" aria-busy={tool.busy}>
