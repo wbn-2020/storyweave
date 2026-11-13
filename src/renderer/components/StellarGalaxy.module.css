@@ -145,8 +145,8 @@
 .controlPage .intro > div:first-child { display: none; }
 .controlPage .viewSwitch { margin-block: var(--space-2); }
 .controlPage .viewSwitch > button { min-height: var(--control-compact); padding-block: var(--space-2); }
-.radarPage { isolation: isolate; }
-.radarPage::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+.radarPage,.matrixPage { isolation: isolate; }
+.radarPage::before,.matrixPage::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background:
     radial-gradient(1px 1px at 19px 31px,var(--stellar-star),transparent),
     radial-gradient(1px 1px at 83px 127px,var(--stellar-star),transparent),

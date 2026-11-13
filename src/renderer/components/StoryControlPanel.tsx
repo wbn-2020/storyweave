@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { BookSnapshot, StudioApi } from '../../contracts/api'
 import { KNOWLEDGE_KINDS, type KnowledgeKind, type KnowledgeSourceInput } from '../../contracts/knowledge'
@@ -127,14 +127,21 @@ export function AppearanceMatrix(props: Props) {
   const [selected, setSelected] = useState<{ entityId: string; chapterId: string } | null>(null)
   const [recordId, setRecordId] = useState<string | null>(null)
   const [gap, setGap] = useState(10)
-  const [hover, setHover] = useState<{ entityId: string; chapterId: string; recordId: string; x: number; y: number } | null>(null)
+  const [hover, setHover] = useState<{ entityId: string; chapterId: string; recordId: string; chapterNumber: number; conflict: boolean; x: number; y: number; arrow: number; above: boolean; maxHeight: number } | null>(null)
   const [preview, setPreview] = useState<{ title: string; quote: string; state: string } | null>(null)
   const previewId = useId()
+  const evidenceId = useId(), evidence = useRef<HTMLDivElement>(null)
+  const matrixRoot = useRef<HTMLDivElement>(null), selectionTrigger = useRef<HTMLButtonElement | null>(null)
   const previewCache = useRef(new Map<string, StoryRecordDetail>())
+  useEffect(() => {
+    if (!selected) return
+    evidence.current?.scrollIntoView({ block: 'nearest' })
+    evidence.current?.focus({ preventScroll: true })
+  }, [selected?.entityId, selected?.chapterId])
   useEffect(() => {
     if (disabled) return
     let active = true
-    setLoading(true); setPage(null); setSelected(null); setRecordId(null); setError(null); setHover(null); previewCache.current.clear()
+    setLoading(true); setPage(null); setSelected(null); setRecordId(null); setError(null); setHover(null); previewCache.current.clear(); selectionTrigger.current = null
     void request(() => api.readAppearanceMatrix(input)).then((result) => {
       if (!active) return
       setLoading(false)
@@ -198,12 +205,29 @@ export function AppearanceMatrix(props: Props) {
   }
   const reminders = page?.entities.map((entity) => ({ ...entity, count: tail(entity.id) })) ?? []
   const reminder = reminders.find((entity) => entity.id === selected?.entityId) ?? reminders.find((entity) => entity.count >= gap) ?? reminders[0]
+  function closeEvidence() {
+    if (disabled) return
+    setSelected(null); setRecordId(null); setHover(null)
+    const trigger = selectionTrigger.current
+    const target = trigger?.isConnected && !trigger.disabled ? trigger : matrixRoot.current?.querySelector<HTMLElement>('summary')
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    target?.focus({ preventScroll: true })
+    selectionTrigger.current = null
+  }
   function showPreview(element: HTMLButtonElement, entityId: string, chapterId: string, id?: string) {
     if (disabled || !id) { setHover(null); return }
-    const rect = element.getBoundingClientRect()
-    setHover({ entityId, chapterId, recordId: id, x: Math.min(Math.max(12, rect.left + rect.width / 2 - 150), Math.max(12, window.innerWidth - 312)), y: Math.min(window.innerHeight - 196, Math.max(12, rect.bottom + 8)) })
+    const rect = element.getBoundingClientRect(), chapter = page?.chapters.find((item) => item.id === chapterId)
+    if (!chapter) { setHover(null); return }
+    // 优先位于格子上方；空间不足时换边，箭头仍指向原格，提示不越出视口。
+    const width = Math.min(300, window.innerWidth - 24), center = rect.left + rect.width / 2
+    const x = Math.min(Math.max(12, center - width / 2), window.innerWidth - width - 12)
+    const above = rect.top >= 204 || rect.top > window.innerHeight - rect.bottom
+    setHover({ entityId, chapterId, recordId: id, chapterNumber: chapter.position + 1,
+      conflict: appearanceState(cellFor(entityId, chapterId)) === 'conflict', x,
+      y: above ? rect.top - 12 : rect.bottom + 12, arrow: Math.min(width - 16, Math.max(16, center - x)), above,
+      maxHeight: Math.min(180, Math.max(0, above ? rect.top - 24 : window.innerHeight - rect.bottom - 24)) })
   }
-  return <div className={styles.panel} data-control="matrix">
+  return <div ref={matrixRoot} className={styles.panel} data-control="matrix">
     <details className={styles.matrixSearch}><summary>搜索与筛选</summary>
     <div className={styles.toolbar}><label>实体名称<input type="search" maxLength={200} value={query} disabled={disabled || loading} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); change({ search: query.trim() }) } }} /></label><button className={shared.button} type="button" disabled={disabled || loading} onClick={() => change({ search: query.trim() })}>查找</button>
       <label>实体类型<select value={input.kind ?? ''} disabled={disabled || loading} onChange={(event) => change({ kind: event.target.value ? event.target.value as KnowledgeKind : undefined })}><option value="">全部类型</option>{KNOWLEDGE_KINDS.map((kind) => <option key={kind} value={kind}>{entityLabels[kind]}</option>)}</select></label>
@@ -214,30 +238,38 @@ export function AppearanceMatrix(props: Props) {
     <div className={styles.matrixHeading}><div className={styles.rangeSummary}>{page ? <><span>实体 {page.entityOffset + (page.entities.length ? 1 : 0)}–{page.entityOffset + page.entities.length} / {page.entityTotal}</span><span>章节 {page.chapterOffset + (page.chapters.length ? 1 : 0)}–{page.chapterOffset + page.chapters.length} / {page.chapterTotal}</span></> : <span>读取本页范围</span>}</div>
       <div className={styles.legend}>{Object.entries(cellLabels).map(([key, label]) => <span key={key} data-state={key}><i aria-hidden="true">{cellMarks[key as keyof typeof cellMarks]}</i>{label}</span>)}</div></div>
     {loading && <p role="status">正在读取章节与实体矩阵…</p>}{error && <p className={styles.error} role="alert">{error}</p>}
-    {page && <div className={styles.matrixLayout}><div className={styles.matrixMain}><div className={styles.scroll}><table className={styles.matrix}><caption>当前页实体与章节的已登记出场</caption><thead><tr><th className={styles.rowHeading} scope="col">实体 / 章节</th>{page.chapters.map((chapter) => <th scope="col" key={chapter.id} title={chapter.title}><span className={styles.columnHeading}>{String(chapter.position + 1).padStart(2, '0')}</span></th>)}</tr></thead><tbody>{page.entities.map((entity) => {
+    {page && <div className={styles.matrixLayout}><div className={styles.matrixMain}><div className={styles.scroll}><table className={styles.matrix} style={{ minWidth: 128 + page.chapters.length * 36 }}><caption>当前页实体与章节的已登记出场</caption><thead><tr><th className={`${styles.rowHeading} ${styles.matrixCorner}`} scope="col" aria-label="实体与章节"><span>章节</span><span>实体</span></th>{page.chapters.map((chapter) => <th scope="col" key={chapter.id} title={chapter.title}><span className={styles.columnHeading}>{String(chapter.position + 1).padStart(2, '0')}</span></th>)}</tr></thead><tbody>{page.entities.map((entity) => {
       const absent = tail(entity.id)
-      return <tr key={entity.id}><th className={styles.rowHeading} scope="row">{entity.name}<small>{entityLabels[entity.kind]}{absent >= gap ? ` · 窗口末连续 ${absent} 章已核对缺席` : ''}</small></th>{page.chapters.map((chapter) => {
+      return <tr key={entity.id}><th className={styles.rowHeading} scope="row" title={entity.name}><span className={styles.entityName}>{entity.name}</span><small>{entityLabels[entity.kind]}{absent >= gap ? ` · 窗口末连续 ${absent} 章已核对缺席` : ''}</small></th>{page.chapters.map((chapter) => {
         const cell = cellFor(entity.id, chapter.id), state = appearanceState(cell)
         return <td key={chapter.id}><button type="button" className={styles.cell} data-state={state} data-heat={(cell?.present ?? 0) + (cell?.mentioned ?? 0) >= 3 ? 'high' : 'low'} disabled={disabled} aria-label={`${entity.name}，第 ${chapter.position + 1} 章，${cellLabels[state]}${cell?.stale ? '，另有旧稿登记' : ''}`} aria-pressed={selected?.entityId === entity.id && selected.chapterId === chapter.id}
+          aria-controls={evidenceId} aria-expanded={selected?.entityId === entity.id && selected.chapterId === chapter.id}
           aria-describedby={hover?.entityId === entity.id && hover.chapterId === chapter.id && preview ? previewId : undefined}
           title={!cell?.recordIds.length ? `${entity.name} · 第 ${chapter.position + 1} 章：没有符合条件的登记` : undefined}
           onPointerEnter={(event) => showPreview(event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onPointerLeave={() => setHover(null)}
           onFocus={(event) => showPreview(event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onBlur={() => setHover(null)}
-          onClick={() => { setHover(null); setSelected({ entityId: entity.id, chapterId: chapter.id }); setRecordId(cell?.recordIds[0] ?? null) }}>{cellMarks[state]}{cell?.stale && state !== 'stale' ? <sup>↺</sup> : null}</button></td>
+          onClick={(event) => {
+            if (selected?.entityId === entity.id && selected.chapterId === chapter.id) { closeEvidence(); return }
+            selectionTrigger.current = event.currentTarget
+            setHover(null); setSelected({ entityId: entity.id, chapterId: chapter.id }); setRecordId(cell?.recordIds[0] ?? null)
+          }}>{cellMarks[state]}{cell?.stale && state !== 'stale' ? <sup>↺</sup> : null}</button></td>
       })}</tr>
     })}</tbody></table></div>
       {!page.entities.length && <p className={styles.help}>还没有匹配的实体，可先建立人物或调整筛选。</p>}
       <div className={styles.paging}><button className={shared.button} type="button" disabled={disabled || page.entityOffset === 0} onClick={() => change({ entityOffset: Math.max(0, page.entityOffset - APPEARANCE_ENTITY_PAGE) }, true)}>上一组实体</button><button className={shared.button} type="button" disabled={disabled || page.nextEntityOffset === null} onClick={() => change({ entityOffset: page.nextEntityOffset! }, true)}>下一组实体</button><button className={shared.button} type="button" disabled={disabled || page.chapterOffset === 0} onClick={() => change({ chapterOffset: Math.max(0, page.chapterOffset - APPEARANCE_CHAPTER_PAGE) }, true)}>前 {APPEARANCE_CHAPTER_PAGE} 章</button><button className={shared.button} type="button" disabled={disabled || page.nextChapterOffset === null} onClick={() => change({ chapterOffset: page.nextChapterOffset! }, true)}>后 {APPEARANCE_CHAPTER_PAGE} 章</button></div>
     </div><aside className={styles.matrixAside} aria-label="连续缺席提醒">
-      <h3><StudioIcon name="spark" size={24} />{reminder?.name ?? '连续缺席提醒'}</h3>
+      <h3><StudioIcon name="star" size={32} />{reminder?.name ?? '连续缺席提醒'}</h3>
       <div className={styles.absenceSummary} data-alert={Boolean(reminder && reminder.count >= gap)}><StudioIcon name="warning" size={28} /><p>{reminder?.count ? <>窗口末连续 <strong>{reminder.count}</strong> 章<br />明确核对缺席</> : '本页末尾尚未形成连续已核对缺席。'}</p></div>
-      <label className={styles.threshold}>提醒阈值 <output>{gap} 章</output><input type="range" min="1" max="24" value={gap} disabled={disabled} aria-label="缺席提醒阈值" onChange={(event) => setGap(Number(event.target.value))} /></label>
+      <label className={styles.threshold}>提醒阈值 <output>{gap} 章</output><input type="range" min="1" max="24" value={gap} disabled={disabled} aria-label="缺席提醒阈值" style={{ '--threshold-progress': `${(gap - 1) / 23 * 100}%` } as CSSProperties} onChange={(event) => setGap(Number(event.target.value))} /></label>
       {reminders.filter((entity) => entity.count >= gap).length > 0 && <ul className={styles.absenceList}>{reminders.filter((entity) => entity.count >= gap).map((entity) => <li key={entity.id}>{entity.name}<span>{entity.count} 章</span></li>)}</ul>}
       <p className={styles.help}>仅核对当前章节窗口。未知、冲突或正向登记会中断连续缺席。</p>
     </aside></div>}
-    {selected && <section className={styles.selection}><h3>{page?.entities.find((entity) => entity.id === selected.entityId)?.name} · {page?.chapters.find((chapter) => chapter.id === selected.chapterId)?.title}</h3><p className={styles.help}>{cellLabels[appearanceState(chosen)]}。当前登场 {chosen?.present ?? 0}，提及 {chosen?.mentioned ?? 0}，明确缺席 {chosen?.absent ?? 0}，旧稿／待复核 {chosen?.stale ?? 0}。</p><div className={styles.actions}>{chosen?.recordIds.map((id, index) => <button key={id} type="button" className={shared.button} disabled={disabled} aria-pressed={recordId === id} onClick={() => setRecordId(id)}>代表记录 {index + 1}</button>)}<button className={shared.button} type="button" disabled={disabled} onClick={() => props.onOpenRecord('event')}>登记或复核事件</button></div></section>}
-    {recordId && <RecordEvidence key={recordId} {...props} id={recordId} />}
-    {hover && preview && createPortal(<div id={previewId} role="tooltip" className={styles.cellPreview} style={{ left: hover.x, top: hover.y }}><strong>{preview.title}</strong><span>{preview.state}</span><p>{preview.quote}</p></div>, document.body)}
+    {selected && <div ref={evidence} id={evidenceId} className={styles.matrixEvidence} tabIndex={-1} role="region" aria-label="出场登记与原文证据"
+      onKeyDown={(event) => { if (event.key === 'Escape' && !disabled) { event.preventDefault(); event.stopPropagation(); closeEvidence() } }}>
+      <section className={styles.selection}><div className={styles.recordHeading}><h3>{page?.entities.find((entity) => entity.id === selected.entityId)?.name} · {page?.chapters.find((chapter) => chapter.id === selected.chapterId)?.title}</h3><button type="button" className={shared.button} disabled={disabled} aria-label="收起出场证据" title="收起出场证据" onClick={closeEvidence}><StudioIcon name="close" size={20} /></button></div><p className={styles.help}>{cellLabels[appearanceState(chosen)]}。当前登场 {chosen?.present ?? 0}，提及 {chosen?.mentioned ?? 0}，明确缺席 {chosen?.absent ?? 0}，旧稿／待复核 {chosen?.stale ?? 0}。</p><div className={styles.actions}>{chosen?.recordIds.map((id, index) => <button key={id} type="button" className={shared.button} disabled={disabled} aria-pressed={recordId === id} onClick={() => setRecordId(id)}>代表记录 {index + 1}</button>)}<button className={shared.button} type="button" disabled={disabled} onClick={() => props.onOpenRecord('event')}>登记或复核事件</button></div></section>
+      {recordId && <RecordEvidence key={recordId} {...props} id={recordId} />}
+    </div>}
+    {hover && preview && createPortal(<div id={previewId} role="tooltip" className={styles.cellPreview} data-conflict={hover.conflict} data-above={hover.above} style={{ left: hover.x, top: hover.y, maxHeight: hover.maxHeight }}><strong>{hover.conflict ? `登记冲突 · 第 ${hover.chapterNumber} 章` : preview.title}</strong><span>{hover.conflict ? `${preview.title} · ${preview.state}` : preview.state}</span><p>{preview.quote}</p><i className={styles.previewArrow} aria-hidden="true" style={{ left: hover.arrow }} /></div>, document.body)}
   </div>
 }
 
