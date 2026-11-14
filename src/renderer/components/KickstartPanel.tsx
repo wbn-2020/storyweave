@@ -315,14 +315,14 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   </form>
 
   return <section className={styles.panel} aria-label={step < 2 ? '新建作品向导' : '开书房'}>
-    {step < 2 ? <DialogDisplayContext.Provider value="modal"><Dialog title="新建作品" className={styles.wizard} wide onClose={onClose} busy={tool.busy || opening}>
+    {step < 2 ? <DialogDisplayContext.Provider value="modal"><Dialog title={<span className={styles.wizardTitle}><StudioIcon name="planet" size={24} />新建作品</span>} className={styles.wizard} wide onClose={onClose} busy={tool.busy || opening}>
       <nav className={styles.steps} aria-label="开书步骤">{['题材', '种子', '提案'].map((label, index) => <button key={label} type="button" aria-current={step === index ? 'step' : undefined}
-        disabled={locked || index > step} onClick={() => setStep(index)}><span>{index + 1}</span>{label}</button>)}</nav>
+        data-complete={index < step} disabled={locked || index > step} onClick={() => setStep(index)}><span>{index + 1}</span>{label}</button>)}</nav>
       {feedback}
       {step === 0 ? <div className={styles.genreStep}>
         <GenrePicker value={seed.genre} disabled={locked || !draftReady} onSelect={(genre) => setSeed({ ...seed, genre })} />
         <label className={styles.ideaRow}><span><StudioIcon name="magic" size={20} />一句话脑洞</span><input autoFocus maxLength={2000} value={seed.idea} disabled={locked}
-          onChange={(event) => setSeed({ ...seed, idea: event.target.value })} placeholder="比如：穿越到星际时代的普通人……" /></label>
+          onChange={(event) => setSeed({ ...seed, idea: event.target.value })} placeholder="比如：穿越到星际时代的普通人……" /><StudioIcon name="spark" size={24} /></label>
         <div className={styles.examples}><span>示例：</span>{['星空下的遗迹之城', '被选中的平凡人', '末日后的新世界', '星际旅者的日记'].map((idea) => <button type="button" key={idea} disabled={locked} onClick={() => setSeed({ ...seed, idea })}>{idea}</button>)}</div>
         <details className={styles.customGenre}><summary>自定义题材</summary><label>题材名称<input value={seed.genre} maxLength={80} disabled={locked} onChange={(event) => setSeed({ ...seed, genre: event.target.value })} /></label></details>
       </div> : <div className={styles.seedStep}>
