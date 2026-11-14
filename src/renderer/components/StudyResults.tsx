@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DomainError, requiredId, type AppError, type BookSnapshot, type StudioApi } from '../../contracts/api'
 import type { AiRun } from '../../contracts/ai'
-import { MAX_CREATIVE_RESOURCES, type CreativeResourceRef } from '../../contracts/creative-resources'
+import { MAX_CREATIVE_RESOURCES, type CreativeResource, type CreativeResourceRef } from '../../contracts/creative-resources'
 import {
   MAX_STUDY_BODY, MAX_STUDY_ITEMS, MAX_STUDY_TITLE, isStudyAdoptReceiptFor, parseStudyAdoptInput, parseStudyProposal, studyInspirationFields,
   type StudyAdoptInput, type StudyProposal, type StudyProposalItem,
@@ -12,6 +12,7 @@ import ui from './stellar/Workspace.module.css'
 import styles from './StellarStudy.module.css'
 import { isStudyCardKind, readStudyCard } from '../../contracts/study-card'
 import { StudyCardEditor } from './StudyCardEditor'
+import { StudyStyleMetrics } from './StudyStyleMetrics'
 import { Dialog, DialogDisplayContext } from './Dialog'
 import { StudioIcon } from './StudioIcon'
 import { parseInspirationFields, type InspirationFields } from '../../contracts/workbench'
@@ -86,12 +87,12 @@ function readPreviewItems(run: AiRun): StudyProposalItem[] {
   return items
 }
 
-function StudyCardPreview({ kind, body }: { kind: string; body: string }) {
+function StudyCardPreview({ kind, body, reference }: { kind: string; body: string; reference?: CreativeResource }) {
   if (!isStudyCardKind(kind)) return <p tabIndex={0}>{body}</p>
   try {
     const card = readStudyCard(kind, body, true)
     return 'beats' in card ? <ol className={styles.beats} tabIndex={0} aria-label="节拍顺序">{card.beats.map((beat, at) => <li key={at} title={`行动：${beat.action || '待填写'}；变化：${beat.outcome || '待填写'}`}><span>{at + 1}</span><strong title={beat.title}>{beat.title || '待填写'}</strong></li>)}</ol>
-      : <dl className={styles.styleFacts}>{([['rhythm', '句式节奏'], ['dialogue', '对白组织'], ['senses', '感官偏好'], ['diction', '措辞与动词']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd tabIndex={0}>{card[key] || '尚未提供'}</dd></div>)}</dl>
+      : <StudyStyleMetrics source={reference} facts={card} />
   } catch { return <p className={ui.warning}>当前编辑需要核对格式，完整内容保留在审阅详情。</p> }
 }
 
@@ -131,7 +132,7 @@ export function StudyResults(props: StudyResultsProps) {
           return <section className={styles.analysisSection} data-kind={category.key} key={category.key} aria-label={category.label}>
             <h3><i aria-hidden="true" />{category.label}</h3>
             {!entries.length && <div className={styles.waitingCard}><span aria-hidden="true" /><span aria-hidden="true" /><p className={ui.muted}>{running ? orphaned ? '等待核对任务，尚无完整卡片。' : '等待完整卡片…' : '尚无可预览的完整卡片。'}</p></div>}
-            {entries.map((item, index) => <div className={styles.analysisItem} key={index}><h4 className={styles.previewTitle} title={item.title}>{item.title}</h4><StudyCardPreview kind={item.kind} body={item.body} /><p className={styles.previewNotice}>{running ? '已接收 · 待任务成功后审阅' : '仅供预览 · 本次任务未成功'}</p></div>)}
+            {entries.map((item, index) => <div className={styles.analysisItem} key={index}><h4 className={styles.previewTitle} title={item.title}>{item.title}</h4><StudyCardPreview kind={item.kind} body={item.body} reference={references.find((resource) => resource.source === 'inspiration' && resource.id === item.sourceId)} /><p className={styles.previewNotice}>{running ? '已接收 · 待任务成功后审阅' : '仅供预览 · 本次任务未成功'}</p></div>)}
           </section>
         })}</div>
       </div>
@@ -273,7 +274,8 @@ function StudyCompletedResults({ api, run, book, chapterId, disabled, error, onD
   }
   function preview(index: number) {
     const draft = drafts[index]!
-    return <StudyCardPreview kind={draft.kind} body={draft.body} />
+    const reference = source.context.creativeResources?.items.find((item) => item.source === 'inspiration' && item.id === parsed.proposal?.items[index]?.sourceId)
+    return <StudyCardPreview kind={draft.kind} body={draft.body} reference={reference} />
   }
 
   return <section className={`${ui.panel} ${styles.panel}`} aria-label="拆书结果审阅" aria-busy={tool.busy}>
