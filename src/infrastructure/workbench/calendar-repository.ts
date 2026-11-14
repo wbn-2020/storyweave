@@ -4,9 +4,9 @@ import { DomainError, requiredId, requiredInteger } from '../../contracts/api'
 import {
   CALENDAR_SCHEMA_VERSION, MAX_CALENDAR_ENTRIES, MAX_CALENDAR_ENTRIES_BYTES, MAX_CALENDAR_FIELDS_BYTES,
   MAX_CALENDAR_HISTORY, MAX_CALENDAR_HISTORY_BYTES, MAX_CALENDAR_SNAPSHOT_BYTES,
-  calendarMonthDates, calendarStatistics, isCalendarSnapshot, parseCalendarEntryFields,
+  calendarMonthDates, calendarStatistics, isCalendarSnapshot, parseCalendarDate, parseCalendarEntryFields,
   parseGetWritingCalendarInput, parseSaveCalendarEntryInput,
-  type CalendarEntry, type CalendarEntryFields, type CalendarSnapshot, type GetWritingCalendarInput, type SaveCalendarEntryInput,
+  type CalendarCreationMetrics, type CalendarEntry, type CalendarEntryFields, type CalendarSnapshot, type GetWritingCalendarInput, type SaveCalendarEntryInput,
 } from '../../contracts/writing-calendar'
 import type { WritingDay } from '../../contracts/workbench'
 import type { StudioRepository } from '../storage/studio-repository'
@@ -74,6 +74,47 @@ const ENTRY_COLUMNS = `CASE WHEN length(CAST(id AS BLOB)) = 36 THEN id END AS id
   CASE WHEN length(CAST(fields_json AS BLOB)) <= ${MAX_CALENDAR_FIELDS_BYTES} THEN fields_json END AS fields_json,
   CASE WHEN length(CAST(updated_at AS BLOB)) = 24 THEN updated_at END AS updated_at`
 
+function readCreationMetrics(db: Database.Database, today: string): CalendarCreationMetrics {
+  // 日历日期用 UTC 平移，避免本地夏令时把相邻日期算成 23 或 25 小时。
+  const shift = (date: string, offset: number) => {
+    const value = new Date(`${date}T12:00:00Z`)
+    value.setUTCDate(value.getUTCDate() + offset)
+    return value.toISOString().slice(0, 10)
+  }
+  const yesterday = shift(today, -1)
+  const weekStart = shift(today, -(new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7)
+  const previousWeekStart = shift(weekStart, -7), previousWeekEnd = shift(today, -7)
+  const result: CalendarCreationMetrics = { todayAdded: 0, yesterdayAdded: 0, weekAdded: 0, previousWeekAdded: 0, streak: 0, previousStreak: 0 }
+  const cursors = [
+    { next: today, fallback: yesterday, count: 0, open: true },
+    { next: yesterday, fallback: shift(today, -2), count: 0, open: true },
+  ]
+  // 仅累计有新增的日期；导入与恢复按原来源计入，不把计划完成或登记时长算作新增。
+  // 按日期倒序流式读：两段连续记录均已断开且早于对比周即可停止，不按年截断连续天数。
+  const records = db.prepare(`SELECT CASE WHEN length(CAST(date AS BLOB)) = 10 THEN date END AS date, SUM(added) AS added
+    FROM writing_activity WHERE date <= ? AND added > 0 GROUP BY date ORDER BY date DESC`).iterate(today)
+  for (const raw of records) {
+    const row = raw as { date: string; added: number }
+    try { parseCalendarDate(row.date) } catch { return fail('创作指标包含无效的写作日期。') }
+    if (!Number.isSafeInteger(row.added) || row.added <= 0) return fail('创作指标新增字数无效或超过安全整数范围。')
+    if (row.date === today) result.todayAdded = row.added
+    if (row.date === yesterday) result.yesterdayAdded = row.added
+    if (row.date >= weekStart) result.weekAdded += row.added
+    if (row.date >= previousWeekStart && row.date <= previousWeekEnd) result.previousWeekAdded += row.added
+    for (const cursor of cursors) {
+      if (!cursor.open || row.date > cursor.next) continue
+      // 当天尚未新增时保留截至前一天的连续天数，不能向更早的任意日期寻找起点。
+      if (cursor.count === 0 && row.date === cursor.fallback) cursor.next = cursor.fallback
+      if (row.date === cursor.next) { cursor.count += 1; cursor.next = shift(row.date, -1) }
+      else cursor.open = false
+    }
+    if (row.date < previousWeekStart && cursors.every((cursor) => !cursor.open)) break
+  }
+  result.streak = cursors[0].count; result.previousStreak = cursors[1].count
+  if (!Number.isSafeInteger(result.weekAdded) || !Number.isSafeInteger(result.previousWeekAdded)) return fail('创作指标周累计超过安全整数范围。')
+  return result
+}
+
 function readSnapshot(db: Database.Database, input: GetWritingCalendarInput): CalendarSnapshot {
   const current = state(db, input.bookId)
   const schemaVersion = Number(db.pragma('user_version', { simple: true }))
@@ -94,6 +135,7 @@ function readSnapshot(db: Database.Database, input: GetWritingCalendarInput): Ca
     FROM writing_activity WHERE date BETWEEN ? AND ? GROUP BY date, source ORDER BY date, source LIMIT 125`)
     .all(dates[0], dates[dates.length - 1]) as WritingDay[]
   snapshot.statistics = calendarStatistics(snapshot.events, snapshot.activity, today)
+  if (input.includeCreationMetrics) snapshot.creationMetrics = readCreationMetrics(db, today)
   if (!isCalendarSnapshot(snapshot, input.bookId, input.month) || Buffer.byteLength(JSON.stringify(snapshot), 'utf8') > MAX_CALENDAR_SNAPSHOT_BYTES) {
     return fail('日历快照无效或超过 10 MiB，未截断记录。')
   }

@@ -16,6 +16,7 @@ const paths = {
   gift: 'M3 8h18v4H3Zm2 4v9h14v-9M12 8v13M12 8H7.5a2.5 2.5 0 1 1 2.45-3C10.4 6.5 12 8 12 8Zm0 0h4.5a2.5 2.5 0 1 0-2.45-3C13.6 6.5 12 8 12 8Z',
   cart: 'M2 3h3l3 13h11l3-9H6M9 21h.01M18 21h.01',
   crown: 'm3 6 4 4 5-7 5 7 4-4-2 12H5L3 6Zm2 15h14',
+  trophy: 'M8 21h8m-4-4v4M7 4h10v7a5 5 0 0 1-10 0V4ZM7 5H4v3a4 4 0 0 0 4 4m9-7h3v3a4 4 0 0 1-4 4',
   navigation: 'm12 3 9 18-9-5-9 5L12 3Zm0 0v13',
   crystal: 'm12 2 8 10-8 10L4 12 12 2Zm0 0v20m-8-10 8 4 8-4',
   settings: 'M4 7h16M4 17h16M8 4v6m8 4v6',

@@ -37,6 +37,14 @@ export interface CalendarStatistics {
   completed: number
   overdue: number
 }
+export interface CalendarCreationMetrics {
+  todayAdded: number
+  yesterdayAdded: number
+  weekAdded: number
+  previousWeekAdded: number
+  streak: number
+  previousStreak: number
+}
 export interface CalendarSnapshot {
   bookId: string
   bookRevision: number
@@ -49,10 +57,12 @@ export interface CalendarSnapshot {
   events: CalendarEntry[]
   activity: WritingDay[]
   statistics: CalendarStatistics
+  // 仅统计页按需读取；日期锚点与作品版本沿用同一快照，旧回执可缺省。
+  creationMetrics?: CalendarCreationMetrics
   // 改期可移出当前查询月份；独立回显实际保存对象，避免依赖月内列表确认写入。
   savedEntry: CalendarEntry | null
 }
-export interface GetWritingCalendarInput extends BookInput { month: string }
+export interface GetWritingCalendarInput extends BookInput { month: string; includeCreationMetrics?: boolean }
 export interface SaveCalendarEntryInput extends BookMutationInput {
   id: string
   expectedRevision: number
@@ -99,7 +109,9 @@ export function parseCalendarEntryFields(value: unknown): CalendarEntryFields {
 }
 export function parseGetWritingCalendarInput(value: unknown): GetWritingCalendarInput {
   const v = object(value)
-  return { bookId: requiredId(v.bookId).toLowerCase(), month: parseCalendarMonth(v.month) }
+  if (v.includeCreationMetrics !== undefined && typeof v.includeCreationMetrics !== 'boolean') return invalid('请明确是否读取创作指标。')
+  return { bookId: requiredId(v.bookId).toLowerCase(), month: parseCalendarMonth(v.month),
+    ...(v.includeCreationMetrics === undefined ? {} : { includeCreationMetrics: v.includeCreationMetrics }) }
 }
 export function parseSaveCalendarEntryInput(value: unknown): SaveCalendarEntryInput & { month: string } {
   const v = object(value)
@@ -162,6 +174,16 @@ export function isCalendarSnapshot(value: unknown, bookId: string, month: string
     const expected = calendarStatistics(v.events as CalendarEntry[], v.activity as WritingDay[], today)
     const statistics = v.statistics
     if (!isRecord(statistics) || Object.entries(expected).some(([key, count]) => !Number.isSafeInteger(count) || statistics[key] !== count)) return false
+    if (v.creationMetrics !== undefined) {
+      if (v.requiresUpgrade || !isRecord(v.creationMetrics)) return false
+      const metrics = v.creationMetrics
+      for (const key of ['todayAdded', 'yesterdayAdded', 'weekAdded', 'previousWeekAdded', 'streak', 'previousStreak'] as const) requiredInteger(metrics[key], '创作指标')
+      const { todayAdded, yesterdayAdded, weekAdded, streak, previousStreak } = metrics as unknown as CalendarCreationMetrics
+      const elapsedDays = Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${MIN_CALENDAR_MONTH}-01T12:00:00Z`)) / 86_400_000)
+      if (weekAdded < todayAdded || streak > elapsedDays + 1 || previousStreak > elapsedDays) return false
+      if (yesterdayAdded > 0 && previousStreak < 1) return false
+      if (todayAdded > 0 ? streak !== (yesterdayAdded > 0 ? previousStreak + 1 : 1) : streak !== (yesterdayAdded > 0 ? previousStreak : 0)) return false
+    }
     return !v.requiresUpgrade || (total === 0 && v.events.length === 0 && v.activity.length === 0 && v.savedEntry === null)
   } catch { return false }
 }

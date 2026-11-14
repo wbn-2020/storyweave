@@ -32,6 +32,19 @@ function adjacentMonth(month: string, offset: number): string {
 function monthLabel(month: string) { return `${Number(month.slice(0, 4))} 年 ${Number(month.slice(5))} 月` }
 function signed(value: number) { return `${value > 0 ? '+' : ''}${value.toLocaleString()}` }
 
+function MetricChange({ current, previous, label, days = false }: { current?: number; previous?: number; label: string; days?: boolean }) {
+  if (current === undefined || previous === undefined) return <span className={styles.metricChange} title="请刷新读取当前创作指标">—</span>
+  if (!days && previous === 0) return <span className={styles.metricChange} title={`${label}无新增字数，增幅不可比`}>—</span>
+  const difference = current - previous
+  const direction = difference > 0 ? 'up' : difference < 0 ? 'down' : 'flat'
+  const ratio = previous ? difference / previous * 100 : 0
+  const change = days ? `${signed(difference)} 天` : ratio && Math.abs(ratio) < .1
+    ? `${ratio > 0 ? '+' : '-'}<0.1%` : `${ratio > 0 ? '+' : ''}${ratio.toLocaleString('zh-CN', { maximumFractionDigits: 1 })}%`
+  return <span className={styles.metricChange} data-direction={direction} title={label} aria-label={`${label} ${change}`}>
+    {direction !== 'flat' && <StudioIcon name="arrow" size={14} />}{change}
+  </span>
+}
+
 export function WritingCalendarPanel(props: WritingCalendarPanelProps) {
   return <CalendarContent key={props.book.book.id} {...props} />
 }
@@ -55,11 +68,12 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   const editorRef = useRef<HTMLFormElement>(null)
   bookRevisionRef.current = book.book.revision
   const tool = useToolSession({ api, disabled, onDirtyChange, onUnknown, isProtected: () => syncRef.current })
-  const today = localDate()
+  const [today, setToday] = useState(localDate)
   const dates = useMemo(() => calendarMonthDates(month), [month])
   const leading = (new Date(`${month}-01T12:00:00Z`).getUTCDay() + 6) % 7
   const readonly = Boolean(book.book.archivedAt || snapshot?.archived)
   const externalChange = Boolean(snapshot && book.book.revision > snapshot.bookRevision)
+  const creationMetrics = !syncRequired && !tool.pending && snapshot?.today === today && snapshot.bookRevision === book.book.revision ? snapshot.creationMetrics : undefined
   const blocked = tool.locked || syncRequired || readonly || externalChange || !snapshot || snapshot.requiresUpgrade || snapshot.month !== month
   const navigationBlocked = tool.locked || tool.dirty || syncRequired
   const days = useMemo(() => new Map(dates.map((date) => {
@@ -84,6 +98,20 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     if (draft) { editorRef.current?.scrollIntoView({ block: 'nearest' }); editorRef.current?.focus({ preventScroll: true }) }
   }, [draft?.id])
   useEffect(() => { setRecoveryPreserved(false) }, [tool.pending])
+  useEffect(() => {
+    // 跨日及休眠恢复后先撤下旧的“今日”指标，不在未保存输入期间自动发起读取。
+    let timer: number | undefined
+    const refreshDate = () => {
+      setToday(localDate())
+      const now = new Date(), tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+      window.clearTimeout(timer)
+      timer = window.setTimeout(refreshDate, Math.max(1, tomorrow.getTime() - now.getTime() + 100))
+    }
+    refreshDate()
+    window.addEventListener('focus', refreshDate)
+    document.addEventListener('visibilitychange', refreshDate)
+    return () => { window.clearTimeout(timer); window.removeEventListener('focus', refreshDate); document.removeEventListener('visibilitychange', refreshDate) }
+  }, [])
 
   async function reload() {
     if (tool.hasChanges() || tool.hasPending()) { tool.setError('请先处理当前输入或核对原请求，再刷新日历。'); return }
@@ -91,7 +119,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     await tool.read(async () => {
       const catalog = await api.getBook({ bookId })
       if (!catalog.ok) return catalog
-      const calendar = await api.getWritingCalendar({ bookId, month: requestedMonth })
+      const calendar = await api.getWritingCalendar({ bookId, month: requestedMonth, includeCreationMetrics: true })
       if (!calendar.ok) return calendar
       if (!isCalendarSnapshot(calendar.data, bookId, requestedMonth) || catalog.data.book.id !== bookId || calendar.data.bookRevision !== catalog.data.book.revision) {
         return { ok: false as const, error: { code: 'REVISION_CONFLICT' as const, message: '读取期间作品发生变化，请再次刷新日历。' } }
@@ -231,11 +259,12 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
       : snapshot.requiresUpgrade ? <div className={styles.empty}><h4>启用这部作品的创作日历</h4><p>备份并升级作品后，即可保存日程和查看月度写作记录。</p>
         <button type="button" className={styles.primaryButton} disabled={tool.locked || readonly} onClick={() => void upgrade()}>备份并升级作品</button></div>
         : <>
-          <div className={styles.metrics} aria-label="本月创作指标">
-            <div><span><StudioIcon name="spark" size={20} />本月净增</span><strong>{signed(statistics?.net ?? 0)}<small>字</small></strong><small>已保存版本 · {monthLabel(month)}</small></div>
-            <div><span><StudioIcon name="calendar" size={20} />本月活跃日期</span><strong>{activeDates}<small>天</small></strong><small>有新增或删除记录的日期</small></div>
-            <div><span><StudioIcon name="clock" size={20} />本月记录时长</span><strong>{statistics?.minutes.toLocaleString() ?? 0}<small>分钟</small></strong><small>作者登记的写作时段</small></div>
+          <div className={styles.metrics} aria-label="当前作品创作指标">
+            <div><span><StudioIcon name="spark" size={24} />今日创作</span><strong>{creationMetrics?.todayAdded.toLocaleString() ?? '—'}<small>字</small><MetricChange current={creationMetrics?.todayAdded} previous={creationMetrics?.yesterdayAdded} label="较昨日" /></strong><small><time dateTime={today}>{today}</time> · 已保存新增</small></div>
+            <div><span><StudioIcon name="calendar" size={24} />本周创作</span><strong>{creationMetrics?.weekAdded.toLocaleString() ?? '—'}<small>字</small><MetricChange current={creationMetrics?.weekAdded} previous={creationMetrics?.previousWeekAdded} label="较上周同期" /></strong><small>周一至今 · 已保存新增</small></div>
+            <div><span><StudioIcon name="trophy" size={24} />连续创作</span><strong>{creationMetrics?.streak.toLocaleString() ?? '—'}<small>天</small><MetricChange current={creationMetrics?.streak} previous={creationMetrics?.previousStreak} label="较昨日连续天数" days /></strong><small>{creationMetrics?.todayAdded ? '截至今日' : '今日尚未新增时，截至昨日'}</small></div>
           </div>
+          {!creationMetrics && <p className={styles.muted} role="status">{snapshot.today !== today ? '日期已变化，请刷新日历读取今日指标。' : '当前快照未提供有效创作指标，请处理输入或同步后刷新日历。'}</p>}
           <div className={styles.dashboard}>
             <section className={styles.calendar} aria-label="月度创作日历">
               <header className={styles.calendarHeading}><h4><StudioIcon name="calendar" size={24} />创作日历 · {Number(month.slice(5))} 月</h4>
@@ -272,7 +301,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
               </section>
             </CalendarYearHeatmap>
           </div>
-          <p className={styles.scopeNote}>当前作品 · 字数取自已保存版本，净增＝新增－删除；时长为手工登记。计划完成不增加产出，全书日程 {snapshot.totalEntries.toLocaleString()} / 2,000 条。</p>
+          <p className={styles.scopeNote}>当前作品 · 新增按已保存版本估算，含常规编辑／手工记录、AI 采用、导入与恢复，不代表击键数。今日比昨日，本周比上周同期；前期为零不算增幅。连续天数按有新增的日期计算，今日未新增则截至昨日。{monthLabel(month)}净增 {signed(statistics?.net ?? 0)} 字、活跃 {activeDates} 天、手工登记 {statistics?.minutes.toLocaleString() ?? 0} 分钟；计划完成不增加产出，全书日程 {snapshot.totalEntries.toLocaleString()} / 2,000 条。</p>
           <div className={styles.detailLayout}>
             <section className={styles.dayDetails} aria-label={`${selectedDate} 日程和记录`}>
               <div className={styles.heading}><h4><time dateTime={selectedDate}>{selectedDate}</time></h4>
