@@ -129,11 +129,17 @@ export function AppearanceMatrix(props: Props) {
   const [recordId, setRecordId] = useState<string | null>(null)
   const [gap, setGap] = useState(10)
   const [hover, setHover] = useState<{ entityId: string; chapterId: string; recordId: string; chapterNumber: number; conflict: boolean; x: number; y: number; arrow: number; above: boolean; maxHeight: number } | null>(null)
-  const [preview, setPreview] = useState<{ title: string; quote: string; state: string } | null>(null)
+  const [preview, setPreview] = useState<{
+    api: StudioApi; input: AppearanceMatrixInput; page: AppearanceMatrixPage; hover: NonNullable<typeof hover>
+    title: string; quote: string; state: string
+  } | null>(null)
   const previewId = useId()
   const evidenceId = useId(), evidence = useRef<HTMLDivElement>(null)
   const matrixRoot = useRef<HTMLDivElement>(null), selectionTrigger = useRef<HTMLButtonElement | null>(null)
   const previewCache = useRef(new Map<string, StoryRecordDetail>())
+  // 换格或换页的当次渲染就隔离旧内容，不等 effect 清空后才校正出处和提示位置。
+  const currentPreview = !disabled && !loading && preview?.api === api && preview.input === input && preview.page === page &&
+    preview.hover === hover && page?.bookId === book.book.id && page.bookRevision === book.book.revision ? preview : null
   useEffect(() => {
     if (!selected) return
     evidence.current?.scrollIntoView({ block: 'nearest' })
@@ -157,7 +163,7 @@ export function AppearanceMatrix(props: Props) {
   }, [api, book.book.id, book.book.revision, input, disabled])
   useEffect(() => {
     setPreview(null)
-    if (!hover || !page || disabled) return
+    if (!hover || !page || disabled || loading || page.bookId !== book.book.id || page.bookRevision !== book.book.revision) return
     let active = true
     const timer = setTimeout(() => {
       // 悬停只读一个代表记录；双版本核对后展示该章来源，不把旧引文混入新矩阵。
@@ -166,22 +172,22 @@ export function AppearanceMatrix(props: Props) {
         if (!detail) {
           const result = await request(() => api.getStoryRecord({ bookId: book.book.id, id: hover.recordId }))
           if (!active) return
-          if (!result.ok) { setPreview({ title: '出处暂时无法读取', quote: result.error.message, state: '可点击单元格重读记录' }); return }
+          if (!result.ok) { setPreview({ api, input, page, hover, title: '出处暂时无法读取', quote: result.error.message, state: '可点击单元格重读记录' }); return }
           detail = result.data
         }
         if (!active) return
         if (detail.id !== hover.recordId || detail.bookId !== page.bookId || detail.bookRevision !== page.bookRevision || detail.knowledgeRevision !== page.knowledgeRevision) {
-          setPreview({ title: '出处版本已变化', quote: '请刷新矩阵后核对。', state: '当前预览未采用' }); return
+          setPreview({ api, input, page, hover, title: '出处版本已变化', quote: '请刷新矩阵后核对。', state: '当前预览未采用' }); return
         }
         previewCache.current.set(detail.id, detail)
         const source = detail.sources.find((item) => item.sourceType === 'chapter_text' && item.chapterId === hover.chapterId)
         const check = detail.fields.kind === 'event' && detail.fields.appearanceCheck?.chapterId === hover.chapterId ? detail.fields.appearanceCheck : null
-        setPreview({ title: detail.fields.title, quote: source?.quote.slice(0, 240) || check?.note.slice(0, 240) || '未登记该章的段落引文。',
+        setPreview({ api, input, page, hover, title: detail.fields.title, quote: source?.quote.slice(0, 240) || check?.note.slice(0, 240) || '未登记该章的段落引文。',
           state: source ? `固定正文 · ${source.referenceState === 'current' ? '当前稿登记' : '历史稿登记'}` : check ? '作者整章缺席核对' : '点击查看记录详情' })
       })()
     }, 300)
     return () => { active = false; clearTimeout(timer) }
-  }, [api, book.book.id, disabled, hover, page])
+  }, [api, book.book.id, book.book.revision, disabled, hover, input, loading, page])
   useEffect(() => {
     const close = () => setHover(null)
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
@@ -248,7 +254,7 @@ export function AppearanceMatrix(props: Props) {
         const cell = cellFor(entity.id, chapter.id), state = appearanceState(cell)
         return <td key={chapter.id}><button type="button" className={styles.cell} data-state={state} data-heat={(cell?.present ?? 0) + (cell?.mentioned ?? 0) >= 3 ? 'high' : 'low'} disabled={disabled} aria-label={`${entity.name}，第 ${chapter.position + 1} 章，${cellLabels[state]}${cell?.stale ? '，另有旧稿登记' : ''}`} aria-pressed={selected?.entityId === entity.id && selected.chapterId === chapter.id}
           aria-controls={evidenceId} aria-expanded={selected?.entityId === entity.id && selected.chapterId === chapter.id}
-          aria-describedby={hover?.entityId === entity.id && hover.chapterId === chapter.id && preview ? previewId : undefined}
+          aria-describedby={hover?.entityId === entity.id && hover.chapterId === chapter.id && currentPreview ? previewId : undefined}
           title={!cell?.recordIds.length ? `${entity.name} · 第 ${chapter.position + 1} 章：没有符合条件的登记` : undefined}
           onPointerEnter={(event) => showPreview(event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onPointerLeave={() => setHover(null)}
           onFocus={(event) => showPreview(event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onBlur={() => setHover(null)}
@@ -273,7 +279,7 @@ export function AppearanceMatrix(props: Props) {
       <section className={styles.selection}><div className={styles.recordHeading}><h3>{page?.entities.find((entity) => entity.id === selected.entityId)?.name} · {page?.chapters.find((chapter) => chapter.id === selected.chapterId)?.title}</h3><button type="button" className={shared.button} disabled={disabled} aria-label="收起出场证据" title="收起出场证据" onClick={closeEvidence}><StudioIcon name="close" size={20} /></button></div><p className={styles.help}>{cellLabels[appearanceState(chosen)]}。当前登场 {chosen?.present ?? 0}，提及 {chosen?.mentioned ?? 0}，明确缺席 {chosen?.absent ?? 0}，旧稿／待复核 {chosen?.stale ?? 0}。</p><div className={styles.actions}>{chosen?.recordIds.map((id, index) => <button key={id} type="button" className={shared.button} disabled={disabled} aria-pressed={recordId === id} onClick={() => setRecordId(id)}>代表记录 {index + 1}</button>)}<button className={shared.button} type="button" disabled={disabled} onClick={() => props.onOpenRecord('event')}>登记或复核事件</button></div></section>
       {recordId && <RecordEvidence key={recordId} {...props} id={recordId} />}
     </div>}
-    {hover && preview && createPortal(<div id={previewId} role="tooltip" className={styles.cellPreview} data-conflict={hover.conflict} data-above={hover.above} style={{ left: hover.x, top: hover.y, maxHeight: hover.maxHeight }}><strong>{hover.conflict ? `登记冲突 · 第 ${hover.chapterNumber} 章` : preview.title}</strong><span>{hover.conflict ? `${preview.title} · ${preview.state}` : preview.state}</span><p>{preview.quote}</p><i className={styles.previewArrow} aria-hidden="true" style={{ left: hover.arrow }} /></div>, document.body)}
+    {hover && currentPreview && createPortal(<div id={previewId} role="tooltip" className={styles.cellPreview} data-conflict={hover.conflict} data-above={hover.above} style={{ left: hover.x, top: hover.y, maxHeight: hover.maxHeight }}><strong>{hover.conflict ? `登记冲突 · 第 ${hover.chapterNumber} 章` : currentPreview.title}</strong><span>{hover.conflict ? `${currentPreview.title} · ${currentPreview.state}` : currentPreview.state}</span><p>{currentPreview.quote}</p><i className={styles.previewArrow} aria-hidden="true" style={{ left: hover.arrow }} /></div>, document.body)}
   </div>
 }
 
