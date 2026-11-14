@@ -33,6 +33,10 @@ const kindLabels: Record<KnowledgeKind, string> = { person: '人物', place: '�
 const natureLabels: Record<KnowledgeNature, string> = { author_setting: '作者设定', future_plan: '未来计划', narrative_claim: '正文陈述', character_belief: '角色信念', ai_derived: 'AI 整理', ai_inference: '模型推断', external_reference: '外部参考' }
 const conflictLabels: Record<ConflictState, string> = { unchecked: '未检查冲突', clear: '作者未发现已知冲突', candidate: '存在候选冲突', explained: '作者已解释冲突' }
 const actionLabels: Record<AiMemoryReviewAction, string> = { create: '新建知识条目', link: '关联已有实体，仅追加来源', revise: '修订已有实体并追加来源', ignore: '忽略本条提议' }
+const decisionOptions = [
+  { action: 'create', icon: 'plus' }, { action: 'link', icon: 'link' },
+  { action: 'revise', icon: 'pen' }, { action: 'ignore', icon: 'close' },
+] as const
 
 export function createAiMemoryDrafts(run: AiRun): AiMemoryDraft[] {
   return parseAiMemoryProposal(run.outputText, run.context).items.map((item, sourceIndex) => ({
@@ -40,6 +44,29 @@ export function createAiMemoryDrafts(run: AiRun): AiMemoryDraft[] {
     fields: { kind: item.kind, name: item.name, aliases: [...item.aliases], summary: item.summary, nature: item.nature,
       authorDecision: 'adopted', freshness: 'current', conflictState: 'unchecked' },
   }))
+}
+
+function MemoryFieldChanges({ before, after }: { before: KnowledgeItemFields; after: KnowledgeItemFields }) {
+  // 只对照本页可编辑字段；完整原字段和人物档案仍保留在固定快照中。
+  const fields = [
+    ['名称', before.name, after.name],
+    ['类型', kindLabels[before.kind], kindLabels[after.kind]],
+    ['普通别名', before.aliases, after.aliases],
+    ['内容与适用范围', before.summary, after.summary],
+    ['冲突状态', conflictLabels[before.conflictState], conflictLabels[after.conflictState]],
+  ] as const
+  const changes = fields.filter(([, original, current]) => JSON.stringify(original) !== JSON.stringify(current))
+  return <details className={archive.fieldChanges}>
+    <summary><StudioIcon name="pen" size={20} />字段修订对照<span>{changes.length} 项变化</span></summary>
+    {changes.length ? <div className={archive.comparisonScroll} role="region" aria-label="可编辑字段修订对照" tabIndex={0}>
+      <table className={archive.comparisonTable}><thead><tr><th scope="col">字段</th><th scope="col">原值</th><th scope="col">新值</th></tr></thead>
+        <tbody>{changes.map(([label, original, current]) => <tr key={label}><th scope="row">{label}</th>
+          <td>{(Array.isArray(original) ? original.join('、') : original) || '（空）'}</td>
+          <td>{(Array.isArray(current) ? current.join('、') : current) || '（空）'}</td>
+        </tr>)}</tbody>
+      </table>
+    </div> : <p>名称、类型、普通别名、内容与冲突状态均与原值一致。</p>}
+  </details>
 }
 
 function FixedCitations({ citations }: { citations: AiMemoryCitation[] }) {
@@ -193,7 +220,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
         const fieldsDisabled = !editable || draft.action === 'link' || draft.action === 'ignore' || (existing && !draft.targetItemId)
         const citation = item.citations[0]
         const blockPosition = citation ? run.context.chapterBlocks.findIndex((block) => block.blockId === citation.blockId) + 1 : 0
-        return <section className={archive.candidate} data-selected={draft.selected} key={sourceIndex} aria-label={`审阅第 ${sourceIndex + 1} 条`}>
+        return <section className={archive.candidate} data-selected={draft.selected} data-action={draft.action ?? 'create'} key={sourceIndex} aria-label={`审阅第 ${sourceIndex + 1} 条`}>
           <label className={archive.checkbox}><input type="checkbox" checked={draft.selected} disabled={!editable}
             aria-label={`选择第 ${sourceIndex + 1} 条 · ${fields.name || '尚未填写名称'}`} onChange={(event) => select(sourceIndex, event.target.checked)} /><StudioIcon name="check" size={16} /></label>
           <details className={archive.candidateDetails}>
@@ -206,8 +233,14 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
             </summary>
             <div className={archive.candidateEditor}>
           <div className={layout.labels}><span>{kindLabels[fields.kind]}</span><span>{conflictLabels[fields.conflictState]}</span><span>{actionLabels[draft.action ?? 'create']}</span></div>
-          {run.kind === 'extract' && <label>作者决定<select value={draft.action ?? 'create'} disabled={!editable}
-            onChange={(event) => chooseAction(sourceIndex, event.target.value as AiMemoryReviewAction)}>{Object.entries(actionLabels).map(([action, label]) => <option key={action} value={action}>{label}</option>)}</select></label>}
+          {run.kind === 'extract' && <fieldset className={archive.decisionActions}><legend>作者决定</legend>
+            <div className={archive.decisionButtons}>{decisionOptions.map(({ action, icon }) => <button key={action} type="button"
+              className={`${shared.button} ${archive.decisionButton}`} data-action={action} aria-pressed={(draft.action ?? 'create') === action} disabled={!editable}
+              onClick={() => { if ((draft.action ?? 'create') !== action) chooseAction(sourceIndex, action) }}>
+              <StudioIcon name={icon} size={20} /><span>{actionLabels[action]}</span>
+            </button>)}</div>
+          </fieldset>}
+          {draft.action === 'ignore' && <p className={archive.ignoreNotice}><StudioIcon name="info" size={20} />忽略只记录审阅历史，确认归档前不会保存。</p>}
           {existing && <>
             <p className={styles.note}>原提议：{item.name} · {natureLabels[item.nature]}<br />{item.summary}</p>
             <AiMemoryTargetPicker key={`${run.id}:${sourceIndex}:${draft.action}`} api={api} bookId={run.bookId}
@@ -220,6 +253,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
             </details>}
             <p className={styles.note}>{draft.action === 'link' ? '仅把本章固定引文追加到选定实体，保留全部原字段和审阅状态。' : '下方是最终保存内容。请将本条提议中需要保留的变化明确编辑进去；原字段与修订将记入采用审计。'}</p>
           </>}
+          {draft.action === 'revise' && draft.targetSnapshot && <MemoryFieldChanges before={draft.targetSnapshot} after={fields} />}
           <div className={layout.editorForm}>
             <div className={layout.twoColumns}>
               <label>名称<input value={fields.name} maxLength={120} required disabled={fieldsDisabled} onChange={(event) => update(sourceIndex, { name: event.target.value })} /></label>
@@ -247,11 +281,13 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
     {run.state === 'adopted' && <>
       <p className={styles.note}>以下内容是本次采用时保存的快照。知识库之后的修改不会改变这里的历史记录。</p>
       {/* 采用历史只显示持久快照，不能以当前草稿或知识库可变字段替代。 */}
-      {run.memoryAdoptions?.length ? run.memoryAdoptions.map((entry) => <section className={styles.composer} key={entry.sourceIndex} aria-label={`审阅记录：${entry.fields.name}`}>
+      {run.memoryAdoptions?.length ? run.memoryAdoptions.map((entry) => <section className={`${styles.composer} ${archive.adoptionRecord}`} data-action={entry.action ?? 'create'} key={entry.sourceIndex} aria-label={`审阅记录：${entry.fields.name}`}>
         <div className={styles.heading}><h3>{entry.fields.name}</h3><span>原提议第 {entry.sourceIndex + 1} 条</span></div>
         <p className={styles.note}>{actionLabels[entry.action ?? 'create']}{entry.changed === false && entry.action !== 'ignore' ? ' · 来源已存在，本次无知识变更' : ''}</p>
+        {entry.action === 'ignore' && <span className={archive.ignoredBadge}><StudioIcon name="close" size={20} />已忽略</span>}
         <div className={layout.labels}><span>{kindLabels[entry.fields.kind]}</span><span>{natureLabels[entry.fields.nature]}</span><span>{conflictLabels[entry.fields.conflictState]}</span></div>
         {entry.itemId && <p className={layout.sourceIds}>知识条目 {entry.itemId}{entry.resultingRevisionId ? ` · 保存修订 ${entry.resultingRevisionId}` : ''}</p>}
+        {entry.action === 'revise' && entry.previousFields && <MemoryFieldChanges before={entry.previousFields} after={entry.fields} />}
         {entry.previousFields && <details><summary>修订前字段</summary><pre>{JSON.stringify(entry.previousFields, null, 2)}</pre></details>}
         {entry.fields.aliases.length > 0 && <p className={styles.note}>采用时的别名：{entry.fields.aliases.join('、')}</p>}
         <p className={layout.body}>{entry.fields.summary}</p>

@@ -33,6 +33,51 @@
 .candidateEditor label { display: flex; flex-direction: column; gap: var(--space-2); color: var(--color-ink-secondary); }
 .candidateEditor :is(input,select,textarea) { min-width: 0; width: 100%; }
 .candidateEditor textarea { resize: vertical; }
+.candidateEditor,.adoptionRecord { container-type: inline-size; }
+.candidate[data-selected='true'][data-action='ignore'] { border-color: var(--color-muted); background: var(--bg-subtle); }
+.decisionActions { min-width: 0; padding: 0; margin: var(--space-4) 0; border: 0; }
+.decisionActions legend { padding: 0; margin-bottom: var(--space-2); color: var(--color-ink-secondary); font-size: var(--text-sm); }
+.decisionButtons { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-2); }
+.decisionButton { --decision-tone: var(--color-accent); --decision-haze: var(--color-accent-soft); min-width: 0; justify-content: flex-start; text-align: start; }
+.decisionButton[data-action='revise'] { --decision-tone: var(--color-accent-2); --decision-haze: var(--stellar-ai-haze); }
+.decisionButton[data-action='ignore'] { --decision-tone: var(--color-muted); --decision-haze: var(--bg-raised); }
+.decisionButton > svg { flex-shrink: 0; }
+.decisionButton > span { min-width: 0; overflow-wrap: anywhere; }
+.decisionActions .decisionButton[aria-pressed='true'] { border-color: var(--decision-tone); color: var(--decision-tone); background: var(--decision-haze); }
+.decisionActions .decisionButton:hover:not(:disabled) { border-color: var(--decision-tone); color: var(--decision-tone); }
+.ignoreNotice { display: flex; align-items: flex-start; gap: var(--space-2); margin-block: var(--space-3); color: var(--color-muted); font-size: var(--text-xs); }
+.ignoreNotice > svg { flex-shrink: 0; }
+.fieldChanges { min-width: 0; margin-block: var(--space-4); border-block: 1px solid var(--color-line); }
+.fieldChanges > summary { min-height: var(--control-height); padding-block: var(--space-3); color: var(--color-ink-secondary); cursor: pointer; overflow-wrap: anywhere; }
+.fieldChanges > summary > svg { vertical-align: middle; margin-inline: var(--space-2); color: var(--color-accent); }
+.fieldChanges > summary > span { margin-inline-start: var(--space-3); color: var(--color-muted); font-size: var(--text-xs); }
+.fieldChanges > p { margin: 0 0 var(--space-3); color: var(--color-muted); font-size: var(--text-xs); }
+.comparisonScroll { max-width: 100%; max-height: 320px; overflow: auto; overscroll-behavior: contain; margin-bottom: var(--space-3); }
+.comparisonTable { width: 100%; min-width: 360px; border-collapse: collapse; table-layout: fixed; font-size: var(--text-xs); }
+.comparisonTable :is(th,td) { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-line); text-align: start; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comparisonTable th { font-weight: 500; color: var(--color-muted); }
+.comparisonTable th:first-child { width: 24%; }
+.comparisonTable td:nth-child(2) { color: var(--color-muted); }
+.comparisonTable :is(th,td):nth-child(3) { color: var(--color-accent); background: var(--color-accent-soft); }
+.adoptionRecord { padding: var(--space-4); border: 1px solid var(--color-line-strong); border-radius: var(--radius-lg); background: var(--bg-subtle); }
+.adoptionRecord[data-action='ignore'] { border-color: var(--color-muted); }
+.ignoredBadge { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3); margin-block: var(--space-2); border: 1px solid currentColor; border-radius: var(--radius-md); color: var(--color-muted); font: 600 var(--text-md)/1.5 var(--font-ui); }
+.targetPicker { display: grid; min-width: 0; gap: var(--space-3); margin-block: var(--space-4); }
+.targetPicker > button { justify-self: start; }
+.targetSearch { display: block; position: relative; min-width: 0; }
+.targetSearch > svg { position: absolute; inset-block-start: calc((var(--control-height) - 20px) / 2); inset-inline-start: var(--space-3); color: var(--color-muted); pointer-events: none; }
+.targetSearch > input { padding-inline-start: var(--space-10); }
+.targetResults { list-style: none; padding: 0; margin: 0; min-width: 0; }
+.targetResults > li { min-width: 0; border-bottom: 1px solid var(--color-line); }
+.targetResults .targetOption { justify-content: flex-start; gap: var(--space-3); width: 100%; min-width: 0; padding: var(--space-3); border: 0; border-radius: 0; text-align: start; background: transparent; }
+.targetResults .targetOption:hover:not(:disabled) { background: var(--color-accent-soft); }
+.targetOption > svg { flex-shrink: 0; color: var(--color-accent); }
+.targetOption > span { display: grid; min-width: 0; gap: var(--space-1); }
+.targetOption strong { color: var(--color-ink); font-size: var(--text-md); font-weight: 500; overflow-wrap: anywhere; }
+.targetOption small { color: var(--color-muted); font-size: var(--text-xs); font-weight: 400; overflow-wrap: anywhere; }
+.comparisonScroll:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@container (max-width:420px) { .decisionButtons { grid-template-columns: minmax(0,1fr); } }
+@media(forced-colors:active) { .decisionActions .decisionButton[aria-pressed='true'] { outline: 2px solid Highlight; outline-offset: -2px; color: ButtonText; background: Canvas; border-color: Highlight; } .comparisonTable :is(th,td):nth-child(3) { color: CanvasText; background: Canvas; } }
 .reviewNotes { padding-block: var(--space-3); color: var(--color-muted); font-size: var(--text-xs); }
 .reviewNotes summary { cursor: pointer; min-height: var(--control-compact); padding-block: var(--space-2); }
 .reviewNotes p { margin-block: var(--space-2); line-height: 1.7; }

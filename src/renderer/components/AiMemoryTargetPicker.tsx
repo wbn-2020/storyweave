@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { requiredId, type StudioApi } from '../../contracts/api'
 import { parseKnowledgeFields, type KnowledgeItemDetail, type KnowledgeItemPage, type KnowledgeKind } from '../../contracts/knowledge'
 import { request } from '../request'
+import { StudioIcon } from './StudioIcon'
 import shared from '../StellarShared.module.css'
 import styles from './StellarAi.module.css'
+import archive from './StellarArchive.module.css'
 
 interface Props {
   api: StudioApi
@@ -14,6 +16,8 @@ interface Props {
   disabled: boolean
   onSelect: (item: KnowledgeItemDetail) => void
 }
+
+const targetIcons = { person: 'user', place: 'compass', organization: 'workflow', object: 'archive', rule: 'read', theme: 'spark', other: 'grid' } as const
 
 /** 名称与别名搜索只提供候选，由作者明确选择身份；异步回执不能覆盖后来切换的审阅。 */
 export function AiMemoryTargetPicker(props: Props) {
@@ -63,16 +67,19 @@ export function AiMemoryTargetPicker(props: Props) {
       live.current.onSelect(item)
     } catch { setMessage('实体字段与固定修订无法核对，请重新读取。') }
   }
-  return <div>
-    <label>查找已有实体（名称、别名或说明）<input value={query} maxLength={200} disabled={props.disabled || busy}
-      onChange={(event) => { setQuery(event.target.value); setPage(null) }} /></label>
+  return <div className={archive.targetPicker} aria-busy={busy}>
+    <label>查找已有实体（名称、别名或说明）<span className={archive.targetSearch}><StudioIcon name="search" size={20} /><input value={query} maxLength={200} disabled={props.disabled || busy}
+      onChange={(event) => { setQuery(event.target.value); setPage(null) }} /></span></label>
     <button type="button" className={shared.button} disabled={props.disabled || busy} onClick={() => void search()}>查找同类实体</button>
     {busy && <p className={styles.note} role="status">正在读取实体…</p>}
     {message && <p className={shared.formError} role="alert">{message}</p>}
     {page && <>
       <p className={styles.note}>找到 {page.total} 个候选。名称相同也可能是不同实体，请核对说明。</p>
-      {page.items.map((item) => <p key={item.id}><button type="button" className={shared.button} disabled={props.disabled || busy}
-        onClick={() => void choose(item.id)}>选择 {item.name}</button> {item.aliases.join('、')} · {item.summary.slice(0, 160)}</p>)}
+      <ul className={archive.targetResults}>{page.items.map((item) => <li key={item.id}><button type="button"
+        className={`${shared.button} ${archive.targetOption}`} aria-label={`选择 ${item.name}`} disabled={props.disabled || busy}
+        onClick={() => void choose(item.id)}><StudioIcon name={targetIcons[item.kind]} size={24} />
+        <span><strong>选择 {item.name}</strong><small>{item.aliases.join('、')} · {item.summary.slice(0, 160)}</small></span>
+      </button></li>)}</ul>
       {page.nextOffset !== null && <button type="button" className={shared.button} disabled={props.disabled || busy}
         onClick={() => void search(page.nextOffset!)}>下一页</button>}
     </>}
