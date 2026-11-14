@@ -19,6 +19,7 @@ import { StellarDesk } from './components/StellarDesk'
 import { StellarShelf } from './components/StellarShelf'
 import { BookOverview, BOOK_DESTINATIONS, type BookDestination } from './components/BookOverview'
 import { StudioIcon } from './components/StudioIcon'
+import { StellarTooltip } from './components/stellar/StellarTooltip'
 import { Dialog, DialogDisplayContext } from './components/Dialog'
 import { BookDetailsDialog, ChapterDetailsDialog, ConfirmDialog, NameDialog, type BookFields, type ChapterFields } from './components/EditingDialogs'
 import { RevisionHistory } from './components/RevisionHistory'
@@ -1232,6 +1233,7 @@ export function App({ api }: Props) {
     const onFocusShortcut = (event: KeyboardEvent) => {
       const exiting = event.key === 'Escape'
       if (exiting) {
+        if (document.querySelector('[data-stellar-tooltip]:popover-open')) return
         if (!focused || document.querySelector('[aria-label="选区 AI 改写"], section[aria-label="当前章节查找与替换"]') || (event.target instanceof Element && event.target.closest('details[open]'))) return
       } else if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.key !== 'Enter') return
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || session.isComposing()) return
@@ -1343,10 +1345,10 @@ export function App({ api }: Props) {
     { id: 'preferences', label: '设置', icon: 'settings' as const, active: modal?.kind === 'preferences' || modal?.kind === 'models', run: () => showDialog({ kind: 'preferences' }) },
   ]
   const navigation = <>
-    <nav className={styles.nav} aria-label="工作室主导航">{primaryNav.map((item) => <button key={item.id} className={`${styles.navItem} ${item.active ? styles.navItemActive : ''}`} type="button"
-      title={item.label} aria-label={item.label} aria-current={item.active ? 'page' : undefined} disabled={busy || bookRecoveryLocked || (!api && item.id !== 'home' && item.id !== 'preferences')} onClick={item.run}><StudioIcon name={item.icon} size={20} /><span>{item.label}</span></button>)}</nav>
-    <div className={styles.navBottom}><button className={styles.iconButton} type="button" title="切换作品库" aria-label="切换作品库" onClick={() => void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="folder" size={20} /></button>
-      <button className={styles.iconButton} type="button" title="草稿与服务恢复" aria-label="草稿与服务恢复" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={20} /></button></div>
+    <nav className={styles.nav} aria-label="工作室主导航">{primaryNav.map((item) => <StellarTooltip key={item.id} placement="right"><button className={`${styles.navItem} ${item.active ? styles.navItemActive : ''}`} type="button"
+      title={item.label} aria-label={item.label} aria-current={item.active ? 'page' : undefined} disabled={busy || bookRecoveryLocked || (!api && item.id !== 'home' && item.id !== 'preferences')} onClick={item.run}><StudioIcon name={item.icon} size={20} /><span>{item.label}</span></button></StellarTooltip>)}</nav>
+    <div className={styles.navBottom}><StellarTooltip placement="right"><button className={styles.iconButton} type="button" title="切换作品库" aria-label="切换作品库" onClick={() => void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="folder" size={20} /></button></StellarTooltip>
+      <StellarTooltip placement="right"><button className={styles.iconButton} type="button" title="草稿与服务恢复" aria-label="草稿与服务恢复" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={20} /></button></StellarTooltip></div>
   </>
 
   const rightAsideExpanded = companionOpen || modal?.kind === 'ai' || writeAsideMode !== 'collapsed'
@@ -1494,24 +1496,24 @@ export function App({ api }: Props) {
           </label>}
           {writingVisible && chapter && <span className={styles.chapterCount}>{session.session.characterCount.toLocaleString()}{chapter.targetCharacters !== null ? ` / ${chapter.targetCharacters.toLocaleString()}` : ' 字'}</span>}
           {writingVisible && <button type="button" className={styles.modelPicker} aria-label="选择模型" disabled={busy || bookRecoveryLocked} onClick={() => switchWriteAside('ai')} title="打开共写面板选择模型"><StudioIcon name="spark" size={16} /><span>选择模型</span><StudioIcon name="down" size={14} /></button>}
-          <button className={styles.iconButton} type="button" title="通知与任务" aria-label={`通知与任务${currentNotices.some((item) => !seenNotices.has(item.id)) ? '，有未读提示' : ''}`} disabled={hasBlockingDialog || commandOpen || session.session.composing} onClick={() => setTaskCenterOpen(true)}><StudioIcon name="bell" size={20} />{currentNotices.some((item) => !seenNotices.has(item.id)) && <i className={styles.unreadDot} />}</button>
-          <button className={styles.iconButton} type="button" aria-label="搜索命令与章节" aria-keyshortcuts="Control+k Meta+k" disabled={busy || hasBlockingDialog || bookRecoveryLocked} onClick={() => { setNavigationOpen(false); setCommandOpen(true) }} title="搜索命令与章节 · Ctrl+K"><StudioIcon name="search" size={20} /></button>
+          <StellarTooltip><button className={styles.iconButton} type="button" title="通知与任务" aria-label={`通知与任务${currentNotices.some((item) => !seenNotices.has(item.id)) ? '，有未读提示' : ''}`} disabled={hasBlockingDialog || commandOpen || session.session.composing} onClick={() => setTaskCenterOpen(true)}><StudioIcon name="bell" size={20} />{currentNotices.some((item) => !seenNotices.has(item.id)) && <i className={styles.unreadDot} />}</button></StellarTooltip>
+          <StellarTooltip><button className={styles.iconButton} type="button" aria-label="搜索命令与章节" aria-keyshortcuts="Control+k Meta+k" disabled={busy || hasBlockingDialog || bookRecoveryLocked} onClick={() => { setNavigationOpen(false); setCommandOpen(true) }} title="搜索命令与章节 · Ctrl+K"><StudioIcon name="search" size={20} /></button></StellarTooltip>
           {studioView === 'write' && !isCanvasView && chapter && <>
-            <button className={`${styles.iconButton} ${styles.topbarSave}`} type="button" title="保存 · Ctrl+S" aria-label="保存当前章节" onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}>
+            <StellarTooltip><button className={`${styles.iconButton} ${styles.topbarSave}`} type="button" title="保存 · Ctrl+S" aria-label="保存当前章节" onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}>
               <StudioIcon name="save" size={20} />
-            </button>
-            <button className={`${styles.iconButton} ${styles.focusButton}`} type="button" aria-label="专注写作" aria-pressed={focused} title="专注写作 · Ctrl+Shift+Enter" onClick={() => setFocused(!focused)} disabled={session.session.composing || (busy && !focused)}>
+            </button></StellarTooltip>
+            <StellarTooltip><button className={`${styles.iconButton} ${styles.focusButton}`} type="button" aria-label="专注写作" aria-pressed={focused} title="专注写作 · Ctrl+Shift+Enter" onClick={() => setFocused(!focused)} disabled={session.session.composing || (busy && !focused)}>
               <StudioIcon name="focus" size={20} />
-            </button>
+            </button></StellarTooltip>
           </>}
           {studioView === 'write' && !isCanvasView && book ? focused ? <>
             <button className={styles.button} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}><StudioIcon name="settings" size={14} />外观</button>
             <button className={styles.button} type="button" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={14} />恢复</button>
           </> : writingTools : <>
             <span className={styles.localBadge}><span className={styles.statusDot} />{workspace.rootPath ? '仅本机 · 已连接' : '仅本机'}</span>
-            <button className={styles.profileButton} type="button" aria-label="外观与显示偏好" title="工作室配色与稿纸偏好" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked}><StudioIcon name="user" size={20} /></button>
+            <StellarTooltip><button className={styles.profileButton} type="button" aria-label="外观与显示偏好" title="工作室配色与稿纸偏好" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked}><StudioIcon name="user" size={20} /></button></StellarTooltip>
           </>}
-          <button className={styles.sidebarToggle} type="button" title={sidebarCollapsed ? '显示导航栏' : '隐藏导航栏'} aria-label={sidebarCollapsed ? '显示导航栏' : '隐藏导航栏'} aria-expanded={!sidebarCollapsed} aria-controls="studio-sidebar" onClick={() => setSidebarCollapsed((value) => !value)}><StudioIcon name="sidebar" size={18} /></button>
+          <StellarTooltip><button className={styles.sidebarToggle} type="button" title={sidebarCollapsed ? '显示导航栏' : '隐藏导航栏'} aria-label={sidebarCollapsed ? '显示导航栏' : '隐藏导航栏'} aria-expanded={!sidebarCollapsed} aria-controls="studio-sidebar" onClick={() => setSidebarCollapsed((value) => !value)}><StudioIcon name="sidebar" size={18} /></button></StellarTooltip>
         </div>
       </header>
     <main className={`${styles.main} ${studioView !== 'write' || isCanvasView ? styles.homeMain : ''}`}>

@@ -4,6 +4,7 @@ import { displayTime } from '../request'
 import { BookCover } from './LibraryPanels'
 import { StudioIcon } from './StudioIcon'
 import { genreTone, STELLAR_GENRES } from './stellar/Genres'
+import { StellarTooltip } from './stellar/StellarTooltip'
 import { useBookPreview } from './stellar/useBookPreview'
 import ui from './stellar/stellar.module.css'
 import styles from './StudioPages.module.css'
@@ -48,7 +49,7 @@ export function StellarShelf({ api, scope, books, busy, onOpen, onWrite, onEdit,
   const genres = [...STELLAR_GENRES.map((item) => item.label), ...new Set(books.map((item) => item.genre).filter((item) => item && !STELLAR_GENRES.some((genre) => genre.label === item)))]
   const activeCount = books.filter((item) => !item.archivedAt).length
   return <section className={styles.page} aria-label="作品书架"><div className={styles.pageInner}>
-    <header className={styles.heading}><div><h1 className={styles.visuallyHidden}>作品书架</h1><p className={styles.shelfStatistics}><span><strong>{books.length}</strong>部作品</span><span><strong>{activeCount}</strong>部未归档</span><span><strong>{books.length - activeCount}</strong>部已归档</span></p></div><div className={ui.actions}><div className={ui.tabs} role="group" aria-label="书架布局"><button type="button" title="列表视图" aria-label="列表视图" aria-pressed={mode === 'list'} onClick={() => setMode('list')}><StudioIcon name="list" size={20} /></button><button type="button" title="网格视图" aria-label="网格视图" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')}><StudioIcon name="grid" size={20} /></button></div><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}><StudioIcon name="plus" size={16} />新建作品</button></div></header>
+    <header className={styles.heading}><div><h1 className={styles.visuallyHidden}>作品书架</h1><p className={styles.shelfStatistics}><span><strong>{books.length}</strong>部作品</span><span><strong>{activeCount}</strong>部未归档</span><span><strong>{books.length - activeCount}</strong>部已归档</span></p></div><div className={ui.actions}><div className={ui.tabs} role="group" aria-label="书架布局"><StellarTooltip><button type="button" title="列表视图" aria-label="列表视图" aria-pressed={mode === 'list'} onClick={() => setMode('list')}><StudioIcon name="list" size={20} /></button></StellarTooltip><StellarTooltip><button type="button" title="网格视图" aria-label="网格视图" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')}><StudioIcon name="grid" size={20} /></button></StellarTooltip></div><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}><StudioIcon name="plus" size={16} />新建作品</button></div></header>
     <div className={styles.shelfFilters}>
       <div className={styles.genreFilters} role="group" aria-label="题材筛选"><button type="button" aria-pressed={!genre} onClick={() => { setGenre(''); setPage(0) }}><StudioIcon name="grid" size={16} />全部</button>
         {genres.map((item) => <button key={item} type="button" aria-pressed={genre === item} onClick={() => { setGenre(item); setPage(0) }}>{STELLAR_GENRES.find((genre) => genre.label === item) && <StudioIcon name={STELLAR_GENRES.find((genre) => genre.label === item)!.icon} size={16} />}{item}</button>)}</div>
