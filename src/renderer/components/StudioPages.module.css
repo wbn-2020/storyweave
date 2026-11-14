@@ -65,9 +65,14 @@
 .bookFoot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-line); }
 .bookFoot > span { color: var(--color-muted); font-size: var(--text-xs); }
 .bookFoot button { font-size: var(--text-xs); }
-.shelfGrid .bookMain { display: flex; flex-direction: column; gap: 0; padding: 0; flex: 1; }
-.shelfGrid .bookMain > span { aspect-ratio: 4 / 3; border: 0; border-radius: 0; }
-.shelfGrid .bookMain > div { width: 100%; padding: var(--space-4); gap: var(--space-3); flex: 1; }
+/* 封面只在书架网格铺满卡片；文字与操作保留正常流，长内容可撑高，首页和列表不叠图。 */
+.shelfGrid .bookCard { isolation: isolate; aspect-ratio: 4 / 5; min-height: calc(var(--space-12) * 6); }
+.shelfGrid .bookMain { display: flex; flex-direction: column; justify-content: flex-end; gap: 0; padding: 0; flex: 1; }
+.shelfGrid .bookMain > span { position: absolute; inset: 0; z-index: -2; height: 100%; aspect-ratio: auto; border: 0; border-radius: 0; justify-content: flex-start; padding-top: var(--space-10); pointer-events: none; }
+.shelfGrid .bookMain > span > :is(strong, span) { display: none; }
+.shelfGrid .bookMain::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg-deep) 20%, transparent) 35%, var(--bg-deep) 75%); }
+.shelfGrid .bookMain > div { width: 100%; padding: calc(var(--space-12) * 3) var(--space-4) var(--space-4); gap: var(--space-3); }
+.shelfGrid .bookMain:focus-visible { outline-offset: calc(-1 * var(--space-1)); }
 .shelfGrid .bookState { position: absolute; right: var(--space-3); top: var(--space-3); }
 .shelfGrid .bookGenre { display: inline-flex; min-height: var(--space-6); padding-inline: var(--space-2); border-radius: var(--radius-sm); background: var(--bg-raised); color: var(--color-ink-secondary); }
 .shelfGrid .bookProgress { margin-top: var(--space-1); }
@@ -78,6 +83,8 @@
 .shelfList .bookMain { grid-template-columns: 48px minmax(0, 1fr); }
 .shelfList .bookFoot { flex: 0 0 auto; border-top: 0; }
 .shelfLayout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: var(--space-6); align-items: start; }
+.shelfLayout .bookCard[data-archived='true'] { opacity: 1; }
+.shelfLayout .bookCard[data-archived='true'] .bookMain > span { filter: saturate(.25); }
 .shelfStatistics { display: flex; align-items: baseline; gap: var(--space-6); flex-wrap: wrap; margin: 0 !important; color: var(--color-ink-secondary) !important; }
 .shelfStatistics > span { display: flex; align-items: baseline; gap: var(--space-2); font-size: var(--text-lg); }
 .shelfStatistics strong { font: 600 28px/1.2 var(--font-num); color: var(--color-accent); }
@@ -180,6 +187,12 @@
 .activityList time { color: var(--color-muted); font: var(--text-xs)/1.5 var(--font-num); }
 .activityList strong { font-size: var(--text-sm); font-weight: 500; }
 .activityList button > span { color: var(--color-muted); font: var(--text-xs)/1.5 var(--font-num); }
+@media (forced-colors: active) {
+  .shelfGrid .bookCard { aspect-ratio: auto; min-height: 0; }
+  .shelfGrid .bookMain > span,.shelfGrid .bookMain::before { display: none; }
+  .shelfGrid .bookMain > div { padding-top: var(--space-4); }
+  .shelfGrid .bookState { position: static; }
+}
 @media (max-width: 1439px) {
   .desk { grid-template-columns: minmax(0, 1fr) 340px; }
   .bookGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

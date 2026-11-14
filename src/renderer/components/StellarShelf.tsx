@@ -39,7 +39,7 @@ export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onW
   onCreate: () => void; onImport: () => void; onRecover: () => void
 }) {
   const [query, setQuery] = useState('')
-  const [archived, setArchived] = useState(false)
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived'>('all')
   const [genre, setGenre] = useState('')
   const [mode, setMode] = useState<'grid' | 'list'>('grid')
   const [page, setPage] = useState(0)
@@ -48,7 +48,8 @@ export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onW
     const book = books.find((item) => item.id === entry.bookId)
     return book ? [{ book, openedAt: entry.openedAt }] : []
   }).slice(0, 3)
-  const visible = recent.filter((item) => Boolean(item.archivedAt) === archived && (!genre || item.genre === genre)
+  const archived = archiveFilter === 'archived'
+  const visible = recent.filter((item) => (archiveFilter === 'all' || Boolean(item.archivedAt) === archived) && (!genre || item.genre === genre)
     && `${item.title} ${item.genre} ${item.synopsis}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
   const pageCount = Math.max(1, Math.ceil(visible.length / 6))
   const currentPage = Math.min(page, pageCount - 1)
@@ -59,7 +60,7 @@ export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onW
     <div className={styles.shelfFilters}>
       <div className={styles.genreFilters} role="group" aria-label="题材筛选"><button type="button" aria-pressed={!genre} onClick={() => { setGenre(''); setPage(0) }}><StudioIcon name="grid" size={16} />全部</button>
         {genres.map((item) => <button key={item} type="button" aria-pressed={genre === item} onClick={() => { setGenre(item); setPage(0) }}>{STELLAR_GENRES.find((genre) => genre.label === item) && <StudioIcon name={STELLAR_GENRES.find((genre) => genre.label === item)!.icon} size={16} />}{item}</button>)}</div>
-      <div className={styles.filters}><div className={ui.tabs} role="group" aria-label="作品状态"><button type="button" aria-pressed={!archived} onClick={() => { setArchived(false); setPage(0) }}>未归档</button><button type="button" aria-pressed={archived} onClick={() => { setArchived(true); setPage(0) }}>已归档</button></div>
+      <div className={styles.filters}><div className={ui.tabs} role="group" aria-label="作品状态"><button type="button" aria-pressed={archiveFilter === 'all'} onClick={() => { setArchiveFilter('all'); setPage(0) }}>全部作品</button><button type="button" aria-pressed={archiveFilter === 'active'} onClick={() => { setArchiveFilter('active'); setPage(0) }}>未归档</button><button type="button" aria-pressed={archived} onClick={() => { setArchiveFilter('archived'); setPage(0) }}>已归档</button></div>
         <label><StudioIcon name="search" size={18} /><input type="search" aria-label="搜索作品" placeholder="搜索作品、题材…" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} /></label></div>
     </div>
     <div className={styles.shelfLayout}><div>
