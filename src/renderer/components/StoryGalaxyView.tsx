@@ -26,6 +26,7 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
   const [height, setHeight] = useState(480)
   const [view, setView] = useState<View>(INITIAL_VIEW)
   const [hovered, setHovered] = useState<string | null>(null)
+  const [focused, setFocused] = useState<string | null>(null)
   const focusKey = focus ? galaxyKey(focus) : null
   const selectedKey = selected ? galaxyKey(selected) : null
 
@@ -65,7 +66,7 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
   }), [layout, width, height, view, focusKey])
   const pointMap = useMemo(() => new Map(points.map((point) => [point.key, point])), [points])
   const frontToBack = useMemo(() => [...points].sort((a, b) => b.z - a.z), [points])
-  const activeKey = hovered ?? selectedKey ?? focusKey
+  const activeKey = focused && pointMap.has(focused) ? focused : hovered ?? selectedKey ?? focusKey
   const related = useMemo(() => {
     const keys = new Set<string>()
     if (!activeKey) return keys
@@ -96,6 +97,16 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
     return chosen
   }, [frontToBack, activeKey, width, height, focusKey, view.x, view.y])
 
+  function focusNode(point: Point) {
+    setFocused(point.key)
+    if (drag.current) return
+    // 平移或放大后，Tab 到达的节点及光环仍须回到可视范围；不改变选中或聚焦查询。
+    const margin = point.radius + 24
+    const dx = clamp(point.x, margin, width - margin) - point.x
+    const dy = clamp(point.y, margin, height - margin) - point.y
+    if (dx || dy) setView((value) => ({ ...value, x: value.x + dx, y: value.y + dy }))
+  }
+
   function hit(event: PointerEvent<SVGSVGElement>): Point | undefined {
     const svg = stage.current, matrix = svg?.getScreenCTM()
     if (!svg || !matrix) return
@@ -115,7 +126,7 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
   }
 
   function pointerDown(event: PointerEvent<SVGSVGElement>) {
-    if (disabled || !event.isPrimary || event.button !== 0) return
+    if (disabled || drag.current || !event.isPrimary || event.button !== 0) return
     const mouse = event.pointerType === 'mouse'
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, view, moved: false, mouse }
     // 触屏保留页面纵向滚动，平移和缩放也提供键盘可达的控件。
@@ -125,7 +136,8 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
   function pointerMove(event: PointerEvent<SVGSVGElement>) {
     if (disabled) return
     const saved = drag.current
-    if (!saved || saved.id !== event.pointerId) { setHovered(hit(event)?.key ?? null); return }
+    if (saved && saved.id !== event.pointerId) return
+    if (!saved) { setHovered(hit(event)?.key ?? null); return }
     const dx = event.clientX - saved.x, dy = event.clientY - saved.y
     if (Math.hypot(dx, dy) > 5) saved.moved = true
     if (saved.mouse && saved.moved) {
@@ -137,19 +149,25 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
 
   function pointerUp(event: PointerEvent<SVGSVGElement>) {
     const saved = drag.current
+    if (!saved || saved.id !== event.pointerId) return
     drag.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    if (!disabled && saved?.id === event.pointerId && !saved.moved) {
+    if (!disabled && !saved.moved) {
       const point = hit(event)
       if (point) onSelect({ source: point.node.source, id: point.node.id })
     }
+  }
+
+  function cancelPointer(event: PointerEvent<SVGSVGElement>) {
+    if (drag.current?.id !== event.pointerId) return
+    drag.current = null; setHovered(null)
   }
 
   return <div className={styles.graph} ref={container}>
     <svg ref={stage} className={styles.stage} viewBox={`0 0 ${width} ${height}`} role="group"
       aria-label="本页记忆星图" data-disabled={disabled} data-hovered={Boolean(hovered)}
       onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}
-      onPointerCancel={() => { drag.current = null; setHovered(null) }} onLostPointerCapture={() => { drag.current = null }}
+      onPointerCancel={cancelPointer} onLostPointerCapture={cancelPointer}
       onPointerLeave={() => { if (!drag.current) setHovered(null) }}>
       <g className={styles.orbits} aria-hidden="true" transform={`translate(${width / 2 + view.x} ${height / 2 + view.y})`}>
         <ellipse rx={Math.min(width * .43,360) * view.zoom} ry={height * .42 * view.zoom} />
@@ -164,13 +182,13 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
           return <line aria-hidden="true" key={edge.id} x1={from.x} y1={from.y} x2={to.x} y2={to.y} className={active ? styles.activeEdge : styles.edge} />
         })}
         {[...frontToBack].reverse().map((point) => {
-          const active = point.key === selectedKey || point.key === focusKey || point.key === hovered
+          const active = point.key === selectedKey || point.key === focusKey || point.key === hovered || point.key === focused
           const r = point.radius, kind = point.node.kind
           const state = point.node.conflictState === 'candidate' ? 'conflict' : point.node.freshness !== 'current' || point.node.nature === 'ai_inference' ? 'review'
             : point.node.authorDecision !== 'adopted' || !['clear', 'explained'].includes(point.node.conflictState) ? 'unknown' : 'known'
           return <g key={point.key} transform={`translate(${point.x} ${point.y})`} className={styles.node} data-kind={kind} data-state={state}
             data-focused={point.key === focusKey} role="button" aria-label={`${point.node.title} · ${kind}`} aria-pressed={point.key === selectedKey}
-            aria-disabled={disabled} tabIndex={disabled ? -1 : 0} onKeyDown={(event) => {
+            aria-disabled={disabled} tabIndex={disabled ? -1 : 0} onFocus={() => { if (!disabled) focusNode(point) }} onBlur={() => setFocused(null)} onKeyDown={(event) => {
               if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect({ source: point.node.source, id: point.node.id }) }
             }}
             opacity={activeKey && !related.has(point.key) ? .55 : 1}>
