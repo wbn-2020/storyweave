@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 
 export const DISPLAY_FONT_SIZES = [16, 17, 18, 19, 20, 21, 22, 23, 24] as const
-export const DISPLAY_LINE_HEIGHTS = [1.8, 2.05, 2.3] as const
+export const DISPLAY_LINE_HEIGHTS = [1.6, 1.8, 2.05, 2.3] as const
 export const PAPER_TONE_LABELS = { theme: '跟随书房主题', warm: '温润宣纸', light: '霜白书页', dark: '夜墨灯下' } as const
 export const GENRE_ACCENTS = ['fantasy', 'stellar', 'urban', 'galaxy', 'system'] as const
 
