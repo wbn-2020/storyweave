@@ -6,6 +6,7 @@ import { displayTime, request, statusLabels } from '../request'
 import { BookCover } from './LibraryPanels'
 import { StudioIcon } from './StudioIcon'
 import { GenrePicker, ProgressRing } from './stellar/Genres'
+import { StellarEmpty } from './stellar/StellarEmpty'
 import { useBookPreview } from './stellar/useBookPreview'
 import { StellarBookCard } from './StellarShelf'
 import { CalendarYearHeatmap } from './CalendarYearHeatmap'
@@ -103,7 +104,9 @@ export function StellarDesk({ api, workspace, currentBook, busy, onOpenWorkspace
           <section aria-label="我的作品">
             <div className={styles.sectionHead}><h2>我的作品 <span className={ui.muted}>{books.length}</span></h2><button className={ui.ghost} type="button" disabled={blocked} onClick={onShelf}>全部作品<StudioIcon name="chevron" size={16} /></button></div>
             {books.length ? <div className={styles.bookGrid}>{books.slice(0, 3).map((item) => <StellarBookCard key={`${scope}:${item.id}`} api={api} scope={scope} book={item} busy={blocked} onOpen={onOverview} onWrite={onOpenBook} />)}</div>
-              : <div className={ui.empty}><StudioIcon name="books" size={32} /><h3>书架还在等待第一部作品</h3><div className={ui.actions}><button className={ui.primary} type="button" disabled={blocked} onClick={() => onCreate()}>新建作品</button><button className={ui.button} type="button" disabled={blocked} onClick={onImport}>导入稿件</button></div></div>}
+              : <StellarEmpty icon="read" title="从一句话开始" description="书架还在等待第一部作品" hint={workspace.rootPath ? '开始你的第一个故事吧' : '选择本地作品库，开启创作。'}>
+                <button className={ui.primary} type="button" disabled={blocked} onClick={() => onCreate()}><StudioIcon name="plus" size={20} />新建作品</button><button className={ui.button} type="button" disabled={blocked} onClick={onImport}>导入稿件</button>
+              </StellarEmpty>}
           </section>
           {book && <details className={styles.recentChapters}>
             <summary>最近章节 · {book.chapters.length} 章</summary>

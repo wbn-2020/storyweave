@@ -20,6 +20,7 @@ import { StellarShelf } from './components/StellarShelf'
 import { BookOverview, BOOK_DESTINATIONS, type BookDestination } from './components/BookOverview'
 import { StudioIcon } from './components/StudioIcon'
 import { StellarTooltip } from './components/stellar/StellarTooltip'
+import { StellarEmpty } from './components/stellar/StellarEmpty'
 import { Dialog, DialogDisplayContext } from './components/Dialog'
 import { BookDetailsDialog, ChapterDetailsDialog, ConfirmDialog, NameDialog, type BookFields, type ChapterFields } from './components/EditingDialogs'
 import { RevisionHistory } from './components/RevisionHistory'
@@ -1634,16 +1635,14 @@ export function App({ api }: Props) {
             <ManuscriptEditor key={chapter.bookId + ':' + chapter.id + ':' + session.session.loadEpoch} title={chapter.title} document={chapter.document} disabled={studioView !== 'write' || isCanvasView || busy || bookRecoveryLocked || hasBlockingDialog} readOnly={archived} displayPreferences={display.preferences} onChange={session.changed} onComposition={session.setComposing} initialPosition={navigationPosition.current?.bookId === chapter.bookId && navigationPosition.current.chapterId === chapter.id ? navigationPosition.current.position : writingPosition(workspace.rootPath, chapter.bookId)?.chapterId === chapter.id ? writingPosition(workspace.rootPath, chapter.bookId) : null} onPositionChange={(position) => { if (studioView === 'write' && !isCanvasView) rememberWritingPosition(workspace.rootPath, chapter.bookId, chapter.id, position) }}
               onSelectionAction={(instruction, rewrite) => showDialog({ kind: 'ai', initialInstruction: instruction, rewrite })}
               footer={<><span>{session.session.characterCount.toLocaleString()} 字 · {statusLabels[chapter.status]}{chapter.viewpoint ? ` · 视角 ${chapter.viewpoint}` : ''}</span><StellarTooltip><button type="button" title="本章资料与写作目标" aria-label="本章资料与写作目标" disabled={busy || archived} onClick={() => showDialog({ kind: 'chapterDetails' })}><StudioIcon name="notes" size={16} /></button></StellarTooltip></>} />
-          </> : <div className={styles.emptyChapter}>
-            <span className={styles.emptyChapterBadge}><StudioIcon name="spark" size={16} />从第一个脑洞开始</span>
-            <h2>{book.chapters.length ? '从左侧选择一章继续落笔' : '让故事从第一幕长出来'}</h2>
-            <p>{book.chapters.length ? '点击左侧卷章目录打开正文，或去「章节规划」用已有文字连接下一章。' : '不需要先填满复杂的世界观。建立第一章，写下一句话冲突，人物与设定可以边写边长。'}</p>
-            <div className={styles.actionRow}>
-              {!archived && <button className={styles.primaryButton} type="button" onClick={() => showDialog({ kind: 'newChapter', volumeId: null })} disabled={busy}><StudioIcon name="pen" size={15} />建立章节</button>}
+          </> : <StellarEmpty icon={archived ? 'lock' : 'list'} tone="warning" heading="h2"
+            title={book.chapters.length ? '从左侧选择一章继续落笔' : archived ? '此归档作品还没有章节' : '暂无章节'}
+            description={book.chapters.length ? '点击左侧卷章目录打开正文，或去「章节规划」用已有文字连接下一章。' : archived ? '此作品已归档，继续编辑前请在作品资料中解除归档。' : '为作品添加第一个章节吧'}
+            hint={archived ? '归档作品保持只读' : '从章节开始，构建你的故事'}>
+              {!archived && <button className={styles.primaryButton} type="button" onClick={() => showDialog({ kind: 'newChapter', volumeId: null })} disabled={busy}><StudioIcon name="pen" size={20} />{book.chapters.length ? '建立章节' : '新建第一章'}</button>}
               <button className={styles.button} type="button" onClick={() => openToolFromNav('workbench')} disabled={busy}><StudioIcon name="compass" size={15} />打开章节规划</button>
               <button className={styles.button} type="button" onClick={() => openToolFromNav('knowledge')} disabled={busy}><StudioIcon name="read" size={15} />整理故事设定</button>
-            </div>
-          </div>}</section>
+          </StellarEmpty>}</section>
 
           {isAiInWriteDrawer && api && chapter ? (
             <aside ref={inspectorDrawer} tabIndex={-1} className={`${styles.companionAside} ${styles.aiCopilotAside}`} data-explicit={modal?.kind === 'ai'} aria-label="AI 创作副驾驶">

@@ -11,6 +11,7 @@ import type { MemorySearchHit, MemorySearchPage } from '../../contracts/memory'
 import { displayTime, request } from '../request'
 import { Dialog, DialogDisplayContext } from './Dialog'
 import { StudioIcon, type StudioIconName } from './StudioIcon'
+import { StellarEmpty } from './stellar/StellarEmpty'
 import { AiMemoryReview, aiMemoryReviewEntries, createAiMemoryDrafts, type AiMemoryDraft } from './AiMemoryReview'
 import { AiTextDiff } from './AiTextDiff'
 import { CreativeResourcePicker } from './CreativeResourcePicker'
@@ -1103,13 +1104,15 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
         <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="spark" size={20} /><span><strong>章纲与定稿记忆</strong><small>{useLivingContext ? '已选择 · 准备预览时核验' : '未选择'}</small></span></button>
         <button className={styles.carriedItem} type="button" onClick={openComposer}><StudioIcon name="layers" size={20} /><span><strong>场景与写作方法</strong><small>已选 {creativeSelection.refs.length} 项</small></span></button>
       </section>}
-      {compact && !run && <section className={styles.draftEmpty} aria-label="AI 流式草稿">
-        <h3><StudioIcon name="spark" size={20} />AI 流式草稿</h3><p>尚未生成草稿</p>
+      {(compact || !selectedConnection) && !run && <StellarEmpty icon={selectedConnection ? 'spark' : 'lock'} tone={selectedConnection ? 'default' : 'model'} label="AI 流式草稿"
+        title={selectedConnection ? '尚未生成草稿' : connections.connections.length ? '尚未选择模型' : '未配置模型'}
+        description={selectedConnection ? '准备创作协作后，先核对本次发送预览。' : connections.connections.length ? '请选择已保存的连接，或填写下方模型连接。' : '请配置合适的创作模型'}
+        hint={selectedConnection ? '预览 → 明确发送 → 作者审阅 → 采用' : '选择模型，开启创作之旅'}>
         <button className={shared.primaryButton} type="button" disabled={blocked || archived} onClick={() => {
           if (!selectedConnection && connectionDetails.current) { connectionDetails.current.open = true; connectionDetails.current.scrollIntoView({ block: 'start' }); connectionDetails.current.querySelector('summary')?.focus() }
           else openComposer()
-        }}><StudioIcon name="pen" size={16} />{selectedConnection ? '准备创作协作' : '配置模型'}</button>
-      </section>}
+        }}><StudioIcon name={selectedConnection ? 'pen' : 'settings'} size={20} />{selectedConnection ? '准备创作协作' : '配置模型'}</button>
+      </StellarEmpty>}
       <details className={styles.connection}><summary>任务预设与累计用量</summary><AiPresetsPanel api={api} bookId={book.book.id} bookRevision={knowledge.bookRevision}
         disabled={busy || loading || reading || studyDirty || reviewDirty || generating || archived || Boolean(operation || pending || pendingMessage)} onDirtyChange={setPresetsDirty}
         connections={connections.connections} initialTitle={`${taskName(kind, purpose)}预设`} initialKind={purpose ?? (memoryTask ? 'continue' : kind as 'plan' | 'continue' | 'rewrite')}

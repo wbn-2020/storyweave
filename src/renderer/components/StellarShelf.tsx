@@ -4,6 +4,7 @@ import { displayTime } from '../request'
 import { BookCover } from './LibraryPanels'
 import { StudioIcon } from './StudioIcon'
 import { genreTone, STELLAR_GENRES } from './stellar/Genres'
+import { StellarEmpty } from './stellar/StellarEmpty'
 import { StellarTooltip } from './stellar/StellarTooltip'
 import { useBookPreview } from './stellar/useBookPreview'
 import ui from './stellar/stellar.module.css'
@@ -58,7 +59,11 @@ export function StellarShelf({ api, scope, books, busy, onOpen, onWrite, onEdit,
     </div>
     <div className={styles.shelfLayout}><div>
       {visible.length ? <div className={`${styles.bookGrid} ${mode === 'grid' ? styles.shelfGrid : styles.shelfList}`}>{visible.slice(currentPage * 6, currentPage * 6 + 6).map((item) => <StellarBookCard key={`${scope}:${item.id}`} api={api} scope={scope} book={item} busy={busy} onOpen={onOpen} onWrite={onWrite} onEdit={onEdit} />)}</div>
-        : <div className={ui.empty}><StudioIcon name={query || genre ? 'search' : 'books'} size={32} /><h3>{query || genre ? '没有匹配的作品' : archived ? '暂无归档作品' : '开始你的第一部作品'}</h3><div className={ui.actions}>{query || genre ? <button className={ui.button} type="button" onClick={() => { setQuery(''); setGenre('') }}>清空筛选</button> : <><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}>新建作品</button><button className={ui.button} type="button" disabled={busy} onClick={onImport}>导入稿件</button></>}</div></div>}
+        : <StellarEmpty icon={query || genre ? 'search' : 'read'} title={query || genre ? '没有匹配的作品' : archived ? '暂无归档作品' : books.length ? '暂无未归档作品' : '从一句话开始'}
+          description={query || genre ? '试试其他书名或题材，或清空筛选查看作品。' : archived ? '归档后的作品仍可阅读和导出。' : books.length ? '可新建作品，或切换到“已归档”查看作品。' : '从一句话故事种子开始，或导入已有的 TXT / Markdown 稿件。'}
+          hint={query || genre ? '清空筛选后查看已有作品' : archived ? '归档作品可在作品资料中解除归档' : books.length ? '已有作品可在“已归档”中查看' : '开始你的第一个故事吧'}>
+          {query || genre ? <button className={ui.button} type="button" onClick={() => { setQuery(''); setGenre('') }}>清空筛选</button> : <><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}><StudioIcon name="plus" size={20} />新建作品</button><button className={ui.button} type="button" disabled={busy} onClick={onImport}>导入稿件</button></>}
+        </StellarEmpty>}
       {pageCount > 1 && <div className={ui.pagination}><button className={ui.button} type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button><span>{currentPage + 1} / {pageCount}</span><button className={ui.button} type="button" disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>下一页</button></div>}
     </div><aside className={`${styles.sideColumn} ${styles.shelfSidebar}`} aria-label="书库工具"><section className={styles.sideSection}><h2><StudioIcon name="clock" size={18} />最近更新</h2><ul className={`${styles.queue} ${styles.recentBooks}`}>{recent.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={busy} onClick={() => onOpen(item.id)}><span className={styles.recentCover}><BookCover api={api} workspaceScope={scope} book={item} /></span><span>{item.title}<small>{item.genre || '未设置题材'}</small><small>{displayTime(item.updatedAt)}</small></span></button></li>)}</ul></section>
       <section className={`${styles.sideSection} ${styles.shelfImport}`}><StudioIcon name="notes" size={40} /><h2>导入作品</h2><p>TXT / Markdown</p><button className={ui.button} type="button" disabled={busy} onClick={onImport}><StudioIcon name="plus" size={16} />导入作品</button></section><button className={ui.ghost} type="button" disabled={busy} onClick={onRecover}><StudioIcon name="history" size={16} />找回未登记作品</button></aside></div>
