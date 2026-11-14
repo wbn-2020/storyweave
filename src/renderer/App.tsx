@@ -78,7 +78,7 @@ const styles = { ...sharedStyles, ...shellStyles }
 interface Props { api?: StudioApi }
 type ViewState = 'loading' | 'ready' | 'error'
 type StudioSurface = 'home' | 'shelf' | 'book' | 'write'
-type WorkspaceTool = 'knowledge' | 'galaxy' | 'timeline' | 'notes' | 'workbench' | 'calendar' | 'media' | 'living' | 'forge'
+type WorkspaceTool = 'knowledge' | 'galaxy' | 'timeline' | 'notes' | 'workbench' | 'calendar' | 'media' | 'living' | 'forge' | 'weave'
 type WriteAsideMode = 'companion' | 'ai' | 'meta' | 'collapsed'
 type Modal =
   | { kind: 'forge'; initialKind?: ForgeKind; personId?: string }

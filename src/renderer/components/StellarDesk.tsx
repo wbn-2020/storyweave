@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
-import type { BookSnapshot, StudioApi, WorkspaceSnapshot } from '../../contracts/api'
+import type { BookSnapshot, BookSummary, StudioApi, WorkspaceSnapshot } from '../../contracts/api'
 import { isCalendarSnapshot, type CalendarSnapshot } from '../../contracts/writing-calendar'
+import { isWeaveSnapshot, weaveTaskComplete, type WeaveSnapshot } from '../../contracts/weave-system'
+import { queueBackgroundRead } from '../background-reads'
 import { lastWritingBook, writingPosition } from '../writing-location'
 import { displayTime, request, statusLabels } from '../request'
 import { BookCover } from './LibraryPanels'
 import { StudioIcon } from './StudioIcon'
 import { GenrePicker, ProgressRing } from './stellar/Genres'
 import { StellarEmpty } from './stellar/StellarEmpty'
+import { StellarTooltip } from './stellar/StellarTooltip'
 import { useBookPreview } from './stellar/useBookPreview'
 import { StellarBookCard } from './StellarShelf'
 import { CalendarYearHeatmap } from './CalendarYearHeatmap'
@@ -18,7 +21,58 @@ interface Props {
   onOpenWorkspace: () => void; onCreate: (genre?: string) => void; onImport: () => void; onShelf: () => void
   onRecover: () => void; onPreferences: () => void; onOverview: (bookId: string) => void
   onOpenBook: (bookId: string, chapterId?: string) => void
-  onTool: (bookId: string, tool: 'calendar' | 'workbench' | 'living' | 'forge' | 'notes') => void
+  onTool: (bookId: string, tool: 'calendar' | 'workbench' | 'living' | 'forge' | 'notes' | 'weave') => void
+}
+
+function DeskWeaveSummary({ api, scope, book, bookRevision, disabled, onOpen }: {
+  api: StudioApi; scope: string; book: BookSummary; bookRevision: number; disabled: boolean; onOpen: () => void
+}) {
+  const [attempt, setAttempt] = useState(0)
+  const [result, setResult] = useState<{ key: string; api: StudioApi; snapshot?: WeaveSnapshot; error?: string } | null>(null)
+  const key = JSON.stringify([scope, book.id, bookRevision, attempt])
+  const current = result?.key === key && result.api === api ? result : null
+  const snapshot = current?.snapshot
+  useEffect(() => {
+    let active = true
+    void queueBackgroundRead(async () => {
+      if (!active) return
+      const value = await request(() => api.getWeaveSystem({ bookId: book.id }))
+      if (!active) return
+      // 书库、作品、版本或服务变化后立即隔离旧摘要；队列中的过期读取也不再发送。
+      setResult(!value.ok ? { key, api, error: value.error.message }
+        : !isWeaveSnapshot(value.data, book.id) || value.data.bookRevision < bookRevision
+          ? { key, api, error: '系统版本不匹配，请重新读取。' }
+          : { key, api, snapshot: value.data })
+    })
+    return () => { active = false }
+  }, [api, scope, book.id, bookRevision, key])
+
+  if (!snapshot) return <section className={styles.sideSection} aria-label="织星系统读取状态" aria-busy={!current}>
+    {current?.error ? <div className={ui.error} role="alert">{current.error}<button className={ui.button} type="button" disabled={disabled} title={disabled ? '请等待当前操作完成' : '重新读取织星系统'} onClick={() => setAttempt((value) => value + 1)}><StudioIcon name="refresh" size={16} />重试</button></div>
+      : <p role="status">正在读取织星系统…</p>}
+  </section>
+  if (snapshot.requiresUpgrade || !snapshot.fields) return null
+  const fields = snapshot.fields
+  const daily = fields.tasks.filter((task) => task.active && task.kind === 'daily')
+  const complete = daily.filter(weaveTaskComplete).length
+  // 待领取只统计启用且完成未领的任务；冷却和归档仍交给原系统页核对与确认。
+  const pending = fields.tasks.filter((task) => task.active && !task.claimed && weaveTaskComplete(task))
+  const cooling = pending.filter((task) => task.kind === 'daily' && fields.cooldownUntil > fields.storyMinute).length
+  const archived = Boolean(book.archivedAt || snapshot.archived)
+  const rewardText = archived ? `已归档，只读 · ${pending.length} 项完成未领`
+    : pending.length ? `${pending.length} 项完成未领${cooling ? ` · ${cooling} 项剧情冷却中` : ''}` : '暂无已完成的未领取任务'
+  return <section className={`${styles.sideSection} ${styles.weaveSummary}`} aria-label={`${book.title} · 织星系统 · ${fields.name}`}>
+    <header className={styles.weaveSummaryHead}><h2 title={fields.name}><StudioIcon name="star" size={18} />织星系统</h2>
+      <StellarTooltip><button className={`${ui.icon} ${ui.ghost}`} type="button" disabled={disabled} aria-label="打开织星系统" title={disabled ? '请等待当前操作完成' : '打开织星系统'} onClick={onOpen}><StudioIcon name="more" size={18} /></button></StellarTooltip>
+    </header>
+    <dl className={styles.weaveSummaryRows}>
+      <div><dt>今日任务<small>剧情日</small></dt><dd aria-label={`剧情每日任务：已完成 ${complete} 项，共 ${daily.length} 项`}>{daily.length ? <><strong>{complete}</strong><span>/ {daily.length}</span></> : <span>未设置</span>}</dd></div>
+      <div><dt><StudioIcon name="star" size={16} />{fields.currency}</dt><dd><strong>{fields.points.toLocaleString('zh-CN')}</strong></dd></div>
+    </dl>
+    <button className={styles.weaveSummaryRewards} type="button" disabled={disabled} aria-label={`查看任务与奖励：${rewardText}`} title={disabled ? '请等待当前操作完成' : '在织星系统中查看任务与奖励'} onClick={onOpen}>
+      <StudioIcon name="gift" size={28} /><span>待领取奖励<small>{rewardText}</small></span><StudioIcon name="chevron" size={18} />
+    </button>
+  </section>
 }
 
 export function StellarDesk({ api, workspace, currentBook, busy, onOpenWorkspace, onCreate, onImport, onShelf,
@@ -115,6 +169,8 @@ export function StellarDesk({ api, workspace, currentBook, busy, onOpenWorkspace
           </details>}
         </div>
         <aside className={styles.sideColumn} aria-label="创作记录与待办">
+          {api && scope && featured && <DeskWeaveSummary key={JSON.stringify([scope, featured.id])} api={api} scope={scope} book={featured}
+            bookRevision={Math.max(featured.revision, book?.book.revision ?? 0)} disabled={blocked} onOpen={() => onTool(featured.id, 'weave')} />}
           <section className={styles.sideSection}>
             <h2><StudioIcon name="compass" size={18} />今日目标</h2>
             {currentCalendar?.error ? <div className={ui.error} role="alert">{currentCalendar.error}<button className={ui.button} type="button" onClick={() => setCalendarAttempt((value) => value + 1)}>重试</button></div>

@@ -7,6 +7,23 @@
 .desk > .sideColumn { padding-left: var(--space-5); border-left: 1px solid var(--color-line); gap: var(--space-3); }
 .desk .sideSection { border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: var(--bg-surface); padding: var(--space-4); }
 .desk .sideSection h2 { font-size: var(--text-lg); }
+.desk .weaveSummary { border-color: var(--color-warning); background: linear-gradient(135deg, var(--color-warning-soft), transparent 70%), var(--bg-surface); }
+.weaveSummaryHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
+.weaveSummary .weaveSummaryHead h2 { min-width: 0; margin: 0; color: var(--color-warning-text); }
+.weaveSummaryRows { display: grid; gap: var(--space-2); margin: 0; }
+.weaveSummaryRows > div { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-width: 0; min-height: 56px; padding: var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--bg-subtle); }
+.weaveSummaryRows dt { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.weaveSummaryRows dt > svg { flex-shrink: 0; color: var(--color-warning-text); }
+.weaveSummaryRows dt > small { color: var(--color-muted); font-size: var(--text-xs); }
+.weaveSummaryRows dd { display: flex; align-items: baseline; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-1); margin: 0; font-family: var(--font-num); }
+.weaveSummaryRows dd > strong { color: var(--color-warning-text); font-size: 24px; font-weight: 500; }
+.weaveSummaryRows dd > span { color: var(--color-ink-secondary); font-size: var(--text-sm); }
+.weaveSummaryRewards { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: var(--control-height); padding: var(--space-4) 0 0; border: 0; color: var(--color-ink-secondary); background: transparent; text-align: left; }
+.weaveSummaryRewards > svg { flex-shrink: 0; color: var(--color-warning-text); }
+.weaveSummaryRewards > span { flex: 1; min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.weaveSummaryRewards small { display: block; margin-top: var(--space-1); color: var(--color-muted); font-size: var(--text-xs); }
+.weaveSummaryRewards:hover:not(:disabled) { color: var(--color-warning-text); }
+.weaveSummaryRewards:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .continuePanel { padding: var(--space-4); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: var(--bg-surface); }
 .continuePanel .sectionHead { margin-bottom: var(--space-3); }
 .continuePanel .sectionHead h2 { color: var(--color-accent); }
