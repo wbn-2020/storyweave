@@ -23,7 +23,7 @@ export interface WritingCalendarPanelProps {
 
 const kindLabels: Record<CalendarEntryFields['kind'], string> = { writing: '写作计划', deadline: '截止日期', publication: '发布计划', idea: '灵感整理' }
 const sourceLabels = { manual: '常规编辑 / 手工记录', ai: 'AI 采用', import: '导入', restore: '恢复' }
-const weekdays = ['一', '二', '三', '四', '五', '六', '日']
+const weekdays = ['日', '一', '二', '三', '四', '五', '六']
 function adjacentMonth(month: string, offset: number): string {
   const date = new Date(`${month}-01T12:00:00Z`)
   date.setUTCMonth(date.getUTCMonth() + offset)
@@ -70,7 +70,10 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   const tool = useToolSession({ api, disabled, onDirtyChange, onUnknown, isProtected: () => syncRef.current })
   const [today, setToday] = useState(localDate)
   const dates = useMemo(() => calendarMonthDates(month), [month])
-  const leading = (new Date(`${month}-01T12:00:00Z`).getUTCDay() + 6) % 7
+  // 原图以周日开头并保留六周；相邻月只补日期，不用本月快照补造活动点。
+  const leading = new Date(`${month}-01T12:00:00Z`).getUTCDay()
+  const previousMonthDays = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 0)).getUTCDate()
+  const trailing = 42 - leading - dates.length
   const readonly = Boolean(book.book.archivedAt || snapshot?.archived)
   const externalChange = Boolean(snapshot && book.book.revision > snapshot.bookRevision)
   const creationMetrics = !syncRequired && !tool.pending && snapshot?.today === today && snapshot.bookRevision === book.book.revision ? snapshot.creationMetrics : undefined
@@ -276,7 +279,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
               </header>
               <div className={styles.weekdays} aria-hidden="true">{weekdays.map((day) => <span key={day}>{day}</span>)}</div>
               <div className={styles.grid} role="group" aria-label={`${monthLabel(month)}，方向键选择日期`}>
-                {Array.from({ length: leading }, (_, index) => <span key={`empty-${index}`} aria-hidden="true" />)}
+                {Array.from({ length: leading }, (_, index) => <span key={`previous-${index}`} className={styles.outsideDay} aria-hidden="true"><span className={styles.dayNumber}>{previousMonthDays - leading + index + 1}</span></span>)}
                 {dates.map((date, index) => {
                   const day = days.get(date)!
                   const due = day.events.some((entry) => entry.kind === 'deadline' && !entry.done)
@@ -289,6 +292,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
                     <span className={styles.visuallyHidden}>{day.events.length} 项日程 · 净增 {signed(day.statistics.net)} 字</span>
                   </button>
                 })}
+                {Array.from({ length: trailing }, (_, index) => <span key={`next-${index}`} className={styles.outsideDay} aria-hidden="true"><span className={styles.dayNumber}>{index + 1}</span></span>)}
               </div>
               <footer className={styles.calendarFooter}><span>{statistics?.scheduled} 条日程 · 已完成 {statistics?.completed} · 逾期 {statistics?.overdue}</span>
                 <button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => changeMonth(today.slice(0, 7), today)}>今天</button></footer>

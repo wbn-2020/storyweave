@@ -96,7 +96,8 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
     {notice && <p className={styles.muted} role="status">{notice}</p>}
     {error && <p className={styles.error} role="alert">{error}</p>}
     {stale && <p className={styles.warning}>作品已有新版本，下面保留的是旧统计，请刷新全年记录。</p>}
-    {!data ? <div className={styles.yearEmpty}><span aria-hidden="true">01 · 02 · 03 · 04 · 05 · 06 · 07 · 08 · 09 · 10 · 11 · 12</span><p>{reading ? '全年记录正在汇集' : '读取全年后显示每日热度和月度趋势'}</p></div> : <>
+    {!data ? <div className={styles.yearEmpty}><span aria-hidden="true">01 · 02 · 03 · 04 · 05 · 06 · 07 · 08 · 09 · 10 · 11 · 12</span><p>{reading ? '全年记录正在汇集' : '读取全年后显示每日热度和月度趋势'}</p></div>
+      : activeDays === 0 ? <div className={styles.yearEmpty} role="status"><StudioIcon name="grid" size={32} /><strong>全年暂无创作记录</strong><p>本次读取的 {year} 年没有已保存的增删记录。日程计划和仅登记时长不计为字数变化。</p></div> : <>
       <div className={styles.heatmapScroll} tabIndex={0} role="region" aria-label="全年每日新增字数表">
         <table className={styles.heatmap}>
           <caption className={styles.visuallyHidden}>{year} 年每日新增字数，颜色不扣除删除量</caption>
@@ -119,7 +120,7 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
   </section>
     <div className={styles.annualAnalytics}>
       <section className={styles.annualTrend} aria-label="全年月度净增趋势"><h4><StudioIcon name="chart" size={24} />月度趋势<span>{year} 年 · 净增字数</span></h4>
-        {!data ? <div className={styles.trendEmpty}><StudioIcon name="chart" size={28} /><p>{reading ? '正在汇集全年记录…' : '尚未读取全年记录'}</p></div> : <>
+        {!data || activeDays === 0 ? <div className={styles.trendEmpty}><StudioIcon name="chart" size={28} /><p>{!data ? reading ? '正在汇集全年记录…' : '尚未读取全年记录' : '本次全年记录尚无字数变化'}</p></div> : <>
           <svg className={styles.monthlyTrend} viewBox="0 0 620 188" role="img" aria-label={`${year} 年各月净增字数，包含删除后的净变化${stale ? '，统计已过期' : ''}`}>
             <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1"><stop offset="0" className={styles.trendFillTop} /><stop offset="1" className={styles.trendFillBottom} /></linearGradient></defs>
             {months.map((item, index) => <line key={item} x1={64 + index * 48} y1="16" x2={64 + index * 48} y2="152" />)}
@@ -128,8 +129,8 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
             <polyline className={styles.trendLine} points={trendPoints} />
             {monthlyNet.map((net, index) => <g key={months[index]}><circle cx={64 + index * 48} cy={trendY(net)} r="3" data-negative={net < 0}><title>{months[index]}：净增 {net.toLocaleString()} 字</title></circle><text x={64 + index * 48} y="178" textAnchor="middle">{index + 1} 月</text></g>)}
           </svg>
-          <p className={styles.muted}>当前作品 · 已保存版本 · 作品版本 {data.revision}{stale ? '，统计已过期' : ''}</p>
         </>}
+        {data && <p className={styles.muted}>当前作品 · 已保存版本 · 作品版本 {data.revision}{stale ? '，统计已过期' : ''}</p>}
       </section>
       {children}
     </div>
