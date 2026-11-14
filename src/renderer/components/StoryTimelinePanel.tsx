@@ -373,6 +373,7 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
     else groups.push({ ...group, items: [item] })
   }
   const people = [...new Map((page?.items ?? []).flatMap((item) => item.people.map((person) => [person.id, person] as const))).values()]
+  // 只有取得本页快照后才能确认无候选冲突，读取失败或待核对不能按空数组判定。
   const conflicts = (page?.items ?? []).filter((item) => item.conflictState === 'candidate')
   const laneTone = (item: StoryTimelineItem) => {
     const personIndex = people.findIndex((person) => item.people.some((entry) => entry.id === person.id))
@@ -469,11 +470,15 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
                       <h3>{listing.order === 'story' && !column.unknown ? [...new Set(column.items.map((item) => timeLabel(item.time)))].join(' · ') : column.label}<small>{column.unknown ? '未确定顺序' : listing.order === 'story' ? column.label : '已登记披露位置'}</small></h3>
                       <div className={styles.timeAxis} aria-hidden="true"><span /></div>
                       <div className={styles.eventStack} data-stagger={columnIndex % 2}>
-                        {column.items.map((item) => <button type="button" key={item.id} className={styles.eventCard} data-tone={laneTone(item)} data-unknown={column.unknown}
+                        {column.items.map((item) => <button type="button" key={item.id} className={styles.eventCard} data-tone={laneTone(item)} data-unknown={column.unknown || item.time.kind === 'unknown'}
                           disabled={disabled} aria-pressed={selectedId === item.id} aria-controls={detailId} data-conflict={item.conflictState === 'candidate'} data-inverted={inverted.has(item.id)}
                           onClick={() => void selectRecord(item.id)}>
                           <span className={styles.eventHeading}><StudioIcon name={item.kind === 'event' ? 'spark' : item.kind === 'cognition' ? 'bulb' : item.kind === 'relation' ? 'workflow' : 'notes'} size={24} /><strong>{item.title}</strong></span>
                           {inverted.has(item.id) && <span className={styles.invertedTag} title="同页较早披露的条目具有更大的故事排序值">章序倒置</span>}
+                          {(item.conflictState === 'candidate' || item.time.kind === 'unknown') && <span className={styles.eventFlags}>
+                            {item.conflictState === 'candidate' && <span data-state="conflict">候选冲突</span>}
+                            {item.time.kind === 'unknown' && <span data-state="unknown">故事时间未知</span>}
+                          </span>}
                           <span className={styles.description}>{item.description || pointLabel(item)}</span>
                           <span className={styles.peopleTags}>{item.people.map((person) => <span key={person.id}>{person.name}</span>)}</span>
                           <span className={styles.eventFooter}>{item.disclosure.state === 'located' && item.disclosure.chapterPosition !== null ? `第 ${item.disclosure.chapterPosition + 1} 章` : disclosureText(item.disclosure)}</span>
@@ -511,8 +516,11 @@ function TimelineContent({ api, book, busy, error, onClose, onOpenRecords }: Sto
           </>}
         </section>
         <section id={detailId} className={styles.detailPane} aria-label="故事记录详情">
-          <section className={styles.conflictPanel} aria-label="时间冲突提醒"><h3><span>时间冲突</span><StudioIcon name="bolt" size={20} /></h3>
-            {conflicts.length ? <ul>{conflicts.map((item, index) => <li key={item.id}><h4><StudioIcon name="spark" size={20} />候选冲突 {index + 1}</h4><strong>{item.title}</strong><p>{item.description || '已有候选冲突标记，请核对来源记录。'}</p><button type="button" className={styles.conflictJump} disabled={disabled} onClick={() => void selectRecord(item.id)}>跳转</button></li>)}</ul> : <p className={styles.help}>本页没有标记为候选冲突的记录。</p>}
+          <section className={styles.conflictPanel} aria-label="时间冲突提醒" aria-busy={listLoading}><h3><span>时间冲突</span><StudioIcon name="bolt" size={20} /></h3>
+            {listLoading ? <div className={styles.loading} role="status"><p>正在核对本页候选冲突…</p><div className={styles.skeleton} aria-hidden="true" /></div>
+              : !page ? <><p className={styles.help} role="status">{pending ? '原只读请求结果待核对，暂不能判断本页冲突。' : listError ? '时间线读取失败，暂不能判断本页冲突。' : '尚未取得本页时间线，暂不能判断冲突。'}</p>
+                {!pending && <button type="button" className={shared.button} disabled={disabled} onClick={() => refreshSnapshot()}>从第一页重读</button>}</>
+              : conflicts.length ? <ul>{conflicts.map((item, index) => <li key={item.id}><h4><StudioIcon name="spark" size={20} />候选冲突 {index + 1}</h4><strong>{item.title}</strong><p>{item.description || '已有候选冲突标记，请核对来源记录。'}</p><button type="button" className={styles.conflictJump} disabled={disabled} onClick={() => void selectRecord(item.id)}>跳转</button></li>)}</ul> : <p className={styles.help}>本页没有标记为候选冲突的记录。</p>}
             <button type="button" className={styles.allConflicts} disabled={disabled} onClick={() => leave(() => onOpenRecords(manageKind))}>管理故事记录<StudioIcon name="chevron" size={20} /></button>
           </section>
           {reading === 'detail' && <p className={styles.help} role="status">正在核对来源记录、选中条目与页面双版本…</p>}

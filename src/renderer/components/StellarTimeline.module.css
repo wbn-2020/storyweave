@@ -69,7 +69,7 @@
 .eventCard { --event-color: var(--color-accent); display: flex; flex-direction: column; align-items: stretch; gap: var(--space-3); min-width: 0; min-height: 180px; padding: var(--space-4); border: 1px solid color-mix(in srgb,var(--event-color) 40%,var(--color-line)); border-radius: var(--radius-lg); background: linear-gradient(145deg,color-mix(in srgb,var(--event-color) 7%,var(--bg-subtle)),var(--bg-subtle)); color: var(--color-ink); text-align: left; }
 .eventCard[data-tone='1'] { --event-color: var(--color-accent-2); }.eventCard[data-tone='2'] { --event-color: var(--color-warning); }
 .eventCard[data-unknown='true'] { --event-color: var(--color-muted); }
-.eventCard[data-inverted='true'] { border-style: dashed; }.eventCard[data-conflict='true'] { border-color: var(--color-danger); }
+.eventCard[data-inverted='true'] { border-style: dashed; }.eventCard[data-conflict='true'] { --event-color: var(--color-danger); border-color: var(--color-danger); }
 .eventCard[aria-pressed='true'],.eventCard:hover:not(:disabled) { border-color: var(--event-color); box-shadow: var(--shadow-glow); }
 .eventHeading { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-lg); }
 .eventHeading svg { flex-shrink: 0; box-sizing: content-box; padding: var(--space-2); border: 1px solid color-mix(in srgb,var(--event-color) 40%,var(--color-line)); border-radius: var(--radius-pill); color: var(--event-color); background: color-mix(in srgb,var(--event-color) 10%,var(--bg-surface)); }
@@ -77,6 +77,10 @@
 .peopleTags { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: auto; }
 .peopleTags > span,.invertedTag { width: fit-content; padding: var(--space-1) var(--space-2); border: 1px solid var(--color-line); border-radius: var(--radius-pill); color: var(--event-color); background: var(--bg-raised); font-size: var(--text-xs); }
 .invertedTag { color: var(--color-danger); background: var(--color-danger-soft); }
+.eventFlags { display: flex; flex-wrap: wrap; gap: var(--space-2); font-size: var(--text-xs); }
+.eventFlags > span { padding: var(--space-1) var(--space-2); border: 1px solid currentColor; border-radius: var(--radius-pill); }
+.eventFlags > [data-state='conflict'] { color: var(--color-danger); background: var(--color-danger-soft); }
+.eventFlags > [data-state='unknown'] { color: var(--color-muted); background: var(--bg-raised); }
 .eventFooter { align-self: flex-end; font-size: var(--text-xs); color: var(--event-color); }
 .eventCard > small { font-size: var(--text-xs); color: var(--color-muted); }
 .timeColumn[data-unknown='true'] > h3 { color: var(--color-muted); }
