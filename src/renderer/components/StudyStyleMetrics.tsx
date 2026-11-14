@@ -9,6 +9,23 @@ export function StudyStyleMetrics({ source, facts }: {
   facts: Pick<StyleCard, 'rhythm' | 'dialogue' | 'senses' | 'diction'>
 }) {
   const measurement = useMemo(() => source ? measureStudyStyle(source.text) : null, [source?.text])
+  const curve = useMemo(() => {
+    if (!measurement?.sentences) return null
+    const counts = new Map(measurement.lengthCounts.map((entry) => [entry.length, entry.count]))
+    const maximumLength = measurement.lengthCounts.at(-1)!.length
+    const maximumCount = Math.max(...counts.values())
+    const positions = new Set([0, maximumLength])
+    // 给每个实际句长补相邻的零频次位置，避免跨过未出现的句长画出虚构分布，也不创建五万个空点。
+    for (const length of counts.keys()) {
+      positions.add(length)
+      if (length > 0) positions.add(length - 1)
+      if (length < maximumLength) positions.add(length + 1)
+    }
+    const points = [...positions].sort((a, b) => a - b).map((length) =>
+      `${42 + length / maximumLength * 193},${60 - (counts.get(length) ?? 0) / maximumCount * 48}`).join(' ')
+    return { maximumLength, maximumCount, points,
+      label: `按句长逐字统计频次，横轴为每句字符数，纵轴为句数。${measurement.lengthCounts.map((entry) => `${entry.length} 字：${entry.count} 句`).join('；')}。其余句长为零句。` }
+  }, [measurement])
   const maximum = Math.max(1, ...(measurement?.bins.map((bin) => bin.count) ?? []))
   const quoteShare = measurement && measurement.textCharacters > 0 && measurement.quotedCharacters !== null
     ? measurement.quotedCharacters / measurement.textCharacters : null
@@ -23,6 +40,16 @@ export function StudyStyleMetrics({ source, facts }: {
   return <div className={styles.metrics}>
     <div className={styles.grid}>
       <div className={styles.distribution}><figure>
+        {curve && <svg className={styles.curve} viewBox="0 0 240 84" role="img" aria-label={curve.label}>
+          <line className={styles.gridline} x1="42" y1="12" x2="235" y2="12" />
+          <line className={styles.axis} x1="42" y1="60" x2="235" y2="60" />
+          <polygon className={styles.curveArea} points={`42,60 ${curve.points} 235,60`} />
+          <polyline className={styles.curveLine} points={curve.points} />
+          <text className={styles.tick} x="37" y="15" textAnchor="end">{curve.maximumCount}</text>
+          <text className={styles.tick} x="37" y="63" textAnchor="end">0</text>
+          <text className={styles.tick} x="42" y="78" textAnchor="middle">0</text>
+          <text className={styles.tick} x="235" y="78" textAnchor="end">{curve.maximumLength} 字</text>
+        </svg>}
         {measurement?.sentences ? <svg className={styles.histogram} viewBox="0 0 240 132" role="img" aria-label={distributionLabel}>
           <line className={styles.gridline} x1="42" y1="17" x2="235" y2="17" />
           <line className={styles.axis} x1="42" y1="100" x2="235" y2="100" />
@@ -62,6 +89,7 @@ export function StudyStyleMetrics({ source, facts }: {
     <details className={styles.method}>
       <summary>统计口径 · {source ? `${source.title} · v${source.revision}` : '固定来源缺失'}</summary>
       <p>仅统计此卡对应的固定参考片段全文，不代表整部作品或作者风格。句长使用中文原生分句，按非空白 Unicode 字符计数，包含标点与引号；纯标点片段不计句数。</p>
+      <p>上方曲线按每个实际句长统计句数，未出现的句长记零；下方柱图按五档汇总，两图使用同一份原文。折线连接实际计数，不是概率密度或多个来源的对比。</p>
       <p>占比分母排除空白及配对用引号，保留其他标点。识别中文双引号、直角引号及未转义的英文双引号；嵌套内容只计一次。引号不完整时不显示比例，引文也可能不是人物对白。感官与措辞保留模型分析文字。</p>
     </details>
   </div>

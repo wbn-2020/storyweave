@@ -3,6 +3,7 @@ import { countCharacters } from '../contracts/manuscript'
 export interface StudyStyleMeasurement {
   sentences: number
   bins: { label: string; count: number }[]
+  lengthCounts: { length: number; count: number }[]
   textCharacters: number
   quotedCharacters: number | null
 }
@@ -14,6 +15,7 @@ export function measureStudyStyle(text: string): StudyStyleMeasurement | null {
     { label: '41-60', count: 0 }, { label: '61+', count: 0 },
   ]
   let sentences = 0
+  const lengthCounts = new Map<number, number>()
   // 原生分句后沿用正文的非空白码点计数；标点、引号计入句长，纯标点片段不算句子。
   const segmenter = new Intl.Segmenter('zh-CN', { granularity: 'sentence' })
   for (const { segment } of segmenter.segment(text)) {
@@ -21,6 +23,7 @@ export function measureStudyStyle(text: string): StudyStyleMeasurement | null {
     const length = countCharacters(segment)
     const index = length <= 10 ? 0 : length <= 20 ? 1 : length <= 40 ? 2 : length <= 60 ? 3 : 4
     bins[index]!.count += 1
+    lengthCounts.set(length, (lengthCounts.get(length) ?? 0) + 1)
     sentences += 1
   }
 
@@ -48,5 +51,6 @@ export function measureStudyStyle(text: string): StudyStyleMeasurement | null {
     textCharacters += 1
     if (quotes.length) quotedCharacters += 1
   }
-  return { sentences, bins, textCharacters, quotedCharacters: balanced && !quotes.length ? quotedCharacters : null }
+  return { sentences, bins, lengthCounts: [...lengthCounts].sort(([a], [b]) => a - b).map(([length, count]) => ({ length, count })),
+    textCharacters, quotedCharacters: balanced && !quotes.length ? quotedCharacters : null }
 }

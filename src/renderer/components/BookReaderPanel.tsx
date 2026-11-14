@@ -4,6 +4,7 @@ import type { InlineNode } from '../../contracts/manuscript'
 import { DISPLAY_FONT_SIZES, DISPLAY_LINE_HEIGHTS, PAPER_TONE_LABELS, displayPreferenceStyle, type DisplayPreferences } from '../display-preferences'
 import { displayTime, request } from '../request'
 import { StudioIcon } from './StudioIcon'
+import { ReaderAnnotations, useReaderAnnotations } from './ReaderAnnotations'
 import { paginateReaderDocument, type ReaderBlock, type ReaderPage } from './reader-pages'
 import shared from '../StellarShared.module.css'
 import paperStyles from './PaperSurface.module.css'
@@ -82,6 +83,7 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
   const [search, setSearch] = useState('')
   const [directoryPage, setDirectoryPage] = useState(0)
   const [directoryOpen, setDirectoryOpen] = useState(false)
+  const [annotationsEnabled, setAnnotationsEnabled] = useState(true)
   const [directoryJump, setDirectoryJump] = useState(0)
   const [paperJump, setPaperJump] = useState(0)
   const current = useRef({ api, busy })
@@ -227,7 +229,7 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
   const directoryPageCount = Math.max(1, Math.ceil(filtered.length / DIRECTORY_PAGE_SIZE))
   const visibleDirectoryPage = Math.min(directoryPage, directoryPageCount - 1)
   const visibleChapters = filtered.slice(visibleDirectoryPage * DIRECTORY_PAGE_SIZE, (visibleDirectoryPage + 1) * DIRECTORY_PAGE_SIZE)
-  const page = loaded?.pages[pageIndex]
+  const annotations = useReaderAnnotations({ api, bookId, enabled: annotationsEnabled && loaded !== null, busy })
   const blocked = busy || loading !== null || pending !== null
 
   function canRead() {
@@ -300,9 +302,9 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
   return <section className={styles.panel} aria-label="作品阅读" onKeyDown={(event) => {
     if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return
     const target = event.target as HTMLElement
-    // 原生选择器先处理自身的退出；其余按设置、目录、阅读页的顺序收起。
+    // 原生选择器先处理自身的退出；先收起批注或设置，下一次 Esc 才离开阅读。
     if (target.closest('select')) return
-    const expanded = target.closest('details[open]') ?? (appearance.current?.open ? appearance.current : null)
+    const expanded = target.closest('details[open]') ?? paper.current?.querySelector('details[data-reader-annotation][open]') ?? (appearance.current?.open ? appearance.current : null)
     if (expanded instanceof HTMLDetailsElement) {
       event.preventDefault(); event.stopPropagation(); expanded.open = false; expanded.querySelector('summary')?.focus(); return
     }
@@ -333,6 +335,19 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
           <label>纸色<select value={displayPreferences.paperTone} disabled={busy} onChange={(event) => onPreferencesChange({ paperTone: event.target.value as DisplayPreferences['paperTone'] })}>
             {Object.entries(PAPER_TONE_LABELS).map(([tone, label]) => <option key={tone} value={tone}>{label}</option>)}
           </select></label>
+          <label>显示批注<input type="checkbox" role="switch" className={styles.annotationSwitch} checked={annotationsEnabled} disabled={busy}
+            onChange={(event) => setAnnotationsEnabled(event.target.checked)} /></label>
+          {annotationsEnabled && <div className={styles.annotationStatus}>
+            {annotations.state.kind === 'ready' ? <p role="status">批注读取时作品版本 {annotations.state.snapshot.bookRevision}</p>
+              : annotations.state.kind === 'idle' ? <p>等待读取正文</p>
+                : annotations.state.kind === 'loading' ? <p role="status">正在读取批注…</p> : <p>{annotations.state.message}</p>}
+            {annotations.state.kind === 'pending' ? <>
+              <button type="button" className={shared.button} disabled={busy || annotations.checking} aria-busy={annotations.checking}
+                onClick={() => void annotations.queryOriginal()}>{annotations.checking ? '核对中…' : '核对原请求'}</button>
+              <details><summary>请求详情</summary><p>workbench.get · {annotations.state.requestId}</p></details>
+            </> : (annotations.state.kind === 'ready' || annotations.state.kind === 'failed') &&
+              <button type="button" className={shared.button} disabled={busy} onClick={() => void annotations.load()}>{annotations.state.kind === 'ready' ? '刷新批注' : '重试读取批注'}</button>}
+          </div>}
           <p className={styles.help}>只读阅读 · 更新内容请刷新版本</p>
           {catalog && <p className={styles.scopeNote}>共 {catalog.chapters.length} 章，{unfinalizedCount} 章未定稿。{scope === 'finalized' ? '当前仅阅读作者定稿。' : '当前阅读工作稿。'}</p>}
           <button type="button" className={shared.button} disabled={blocked} onClick={refreshCatalog}>{loading === 'catalog' ? '读取目录…' : '刷新版本'}</button>
@@ -342,6 +357,8 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
         <button type="button" className={styles.exitButton} disabled={busy} onClick={close}>退出阅读</button>
       </header>
       {error && <p className={styles.error} role="alert">{error}</p>}
+      {annotationsEnabled && (annotations.state.kind === 'failed' || annotations.state.kind === 'pending' || annotations.state.kind === 'unavailable') &&
+        <p className={styles.notice} role={annotations.state.kind === 'unavailable' ? 'status' : 'alert'}>批注：{annotations.state.message}</p>}
       {preferencesWarning && <section className={styles.preferencesWarning} aria-label="显示偏好保存提示">
         <p role="alert">{preferencesWarning}</p>
         <button type="button" className={shared.button} disabled={busy} onClick={onRetryPreferencesSave}>保存当前显示偏好</button>
@@ -415,7 +432,10 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
               </div>}
               {loaded && <>
                 {loaded.selectedRevision.characterCount === 0 && <p className={styles.paperState}>这个版本尚无文字。</p>}
-                <div className={styles.prose}>{page?.blocks.map((block) => <PageBlock key={`${block.id}:${block.part}`} block={block} />)}</div>
+                {selected && <ReaderAnnotations key={`${selected.id}:${loaded.selectedRevision.id}`}
+                  snapshot={annotationsEnabled && annotations.state.kind === 'ready' ? annotations.state.snapshot : null}
+                  chapterId={selected.id} revisionId={loaded.selectedRevision.id} pages={loaded.pages} pageIndex={pageIndex}
+                  renderBlock={(block) => <PageBlock block={block} />} />}
               </>}
             </div>
           </div>

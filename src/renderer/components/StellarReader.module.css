@@ -21,6 +21,11 @@
 .settings { position: absolute; top: calc(100% + var(--space-2)); right: 0; z-index: var(--z-dropdown); display: grid; gap: var(--space-4); width: min(320px,calc(100dvw - var(--space-8))); max-height: calc(100dvh - var(--topbar-height) - var(--space-8)); overflow: auto; overscroll-behavior: contain; padding: var(--space-5); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); color: var(--color-ink); background: var(--bg-surface); box-shadow: var(--shadow-md); }
 .panel .settings label { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .panel .settings select { width: 120px; min-height: var(--control-height); }
+.panel .settings .annotationSwitch { appearance: auto; flex-shrink: 0; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; accent-color: var(--color-accent); cursor: pointer; }
+.annotationStatus { display: grid; gap: var(--space-2); font-size: var(--text-xs); line-height: 1.8; overflow-wrap: anywhere; }
+.annotationStatus > p { color: var(--color-muted); }
+.annotationStatus > button { justify-self: start; }
+.annotationStatus details p { margin-top: var(--space-2); }
 .help,.scopeNote { font-size: var(--text-xs); color: var(--color-muted); line-height: 1.8; }
 .preferencesWarning { composes: warning from './stellar/Workspace.module.css'; }
 .pending { composes: warning from './stellar/Workspace.module.css'; }
@@ -67,6 +72,27 @@
 .skeleton span { display: block; height: var(--space-3); width: 100%; background: var(--paper-line); }
 .skeleton span:last-child { width: 65%; }
 .prose { font-family: var(--font-manuscript); white-space: pre-wrap; overflow-wrap: anywhere; }
+.prose[data-annotations='true'] { margin-inline-start: var(--space-8); }
+.annotatedBlock { position: relative; min-width: 0; }
+.annotatedBlock[data-annotated='true']::before { content: ""; position: absolute; inset-inline-start: calc(-1 * var(--space-12)); inset-block: var(--space-2); width: 3px; border-radius: var(--radius-pill); background: var(--paper-focus); }
+.annotation { position: relative; white-space: normal; text-indent: 0; }
+.panel .annotation > summary { position: absolute; inset-inline-start: calc(-1 * var(--space-8)); inset-block-start: 0; display: flex; align-items: center; justify-content: center; width: var(--control-compact); min-height: var(--control-compact); list-style: none; border-radius: var(--radius-md); color: var(--paper-focus); cursor: pointer; }
+.annotation > summary::-webkit-details-marker { display: none; }
+.annotationDot { width: 9px; height: 9px; flex-shrink: 0; border: 1px solid currentColor; border-radius: var(--radius-pill); background: currentColor; }
+.annotation > summary:hover .annotationDot,.annotation[open] > summary .annotationDot { outline: 1px solid currentColor; outline-offset: 4px; }
+.annotationDetails { max-height: min(360px,50dvh); overflow: auto; overscroll-behavior: contain; padding: var(--space-4); margin-bottom: var(--space-4); border: 1px solid var(--paper-control-line); border-radius: var(--radius-md); color: var(--color-paper-ink); background: var(--paper-search-panel); font: var(--text-sm)/1.8 var(--font-ui); }
+.annotationDetails > header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.panel .annotationDetails h4 { margin: 0; font: 600 var(--text-sm)/1.8 var(--font-ui); }
+.annotationDetails article + article { border-top: 1px solid var(--paper-line); padding-top: var(--space-3); margin-top: var(--space-3); }
+.annotationDetails dl { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.annotationDetails dt,.annotationMeta,.annotationDetails > footer { font-size: var(--text-xs); color: var(--color-paper-muted); }
+.annotationDetails dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.annotationPaging { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-3); }
+.annotationPaging > span { color: var(--color-paper-muted); font-size: var(--text-xs); }
+.annotationPaging > button { min-height: var(--control-compact); padding: var(--space-1) var(--space-3); border: 1px solid var(--paper-control-line); border-radius: var(--radius-md); color: var(--paper-control-ink); background: var(--paper-input); font: inherit; }
+.annotationDetails > footer { border-top: 1px solid var(--paper-line); padding-top: var(--space-3); margin-top: var(--space-3); }
+.chapterAnnotation { position: relative; min-height: var(--control-compact); margin-bottom: var(--space-4); font: var(--text-xs)/var(--control-compact) var(--font-ui); color: var(--color-paper-muted); white-space: normal; }
+.annotationWarning { padding-block: var(--space-3); color: var(--paper-warning); font: var(--text-sm)/1.8 var(--font-ui); overflow-wrap: anywhere; }
 .fragment p { text-indent: var(--manuscript-indent,2em); margin: 0 0 1em; min-height: 1lh; }
 .fragment h4,.fragment h5,.fragment h6 { font-family: var(--font-manuscript); margin: 1em 0; line-height: 1.5; }
 .fragment h4 { font-size: 1.3em; }
@@ -108,6 +134,10 @@
   .chapterPosition { font-size: var(--text-xs); }
 }
 @media (forced-colors:active) {
+  .panel .annotation > summary { color: LinkText; }
+  .annotationDot,.annotatedBlock[data-annotated='true']::before { forced-color-adjust: none; background: LinkText; color: LinkText; }
+  .annotationDetails { border-color: CanvasText; color: CanvasText; background: Canvas; }
+  .annotationDetails dt,.annotationMeta,.annotationDetails > footer { color: CanvasText; }
   .panel .scopes button[aria-pressed='true'],.panel .chapterNavigation > .returnButton { border-color: Highlight; background: Canvas; color: Highlight; }
   .chapterDivider::before,.chapterDivider::after { background: CanvasText; }
 }
