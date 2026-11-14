@@ -66,7 +66,7 @@ const rendererCommands = new Set<RendererCommand>([
   'generation.start', 'generation.cancel', 'generation.select', 'generation.adopt',
   'connection.probe', 'connection.probe.cancel',
   'connection.keys.open', 'connection.keys.close',
-  'workspace.get', 'workspace.select', 'book.create', 'book.get',
+  'workspace.get', 'workspace.select', 'book.create', 'book.get', 'book.summary',
   'workbench.get', 'workbench.brief', 'workbench.scene', 'workbench.scenes.reorder', 'workbench.issue', 'workbench.applyIssue', 'workbench.goal', 'workbench.session',
   'inspiration.list', 'inspiration.thumbnail', 'inspiration.upgrade', 'inspiration.save', 'inspiration.copy', 'inspiration.import',
   'calendar.get', 'calendar.save',

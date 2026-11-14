@@ -81,6 +81,7 @@ const api: StudioApi = {
   selectWorkspace: () => invoke('workspace.select'),
   createBook: (input) => invoke('book.create', input),
   getBook: (input) => invoke('book.get', input),
+  getBookSummary: (input) => invoke('book.summary', input),
   updateBook: (input) => invoke('book.update', input),
   createVolume: (input) => invoke('volume.create', input),
   renameVolume: (input) => invoke('volume.rename', input),

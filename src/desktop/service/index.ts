@@ -148,6 +148,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     }
     case 'book.create': return repository.createBook(request.payload)
     case 'book.get': return repository.getBook(request.payload)
+    case 'book.summary': return repository.getBookSummary(request.payload)
     case 'knowledge.status': return repository.getKnowledgeStatus(request.payload)
     case 'knowledge.upgrade': return repository.upgradeKnowledge(request.payload)
     case 'knowledge.list': return knowledge.listItems(request.payload)

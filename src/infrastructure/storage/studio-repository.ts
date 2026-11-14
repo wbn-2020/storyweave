@@ -404,6 +404,18 @@ export class StudioRepository {
     })
   }
 
+  getBookSummary(input: BookInput): BookSummary {
+    return perform(() => {
+      const bookId = requiredId(payload(input).bookId).toLowerCase()
+      if (!this.requireStudio().prepare('SELECT id FROM books WHERE id = ?').get(bookId)) {
+        throw new DomainError({ code: 'NOT_FOUND', message: '当前书库中不存在这部作品。' })
+      }
+      // 统计只读单书元信息，不切换正文连接，也不以浏览统计刷新目录缓存。
+      const db = this.openOrphanReadOnly(bookId)
+      try { return this.readBookMetadata(db, bookId) } finally { db.close() }
+    })
+  }
+
   getBook(input: BookInput): BookSnapshot {
     return perform(() => {
       const bookId = requiredId(payload(input).bookId).toLowerCase()

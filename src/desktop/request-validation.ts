@@ -175,6 +175,7 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
       return { id, command, payload: { rootPath: requiredText(payload.rootPath, '书库目录', 32767) } }
     case 'book.create':
       return { id, command, payload: parseCreateBookInput(payload) }
+    case 'book.summary':
     case 'book.get':
       return { id, command, payload: { bookId: requiredId(payload.bookId) } }
     case 'chapter.create':

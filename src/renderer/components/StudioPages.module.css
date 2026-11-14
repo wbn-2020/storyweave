@@ -85,11 +85,13 @@
 .shelfLayout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: var(--space-6); align-items: start; }
 .shelfLayout .bookCard[data-archived='true'] { opacity: 1; }
 .shelfLayout .bookCard[data-archived='true'] .bookMain > span { filter: saturate(.25); }
+.shelfLayout .bookCard[data-archived='false'] .bookState[data-lifecycle='active'] { border-color: var(--color-accent-2); background: color-mix(in srgb, var(--color-accent-2) 24%, var(--bg-deep)); color: var(--color-ink); }
 .shelfStatistics { display: flex; align-items: baseline; gap: var(--space-6); flex-wrap: wrap; margin: 0 !important; color: var(--color-ink-secondary) !important; }
 .shelfStatistics > span { display: flex; align-items: baseline; gap: var(--space-2); font-size: var(--text-lg); }
 .shelfStatistics strong { font: 600 28px/1.2 var(--font-num); color: var(--color-accent); }
 .shelfStatistics > span:nth-child(2) strong { color: var(--color-accent-2); }
 .shelfStatistics > span:nth-child(3) strong { color: var(--color-warning); }
+.shelfStatisticsStatus { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); color: var(--color-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .shelfFilters { margin-bottom: var(--space-5); }
 .shelfFilters .filters { margin-block: var(--space-3) 0; }
 .genreFilters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }

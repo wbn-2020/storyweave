@@ -272,6 +272,7 @@ export interface CommandMap {
   'workspace.open': { input: { rootPath: string }; output: WorkspaceSnapshot }
   'book.create': { input: CreateBookInput; output: BookSnapshot }
   'book.get': { input: BookInput; output: BookSnapshot }
+  'book.summary': { input: BookInput; output: BookSummary }
   'book.update': { input: UpdateBookInput; output: BookSnapshot }
   'volume.create': { input: CreateVolumeInput; output: BookSnapshot }
   'volume.rename': { input: RenameVolumeInput; output: BookSnapshot }
@@ -413,6 +414,7 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   selectWorkspace(): Promise<Result<WorkspaceSnapshot | null>>
   createBook(input: CreateBookInput): Promise<Result<BookSnapshot>>
   getBook(input: BookInput): Promise<Result<BookSnapshot>>
+  getBookSummary(input: BookInput): Promise<Result<BookSummary>>
   updateBook(input: UpdateBookInput): Promise<Result<BookSnapshot>>
   createVolume(input: CreateVolumeInput): Promise<Result<BookSnapshot>>
   renameVolume(input: RenameVolumeInput): Promise<Result<BookSnapshot>>

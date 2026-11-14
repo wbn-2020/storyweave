@@ -8,6 +8,7 @@ import { genreTone, STELLAR_GENRES } from './stellar/Genres'
 import { StellarEmpty } from './stellar/StellarEmpty'
 import { StellarTooltip } from './stellar/StellarTooltip'
 import { useBookPreview } from './stellar/useBookPreview'
+import { useShelfStatistics } from './stellar/useShelfStatistics'
 import ui from './stellar/stellar.module.css'
 import styles from './StudioPages.module.css'
 
@@ -23,13 +24,13 @@ export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdi
     <button className={styles.bookMain} type="button" disabled={busy} onClick={() => onOpen(book.id)} aria-label={`打开${book.title}的作品总览`}>
       <BookCover api={api} workspaceScope={scope} book={book} />
       <div><h3>{book.title}</h3><small className={styles.bookGenre}>{book.genre || '未设置题材'}</small>
-        <span className={`${ui.chip} ${styles.bookState}`} data-tone={book.archivedAt || lifecycle === 'finished' ? 'warning' : 'accent'}>{book.archivedAt ? '已归档' : lifecycle === 'finished' ? '已完结' : lifecycle === 'kickstarting' ? '孵化中' : '创作中'}</span>
+        <span className={`${ui.chip} ${styles.bookState}`} data-lifecycle={lifecycle} data-tone={book.archivedAt || lifecycle === 'finished' ? 'warning' : lifecycle ? 'accent' : undefined}>{book.archivedAt ? '已归档' : lifecycle === 'finished' ? '已完结' : lifecycle === 'kickstarting' ? '孵化中' : lifecycle === 'active' ? '连载中' : loading ? '读取中' : '状态待核对'}</span>
         {Boolean(snapshot?.chapters.length) && <div className={styles.bookProgress} title={`已定稿 ${final} / ${snapshot!.chapters.length} 章`}><progress className={ui.progress} value={final} max={snapshot!.chapters.length} aria-label={`已定稿 ${final} / ${snapshot!.chapters.length} 章`} /><span>{Math.round(final / snapshot!.chapters.length * 100)}%</span></div>}
         <small>{snapshot ? `${count!.toLocaleString()} 字 · ${snapshot.chapters.length} 章` : loading ? '读取作品…' : '统计暂不可用'}</small>
       </div>
     </button>
     {error && <div className={ui.error} role="status">{error}<button className={ui.ghost} type="button" disabled={busy} onClick={retry}>重试</button></div>}
-    <div className={styles.bookFoot}>{onEdit ? <button className={ui.ghost} type="button" disabled={busy} onClick={() => onEdit(book)} aria-label={`编辑${book.title}资料`} title="作品资料"><StudioIcon name="more" size={16} /></button> : <span>{displayTime(book.updatedAt)}</span>}<button className={ui.ghost} type="button" disabled={busy} onClick={() => onWrite(book.id)}>{book.archivedAt ? '打开阅读' : lifecycle === 'kickstarting' ? '继续孵化' : '继续写作'}<StudioIcon name="arrow" size={16} /></button></div>
+    <div className={styles.bookFoot}>{onEdit ? <button className={ui.ghost} type="button" disabled={busy} onClick={() => onEdit(book)} aria-label={`编辑${book.title}资料`} title="作品资料"><StudioIcon name="more" size={16} /></button> : <span>{displayTime(book.updatedAt)}</span>}<button className={ui.ghost} type="button" disabled={busy} onClick={() => onWrite(book.id)}>{book.archivedAt ? '打开阅读' : lifecycle === 'kickstarting' ? '继续孵化' : lifecycle ? '继续写作' : '打开作品'}<StudioIcon name="arrow" size={16} /></button></div>
   </article>
 }
 
@@ -54,9 +55,11 @@ export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onW
   const pageCount = Math.max(1, Math.ceil(visible.length / 6))
   const currentPage = Math.min(page, pageCount - 1)
   const genres = [...STELLAR_GENRES.map((item) => item.label), ...new Set(books.map((item) => item.genre).filter((item) => item && !STELLAR_GENRES.some((genre) => genre.label === item)))]
-  const activeCount = books.filter((item) => !item.archivedAt).length
+  const statistics = useShelfStatistics(api, scope, books)
   return <section className={styles.page} aria-label="作品书架"><div className={styles.pageInner}>
-    <header className={styles.heading}><div><h1 className={styles.visuallyHidden}>作品书架</h1><p className={styles.shelfStatistics}><span><strong>{books.length}</strong>部作品</span><span><strong>{activeCount}</strong>部未归档</span><span><strong>{books.length - activeCount}</strong>部已归档</span></p></div><div className={ui.actions}><div className={ui.tabs} role="group" aria-label="书架布局"><StellarTooltip><button type="button" title="列表视图" aria-label="列表视图" aria-pressed={mode === 'list'} onClick={() => setMode('list')}><StudioIcon name="list" size={20} /></button></StellarTooltip><StellarTooltip><button type="button" title="网格视图" aria-label="网格视图" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')}><StudioIcon name="grid" size={20} /></button></StellarTooltip></div><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}><StudioIcon name="plus" size={16} />新建作品</button></div></header>
+    <header className={styles.heading}><div><h1 className={styles.visuallyHidden}>作品书架</h1><p className={styles.shelfStatistics} aria-busy={statistics.loading}><span><strong>{books.length}</strong>部作品</span><span><strong>{statistics.unknown ? '—' : statistics.activeCount}</strong>部连载中</span><span><strong>{statistics.unknown ? '—' : statistics.finishedCount}</strong>部已完结</span></p>
+      {statistics.unknown > 0 && <div className={styles.shelfStatisticsStatus} role="status"><span>{statistics.loading ? '正在核对作品状态…' : statistics.error ? `统计未完成：${statistics.error}` : `${statistics.unknown} 部作品未提供生命周期，连载与完结统计暂不可用。`}</span>{statistics.error && statistics.canRetry && <button className={ui.ghost} type="button" disabled={busy || statistics.loading} onClick={statistics.retry}>重新读取统计</button>}</div>}
+    </div><div className={ui.actions}><div className={ui.tabs} role="group" aria-label="书架布局"><StellarTooltip><button type="button" title="列表视图" aria-label="列表视图" aria-pressed={mode === 'list'} onClick={() => setMode('list')}><StudioIcon name="list" size={20} /></button></StellarTooltip><StellarTooltip><button type="button" title="网格视图" aria-label="网格视图" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')}><StudioIcon name="grid" size={20} /></button></StellarTooltip></div><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}><StudioIcon name="plus" size={16} />新建作品</button></div></header>
     <div className={styles.shelfFilters}>
       <div className={styles.genreFilters} role="group" aria-label="题材筛选"><button type="button" aria-pressed={!genre} onClick={() => { setGenre(''); setPage(0) }}><StudioIcon name="grid" size={16} />全部</button>
         {genres.map((item) => <button key={item} type="button" aria-pressed={genre === item} onClick={() => { setGenre(item); setPage(0) }}>{STELLAR_GENRES.find((genre) => genre.label === item) && <StudioIcon name={STELLAR_GENRES.find((genre) => genre.label === item)!.icon} size={16} />}{item}</button>)}</div>
