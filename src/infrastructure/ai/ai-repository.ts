@@ -28,7 +28,7 @@ import { creativeRef, parseCreativeResources } from '../../contracts/creative-re
 import { AiMemoryTaskRepository } from './memory-task-repository'
 import { parseLivingWritingContext } from '../../contracts/living'
 import { isReviewPromptVersion } from '../../contracts/review'
-import { STUDY_CARDS_PROMPT_VERSION } from '../../contracts/study'
+import { isStudyCardsPromptVersion } from '../../contracts/study'
 import { requireLiving } from '../workbench/living-state'
 import { requireForge } from '../workbench/forge-state'
 import { forgeInstructionKind, forgeUsesChapter } from '../../contracts/forge'
@@ -172,7 +172,7 @@ function storedContext(row: RunRow, bookId: string): AiContextPacket {
         value.perspective !== undefined || characterContext !== undefined || value.estimatedInputTokens !== estimated || value.reservedOutputTokens !== config.maxOutputTokens ||
         estimated + config.maxOutputTokens > config.contextWindow) throw storageFailure()
     } else {
-      const supportedPrompt = value.purpose === 'review' && isReviewPromptVersion(value.promptVersion) || value.purpose === 'study' && value.promptVersion === STUDY_CARDS_PROMPT_VERSION ? true : characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
+      const supportedPrompt = value.purpose === 'review' && isReviewPromptVersion(value.promptVersion) || value.purpose === 'study' && isStudyCardsPromptVersion(value.promptVersion) ? true : characterContext ? isAiCharacterContextPromptVersion(value.promptVersion)
         : value.promptVersion === (isAiMemoryTask(row.kind) ? AI_MEMORY_PROMPT_VERSION : value.perspective === 'reader' ? AI_READER_CONTEXT_PROMPT_VERSION : contextSummaries.length ? AI_CONTEXT_SUMMARY_PROMPT_VERSION : AI_PROMPT_VERSION)
       if (!supportedPrompt) throw storageFailure()
     }

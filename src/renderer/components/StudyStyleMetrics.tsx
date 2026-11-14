@@ -1,14 +1,16 @@
 import { useMemo } from 'react'
 import type { CreativeResource } from '../../contracts/creative-resources'
 import type { StyleCard } from '../../contracts/study-card'
-import { measureStudyStyle } from '../study-style-metrics'
+import { measureStudyStyle, measureStudyStyleAnnotations } from '../study-style-metrics'
+import { STUDY_SENSE_LABELS } from '../../contracts/study-card'
 import styles from './StudyStyleMetrics.module.css'
 
 export function StudyStyleMetrics({ source, facts }: {
   source: CreativeResource | undefined
-  facts: Pick<StyleCard, 'rhythm' | 'dialogue' | 'senses' | 'diction'>
+  facts: StyleCard
 }) {
   const measurement = useMemo(() => source ? measureStudyStyle(source.text) : null, [source?.text])
+  const annotations = useMemo(() => source ? measureStudyStyleAnnotations(source.text, facts) : null, [source?.text, facts])
   const curve = useMemo(() => {
     if (!measurement?.sentences) return null
     const counts = new Map(measurement.lengthCounts.map((entry) => [entry.length, entry.count]))
@@ -36,6 +38,10 @@ export function StudyStyleMetrics({ source, facts }: {
     : measurement.quotedCharacters === null ? '引号未配对，比例未知' : '没有可统计的字符'
   const quoteLabel = quoteShare === null ? quoteUnavailable
     : `成对引号内 ${measurement!.quotedCharacters} 字符，占 ${measurement!.textCharacters} 个非空白、非引号字符的 ${(quoteShare * 100).toFixed(1)}%。此比例不等同人物对白比例。`
+  const annotationUnavailable = !source ? '固定来源缺失，标注未知' : facts.version === 1 ? '旧卡未提供结构化标注' : !annotations ? '标注来源无法核对' : '未提供标注'
+  const sensoryLabel = annotations?.total
+    ? `感官标注分布，共 ${annotations.total} 条。${annotations.senses.map((entry) => `${entry.label} ${entry.count} 条`).join('；')}。归类为模型判断，不代表全文真实感官比例。`
+    : annotationUnavailable
 
   return <div className={styles.metrics}>
     <div className={styles.grid}>
@@ -82,15 +88,44 @@ export function StudyStyleMetrics({ source, facts }: {
         <dl className={styles.facts}><dt>对白组织</dt><dd tabIndex={0}>{facts.dialogue || '尚未提供'}</dd></dl>
       </div>
       <dl className={`${styles.facts} ${styles.qualitative}`}>
-        <div><dt>感官偏好</dt><dd tabIndex={0}>{facts.senses || '尚未提供'}</dd></div>
-        <div><dt>措辞与动词</dt><dd tabIndex={0}>{facts.diction || '尚未提供'}</dd></div>
+        <div><dt>感官偏好</dt><dd className={styles.visualFacts}>
+          {annotations?.total ? <>
+            <svg className={styles.sensoryBar} viewBox="0 0 240 20" role="img" aria-label={sensoryLabel}>
+              {annotations.senses.map((entry, index) => {
+                const start = annotations.senses.slice(0, index).reduce((sum, item) => sum + item.count, 0)
+                return <rect className={styles.sense} data-sense={entry.sense} key={entry.sense}
+                  x={start / annotations.total * 240} y="2" width={entry.count / annotations.total * 240 - 2} height="16" rx="3">
+                  <title>{entry.label}：{entry.count} 条标注</title>
+                </rect>
+              })}
+            </svg>
+            <ul className={styles.senseLegend} aria-label="感官标注数量">{annotations.senses.map((entry) =>
+              <li key={entry.sense}><i className={styles.sense} data-sense={entry.sense} aria-hidden="true" />{entry.label} {entry.count}</li>)}</ul>
+            <p className={styles.annotationNote}>模型标注 · {annotations.total} 条</p>
+          </> : <p className={styles.annotationNote}>{annotationUnavailable}</p>}
+          <p className={styles.analysisText} tabIndex={0}>{facts.senses || '尚未提供感官分析'}</p>
+        </dd></div>
+        <div><dt>高频动词</dt><dd className={styles.visualFacts}>
+          {annotations?.verbs.length ? <>
+            <ul className={styles.verbTags} aria-label="模型动词候选，按固定原文字面次数排序">{annotations.verbs.map((entry) =>
+              <li key={entry.word} title={`${entry.word}：固定原文字面出现 ${entry.count} 次，词性为模型判断`}
+                aria-label={`${entry.word}，固定原文字面出现 ${entry.count} 次，模型动词候选`}>{entry.word}</li>)}</ul>
+            <p className={styles.annotationNote}>模型动词候选</p>
+          </> : <p className={styles.annotationNote}>{annotationUnavailable === '未提供标注' ? '未提供动词候选' : annotationUnavailable}</p>}
+          <p className={styles.analysisText} tabIndex={0}>{facts.diction || '尚未提供措辞分析'}</p>
+        </dd></div>
       </dl>
     </div>
     <details className={styles.method}>
       <summary>统计口径 · {source ? `${source.title} · v${source.revision}` : '固定来源缺失'}</summary>
       <p>仅统计此卡对应的固定参考片段全文，不代表整部作品或作者风格。句长使用中文原生分句，按非空白 Unicode 字符计数，包含标点与引号；纯标点片段不计句数。</p>
       <p>上方曲线按每个实际句长统计句数，未出现的句长记零；下方柱图按五档汇总，两图使用同一份原文。折线连接实际计数，不是概率密度或多个来源的对比。</p>
-      <p>占比分母排除空白及配对用引号，保留其他标点。识别中文双引号、直角引号及未转义的英文双引号；嵌套内容只计一次。引号不完整时不显示比例，引文也可能不是人物对白。感官与措辞保留模型分析文字。</p>
+      <p>占比分母排除空白及配对用引号，保留其他标点。识别中文双引号、直角引号及未转义的英文双引号；嵌套内容只计一次。引号不完整时不显示比例，引文也可能不是人物对白。</p>
+      <p>感官条仅按模型提供且逐字核对的标注计数；同一短语可跨感官分类，各算一条，不代表全文真实感官比例。动词由模型提出，只在本卡固定参考全文统计不重叠的字面次数；子词、同形词也可能命中，不代表完整分词或每次均为动词。未标注不代表不存在。</p>
+      {annotations && facts.version === 2 && <ul className={styles.evidence}>
+        {facts.annotations.senses.map((entry) => <li key={`${entry.sense}:${entry.quote}`}><strong>{STUDY_SENSE_LABELS[entry.sense]}</strong><q>{entry.quote}</q></li>)}
+        {facts.annotations.verbs.map((entry) => <li key={entry.word}><strong>动词候选：{entry.word}</strong><q>{entry.quote}</q></li>)}
+      </ul>}
     </details>
   </div>
 }

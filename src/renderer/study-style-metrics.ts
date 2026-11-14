@@ -1,4 +1,20 @@
 import { countCharacters } from '../contracts/manuscript'
+import { STUDY_SENSE_LABELS, validateStudyStyleSource, type StyleCard } from '../contracts/study-card'
+
+export function measureStudyStyleAnnotations(text: string, card: StyleCard) {
+  if (card.version !== 2 || !text.trim() || text.length > 50_000 || text.includes('\0')) return null
+  try { validateStudyStyleSource(card, text) } catch { return null }
+  const senses = (Object.keys(STUDY_SENSE_LABELS) as (keyof typeof STUDY_SENSE_LABELS)[])
+    .map((sense) => ({ sense, label: STUDY_SENSE_LABELS[sense], count: card.annotations.senses.filter((entry) => entry.sense === sense).length }))
+    .filter((entry) => entry.count > 0)
+  const verbs = card.annotations.verbs.map(({ word }) => {
+    let count = 0, offset = 0
+    // 候选由模型提出，本地只数不重叠的字面出现，不把子词命中或同形词当作词性结论。
+    while ((offset = text.indexOf(word, offset)) >= 0) { count += 1; offset += word.length }
+    return { word, count }
+  }).sort((left, right) => right.count - left.count)
+  return { senses, total: card.annotations.senses.length, verbs }
+}
 
 export interface StudyStyleMeasurement {
   sentences: number

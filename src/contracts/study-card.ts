@@ -2,9 +2,15 @@ import { DomainError, isRecord, requiredId, requiredInteger } from './api'
 
 export type StudyCardKind = 'beat' | 'style'
 export interface StudyBeat { title: string; action: string; outcome: string }
-interface StudyCardBase { version: 1; analysis: string; application: string; limits: string }
-export interface BeatCard extends StudyCardBase { beats: StudyBeat[] }
-export interface StyleCard extends StudyCardBase { rhythm: string; dialogue: string; senses: string; diction: string }
+interface StudyCardBase { analysis: string; application: string; limits: string }
+export interface BeatCard extends StudyCardBase { version: 1; beats: StudyBeat[] }
+export const STUDY_SENSE_LABELS = { visual: '视觉', auditory: '听觉', tactile: '触觉', olfactory: '嗅觉', gustatory: '味觉' } as const
+export interface StudyStyleAnnotations {
+  senses: { sense: keyof typeof STUDY_SENSE_LABELS; quote: string }[]
+  verbs: { word: string; quote: string }[]
+}
+interface StyleCardFields extends StudyCardBase { rhythm: string; dialogue: string; senses: string; diction: string }
+export type StyleCard = StyleCardFields & ({ version: 1; annotations?: never } | { version: 2; annotations: StudyStyleAnnotations })
 export interface BeatCardSource { id: string; revision: number; title: string; body: string }
 
 function invalid(): never { throw new DomainError({ code: 'INVALID_INPUT', message: '节拍或文风卡格式无效，请核对适用范围、限制和各项内容。' }) }
@@ -12,12 +18,41 @@ function text(value: unknown, maximum: number, required = false): string {
   if (typeof value !== 'string' || value.length > maximum || value.includes('\0') || required && !value.trim()) return invalid()
   return value
 }
+function parseStyleAnnotations(value: unknown): StudyStyleAnnotations {
+  if (!isRecord(value) || Object.keys(value).some((key) => !['senses', 'verbs'].includes(key)) ||
+    !Array.isArray(value.senses) || value.senses.length > 24 || !Array.isArray(value.verbs) || value.verbs.length > 8) return invalid()
+  const senses = value.senses.map((entry): StudyStyleAnnotations['senses'][number] => {
+    if (!isRecord(entry) || Object.keys(entry).some((key) => !['sense', 'quote'].includes(key)) ||
+      typeof entry.sense !== 'string' || !Object.hasOwn(STUDY_SENSE_LABELS, entry.sense)) return invalid()
+    return { sense: entry.sense as keyof typeof STUDY_SENSE_LABELS, quote: text(entry.quote, 240, true) }
+  })
+  const verbs = value.verbs.map((entry) => {
+    if (!isRecord(entry) || Object.keys(entry).some((key) => !['word', 'quote'].includes(key))) return invalid()
+    const word = text(entry.word, 16, true), quote = text(entry.quote, 240, true)
+    if (!/^[\p{L}\p{M}]+$/u.test(word) || !quote.includes(word)) return invalid()
+    return { word, quote }
+  })
+  if (new Set(senses.map((entry) => JSON.stringify(entry))).size !== senses.length ||
+    new Set(verbs.map((entry) => entry.word)).size !== verbs.length) return invalid()
+  return { senses, verbs }
+}
+export function validateStudyStyleSource(card: StyleCard, sourceText: string): void {
+  if (card.version === 1) return
+  // 标注仅允许引用同一固定参考；词性和感官归类仍是待作者核对的模型判断。
+  if ([...card.annotations.senses, ...card.annotations.verbs].some((entry) => !sourceText.includes(entry.quote))) {
+    throw new DomainError({ code: 'INVALID_INPUT', message: '文风标注引文不在同一固定参考原文中，原结果已保留，请核对来源。' })
+  }
+}
 export function isStudyCardKind(kind: string): kind is StudyCardKind { return kind === 'beat' || kind === 'style' }
 export function parseStudyCard(kind: StudyCardKind, value: unknown, draft = false): BeatCard | StyleCard {
-  const keys = ['version', 'analysis', 'application', 'limits', ...(kind === 'beat' ? ['beats'] : ['rhythm', 'dialogue', 'senses', 'diction'])]
-  if (!isRecord(value) || value.version !== 1 || Object.keys(value).some((key) => !keys.includes(key))) return invalid()
-  const base: StudyCardBase = { version: 1, analysis: text(value.analysis, 8000), application: text(value.application, 2000), limits: text(value.limits, 2000) }
-  if (kind === 'style') return { ...base, rhythm: text(value.rhythm, 4000), dialogue: text(value.dialogue, 4000), senses: text(value.senses, 4000), diction: text(value.diction, 4000) }
+  if (!isRecord(value) || value.version !== 1 && !(kind === 'style' && value.version === 2)) return invalid()
+  const keys = ['version', 'analysis', 'application', 'limits', ...(kind === 'beat' ? ['beats'] : ['rhythm', 'dialogue', 'senses', 'diction', ...(value.version === 2 ? ['annotations'] : [])])]
+  if (Object.keys(value).some((key) => !keys.includes(key))) return invalid()
+  const base = { version: 1 as const, analysis: text(value.analysis, 8000), application: text(value.application, 2000), limits: text(value.limits, 2000) }
+  if (kind === 'style') {
+    const fields = { ...base, rhythm: text(value.rhythm, 4000), dialogue: text(value.dialogue, 4000), senses: text(value.senses, 4000), diction: text(value.diction, 4000) }
+    return value.version === 2 ? { ...fields, version: 2, annotations: parseStyleAnnotations(value.annotations) } : fields
+  }
   if (!Array.isArray(value.beats) || value.beats.length < 1 || value.beats.length > 6) return invalid()
   return { ...base, beats: value.beats.map((beat) => {
     if (!isRecord(beat) || Object.keys(beat).some((key) => !['title', 'action', 'outcome'].includes(key))) return invalid()
