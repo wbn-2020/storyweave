@@ -56,6 +56,11 @@ function defaultFileName(title: string, format: BookExportFormat): string {
   return `织章_${title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 160).trim() || '作品导出'}.${bookExportExtension(format)}`
 }
 
+function isPreviewExpired(value: BookExportPreview): boolean {
+  const expiresAt = Date.parse(value.expiresAt)
+  return !Number.isFinite(expiresAt) || Date.now() >= expiresAt
+}
+
 function inlinePreview(nodes: InlineNode[]): ReactNode[] {
   return nodes.map((node, index) => {
     if (node.type === 'hardBreak') return <br key={index} />
@@ -95,6 +100,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   const [fileName, setFileName] = useState(() => defaultFileName(book.book.title, 'txt'))
   const [directory, setDirectory] = useState<BookExportDirectory | null>(null)
   const [choosingDirectory, setChoosingDirectory] = useState(false)
+  const [expiredToken, setExpiredToken] = useState<string | null>(null)
   const headingId = useId()
   const mounted = useRef(true)
   const prepareTicket = useRef(0)
@@ -130,6 +136,27 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   const docxOptions = options.docx ?? defaultDocxOptions
   const exported = receipt?.bookId === book.book.id ? receipt : null
   const alreadyExported = exported?.exportId === currentPreview?.token && Boolean(exported)
+  const previewExpired = Boolean(currentPreview && (expiredToken === currentPreview.token || isPreviewExpired(currentPreview)))
+
+  useEffect(() => {
+    if (!currentPreview) return
+    let timer: number | undefined
+    // 只为当前清单安排到期唤醒；休眠或窗口恢复后重新核对绝对时间，不轮询、不自动重发。
+    const checkExpiry = () => {
+      window.clearTimeout(timer)
+      const remaining = Date.parse(currentPreview.expiresAt) - Date.now()
+      if (!Number.isFinite(remaining) || remaining <= 0) setExpiredToken(currentPreview.token)
+      else timer = window.setTimeout(checkExpiry, Math.min(remaining, 2_147_483_647))
+    }
+    checkExpiry()
+    window.addEventListener('focus', checkExpiry)
+    document.addEventListener('visibilitychange', checkExpiry)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('focus', checkExpiry)
+      document.removeEventListener('visibilitychange', checkExpiry)
+    }
+  }, [currentPreview])
 
   useEffect(() => {
     mounted.current = true
@@ -243,6 +270,10 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   }
 
   async function readChapter(source: BookExportPreview, chapterId: string) {
+    if (expiredToken === source.token || isPreviewExpired(source)) {
+      setExpiredToken(source.token)
+      return
+    }
     const ticket = ++chapterTicket.current
     const bookKey = currentBook
     setReading(true); setChapterPreview(null); setReadError(null)
@@ -309,6 +340,11 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
 
   async function submit() {
     if (blocked || reading || exportInFlight.current || alreadyExported || !directory || fileNameProblem || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)) return
+    // 点击时再次检查，覆盖后台计时器尚未唤醒的间隙；最终版本与有效期仍由服务端核验。
+    if (previewExpired || isPreviewExpired(currentPreview)) {
+      setExpiredToken(currentPreview.token)
+      return
+    }
     exportInFlight.current = true
     setExporting(true); setReadError(null)
     try {
@@ -334,9 +370,14 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     {pendingRead && <p className={styles.pending} role="status">预览请求尚未确认，暂时保留当前选择。
       <button type="button" className={appStyles.button} disabled={checking || busy} onClick={() => void checkPending()}>{checking ? '查询中…' : '查询原请求结果'}</button>
     </p>}
-    {exported && <section className={styles.success} role="status" aria-label="导出成功"><StudioIcon name="check" size={24} /><div><strong>已导出 {exported.chapterCount} 章 · {exported.characterCount.toLocaleString()} 字</strong><p>{exported.filePath}</p><p>版本清单：{exported.manifestPath}</p></div><button type="button" className={appStyles.button} disabled={blocked} onClick={() => {
+    {exported && <section className={styles.success} role="status" aria-label="导出成功">
+      <span className={styles.successMark} aria-hidden="true"><StudioIcon name="check" size={48} /></span>
+      <div className={styles.successHeading}><strong>已导出 {exported.chapterCount} 章</strong><p>{exported.characterCount.toLocaleString()} 字 · 作品版本 {exported.bookRevision}</p></div>
+      <button type="button" className={appStyles.button} disabled={blocked} onClick={() => {
       void request(() => api.revealBookExport({ exportId: exported.exportId })).then((result) => { if (!result.ok && mounted.current) setReadError(result.error.message) })
-    }}><StudioIcon name="folder" />在文件夹中显示</button></section>}
+    }}><StudioIcon name="folder" size={20} />打开所在文件夹</button>
+      <dl className={styles.successPaths}><div><dt>成品</dt><dd>{exported.filePath}</dd></div><div><dt>版本清单</dt><dd>{exported.manifestPath}</dd></div></dl>
+    </section>}
     <div className={styles.exportWorkspace}>
       <section className={styles.chapterList} aria-labelledby={headingId}>
     <div className={styles.selectionBar}>
@@ -361,7 +402,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
                 <div className={styles.chapterMetadata}><small>{entry?.volumeTitle ? `${entry.volumeTitle} · ` : ''}{statusLabels[chapter.status]}</small>
                   {entry?.revisionSequence !== null && entry?.revisionSequence !== undefined && <small>版本 {entry.revisionSequence} · {options.scope === 'working' ? '工作稿' : '作者定稿'}</small>}
                   <small>{entry?.characterCount?.toLocaleString() ?? '—'} 字</small>
-                  {entry?.state === 'included' && currentPreview && <button type="button" className={styles.previewButton} disabled={blocked} aria-pressed={chapterPreview?.chapterId === chapter.id} onClick={() => void readChapter(currentPreview, chapter.id)}>预览正文</button>}
+                  {entry?.state === 'included' && currentPreview && <button type="button" className={styles.previewButton} disabled={blocked || previewExpired} title={previewExpired ? '清单已过期，请重新核对清单。' : undefined} aria-pressed={chapterPreview?.chapterId === chapter.id} onClick={() => void readChapter(currentPreview, chapter.id)}>预览正文</button>}
                 </div>
               </li>
             })}</ul>
@@ -377,7 +418,8 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     <section className={styles.configuration} aria-label="格式与排版">
     <h3>输出格式</h3>
     <fieldset className={styles.formats} disabled={blocked}><legend className={styles.srOnly}>成品格式</legend>{exportFormats.map((format) => <label className={styles.formatCard} data-selected={options.format === format.id} key={format.id}>
-      <StudioIcon name={format.icon} size={32} /><strong>{format.name}</strong><small>{format.detail}</small><input type="radio" name={`${headingId}-format`} value={format.id} checked={options.format === format.id} onChange={() => updateOptions({ format: format.id })} />
+      <StudioIcon name={format.icon} size={32} /><strong>{format.name}</strong><small>{format.detail}</small><input className={styles.srOnly} type="radio" name={`${headingId}-format`} value={format.id} checked={options.format === format.id} onChange={() => updateOptions({ format: format.id })} />
+      <span className={styles.formatSelected} aria-hidden="true"><StudioIcon name="check" size={20} /></span>
     </label>)}</fieldset>
     <div className={styles.destinationFields}>
       <label className={styles.destinationField} htmlFor={`${headingId}-filename`}>文件名
@@ -436,6 +478,10 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
         {showManifest && <><p className={styles.help}>清单保留作品与章节身份、固定修订、字数和跳过原因。预览 30 分钟内有效。</p><pre className={styles.manifest}>{JSON.stringify(currentPreview.manifest, null, 2)}</pre></>}
       </details>
     </> : <p className={styles.empty}>尚未生成清单。选择章节与格式后核对本次交付版本。</p>}
+      {currentPreview && <p className={styles.previewValidity} data-expired={previewExpired && !alreadyExported} role="status">
+        <StudioIcon name={previewExpired && !alreadyExported ? 'clock' : 'info'} size={20} />
+        {alreadyExported ? '本次清单已导出，可查看成品与版本清单。' : previewExpired ? '清单已过期，请重新核对清单后导出；当前选择保留。' : '预览 30 分钟内有效，版本变化需重新预览。'}
+      </p>}
     </section>
       <details className={styles.manuscript} aria-label="固定版本正文预览" aria-busy={reading}><summary>核对固定版本正文 · {chapterPreview?.title ?? '生成清单后可读'}</summary>
         <h3>{chapterPreview ? chapterPreview.title : '正文预览'}</h3>
@@ -444,7 +490,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     </div>
     <p className={styles.help}>保存时新建 .{bookExportExtension(options.format)} 成品和同名 .manifest.json 版本清单。正文成品只包含选定内容；完整恢复请使用作品恢复包。单次成品上限 2 GiB。</p>
     <div className={styles.actions}>
-      <button type="button" className={appStyles.primaryButton} aria-busy={exporting} disabled={blocked || reading || alreadyExported || !directory || Boolean(fileNameProblem) || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '生成导出'}</button>
+      <button type="button" className={appStyles.primaryButton} aria-busy={exporting} disabled={blocked || reading || alreadyExported || previewExpired || !directory || Boolean(fileNameProblem) || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} title={previewExpired && !alreadyExported ? '清单已过期，请重新核对清单。' : undefined} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '生成导出'}</button>
       <button type="button" className={appStyles.button} disabled={busy || exporting || choosingDirectory} onClick={onClose}>取消</button>
     </div>
   </Dialog>
