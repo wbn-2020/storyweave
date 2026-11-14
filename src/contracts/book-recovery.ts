@@ -106,7 +106,7 @@ function book(value: unknown): BookSummary {
     ...(data.lifecycle === undefined ? {} : { lifecycle: data.lifecycle as BookSummary['lifecycle'] }) }
 }
 function schema(value: unknown): number {
-  const version = requiredInteger(value, '作品格式版本', 24)
+  const version = requiredInteger(value, '作品格式版本', 26)
   if (version < 2) throw invalid()
   return version
 }
