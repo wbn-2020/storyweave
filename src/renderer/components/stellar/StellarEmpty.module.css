@@ -17,9 +17,11 @@
 }
 .empty[data-tone='warning'] { --empty-tone: var(--color-warning-text); }
 .empty[data-tone='model'] { --empty-tone: var(--genre-urban); }
+.empty[data-tone='danger'] { --empty-tone: var(--color-danger); border-color: color-mix(in srgb,var(--color-danger) 60%,var(--color-line-strong)); }
 .symbol { display: grid; place-items: center; width: calc(var(--space-12) + var(--space-4)); height: calc(var(--space-12) + var(--space-4)); flex-shrink: 0; color: var(--empty-tone); }
 .symbol svg { width: 100%; height: 100%; }
 .empty .title { margin: 0; color: var(--color-ink); font: 600 var(--text-title)/1.4 var(--font-ui); }
+.empty[data-tone='danger'] .title { align-self: stretch; padding: var(--space-2) var(--space-4); border: 1px solid var(--color-danger-soft); border-radius: var(--radius-lg); background: var(--color-danger-soft); }
 .description { max-width: 44ch; margin: 0; color: var(--color-ink-secondary); font-size: var(--text-sm); line-height: 1.8; }
 .actions { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: var(--space-3); width: 100%; min-width: 0; margin-top: var(--space-2); }
 .actions > button { min-width: 0; max-width: 100%; border-radius: var(--radius-pill); padding-inline: var(--space-5); white-space: normal; overflow-wrap: anywhere; }
@@ -29,10 +31,22 @@
 .hint svg { flex-shrink: 0; color: var(--empty-tone); }
 :global(:root[data-studio-theme='stellar']) .empty[data-tone='warning'] .actions > button:first-child { background: var(--color-warning); border-color: var(--color-warning); color: var(--color-accent-ink); }
 :global(:root[data-studio-theme='stellar']) .empty[data-tone='model'] .actions > button:first-child { background: color-mix(in srgb,var(--empty-tone) 18%,var(--bg-surface)); border-color: var(--empty-tone); color: var(--color-ink); }
-@media (max-width:599px) { .empty { padding: var(--space-6) var(--space-4); }.empty .title { font-size: var(--text-lg); } }
+:global(:root[data-studio-theme='stellar']) .empty[data-tone='danger'] .actions > button:first-child { background: var(--color-danger); border-color: var(--color-danger); color: var(--color-accent-ink); }
+/* 状态提示与正文共存；限制占高并从顶部滚动，低窗口中仍能访问全部操作。 */
+.empty[data-compact='true'] { flex: 0 1 auto; justify-content: flex-start; min-height: 0; max-height: 35%; margin: var(--space-3) var(--space-5); padding: var(--space-4); gap: var(--space-2); overflow: auto; overscroll-behavior: contain; }
+.empty[data-compact='true'] > * { flex-shrink: 0; }
+.empty[data-compact='true'] .symbol { width: var(--space-10); height: var(--space-10); }
+.empty[data-compact='true'] .title { font-size: var(--text-lg); }
+.empty[data-compact='true'] .hint { margin-top: var(--space-2); padding-top: var(--space-2); }
+.empty:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+@media (max-width:599px) {
+  .empty { padding: var(--space-6) var(--space-4); }.empty .title { font-size: var(--text-lg); }
+  .empty[data-compact='true'] { margin: var(--space-2); padding: var(--space-3); }
+}
 @media (forced-colors: active) {
-  .empty { color: CanvasText; background: Canvas; border-color: CanvasText; }
+  .empty,.empty[data-tone='danger'] { color: CanvasText; background: Canvas; border-color: CanvasText; }
+  .empty[data-tone='danger'] .title { background: Canvas; border-color: CanvasText; }
   .symbol,.hint svg { color: CanvasText; }
   .hint { border-color: CanvasText; }
-  :global(:root[data-studio-theme='stellar']) .empty:is([data-tone='warning'],[data-tone='model']) .actions > button:first-child { color: ButtonText; background: ButtonFace; border-color: ButtonText; }
+  :global(:root[data-studio-theme='stellar']) .empty:is([data-tone='warning'],[data-tone='model'],[data-tone='danger']) .actions > button:first-child { color: ButtonText; background: ButtonFace; border-color: ButtonText; }
 }
