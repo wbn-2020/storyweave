@@ -295,7 +295,7 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
 
   function close() {
     if (current.current.busy) return
-    mounted.current = false; readTicket.current += 1; statusTicket.current += 1
+    // 父级可能拒绝关闭；只在实际卸载时清理读取，避免仍显示的阅读页失去响应。
     onClose()
   }
 
