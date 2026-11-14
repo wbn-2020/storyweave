@@ -34,29 +34,35 @@ function commandIcon(command: StudioCommand): StudioIconName {
   return icons[command.id] ?? 'arrow'
 }
 const groupIcons: Record<string, StudioIconName> = { 跳转: 'navigation', 生成: 'spark', 审稿: 'shield', 设置: 'settings', 正文: 'pen' }
+const COMMAND_PAGE_SIZE = 60
 export function CommandPalette({ commands, onClose }: { commands: StudioCommand[]; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const locked = useRef(false)
   const [query, setQuery] = useState('')
   const [showAll, setShowAll] = useState(false)
+  const [page, setPage] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const heading = useId(), listId = useId()
   const matches = useMemo(() => {
     const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean)
-    const filtered = commands.map((command) => ({ ...command, group: commandGroup(command) }))
-      .filter((command) => terms.every((term) => `${command.label} ${command.group} ${command.keywords ?? ''}`.toLocaleLowerCase().includes(term))).slice(0, 60)
-    const groups = new Map<string, StudioCommand[]>()
-    for (const command of filtered) groups.set(command.group, [...(groups.get(command.group) ?? []), command])
-    return ['跳转', '生成', '审稿', '设置', '正文'].flatMap((group) => groups.get(group) ?? [])
+    return commands.map((command) => ({ ...command, group: commandGroup(command) }))
+      .filter((command) => terms.every((term) => `${command.label} ${command.group} ${command.keywords ?? ''}`.toLocaleLowerCase().includes(term)))
   }, [commands, query])
+  const expanded = Boolean(query.trim()) || showAll
+  const pageCount = Math.max(1, Math.ceil(matches.length / COMMAND_PAGE_SIZE))
+  const currentPage = Math.min(page, pageCount - 1)
+  useEffect(() => { setPage((value) => Math.min(value, pageCount - 1)) }, [pageCount])
   const results = useMemo(() => {
-    if (query.trim() || showAll) return matches
     // 默认四组与参考图一致；完整目录仍可一键展开，搜索始终覆盖全部命令。
     const preferred = ['write', 'forge', 'galaxy', 'ai', 'living', 'newBook', 'review', 'publishedMemory', 'preferences', 'backup']
-    return preferred.flatMap((id) => matches.find((command) => command.id === id) ?? [])
-      .sort((a, b) => ['跳转', '生成', '审稿', '设置'].indexOf(a.group) - ['跳转', '生成', '审稿', '设置'].indexOf(b.group))
-  }, [matches, query, showAll])
+    // 先从完整匹配中分页，再沿用页内分组；60 项是渲染上限，不能丢弃后续章节。
+    const visible = expanded ? matches.slice(currentPage * COMMAND_PAGE_SIZE, (currentPage + 1) * COMMAND_PAGE_SIZE)
+      : preferred.flatMap((id) => matches.find((command) => command.id === id) ?? [])
+    const groups = new Map<string, StudioCommand[]>()
+    for (const command of visible) groups.set(command.group, [...(groups.get(command.group) ?? []), command])
+    return ['跳转', '生成', '审稿', '设置', '正文'].flatMap((group) => groups.get(group) ?? [])
+  }, [matches, expanded, currentPage])
   const enabled = results.filter((command) => !command.disabledReason)
   const active = enabled.find((command) => command.id === selectedId) ?? enabled[0]
   const activeIndex = active ? results.indexOf(active) : -1
@@ -67,7 +73,7 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
   }, [])
   useEffect(() => {
     if (activeIndex >= 0) document.getElementById(`${listId}-${activeIndex}`)?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex, listId])
+  }, [activeIndex, active?.id, listId])
   function execute(command: StudioCommand | undefined) {
     if (!command || command.disabledReason || locked.current) return
     locked.current = true
@@ -92,7 +98,7 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
     <h2 id={heading} className={styles.visuallyHidden}>搜索与命令</h2>
     <header className={styles.heading}><StudioIcon name="search" size={24} />
       <input ref={input} className={styles.search} role="combobox" aria-label="搜索命令、章节或主题" aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
-      aria-activedescendant={activeIndex < 0 ? undefined : `${listId}-${activeIndex}`} value={query} maxLength={200} placeholder="章节、人物、伏笔、主题…" onChange={(event) => { setQuery(event.target.value); setSelectedId(null) }}
+      aria-activedescendant={activeIndex < 0 ? undefined : `${listId}-${activeIndex}`} value={query} maxLength={200} placeholder="章节、人物、伏笔、主题…" onChange={(event) => { setQuery(event.target.value); setPage(0); setSelectedId(null) }}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -112,8 +118,12 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
       </button>
     </li></Fragment>)}</ul>
     {!results.length && <p className={styles.empty}>没有匹配命令，试试“章节”“伏笔”或“主题”。</p>}
-    <footer className={styles.footer}><span>{query.trim() || showAll ? `${matches.length} 项匹配` : `${results.length} 项常用命令`}</span>
-      {!query.trim() && <button type="button" onClick={() => { setShowAll((value) => !value); setSelectedId(null); input.current?.focus() }}>{showAll ? '常用命令' : `全部命令 · ${matches.length}`}</button>}
+    <footer className={styles.footer}><span aria-live="polite" aria-atomic="true">{expanded ? `${matches.length} 项匹配${pageCount > 1 ? ` · 第 ${currentPage + 1} / ${pageCount} 页` : ''}` : `${results.length} 项常用命令`}</span>
+      {expanded && pageCount > 1 && <div className={styles.pages} role="group" aria-label="命令结果分页">
+        <button type="button" aria-controls={listId} disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); setSelectedId(null); input.current?.focus() }}>上一页</button>
+        <button type="button" aria-controls={listId} disabled={currentPage === pageCount - 1} onClick={() => { setPage(currentPage + 1); setSelectedId(null); input.current?.focus() }}>下一页</button>
+      </div>}
+      {!query.trim() && <button type="button" onClick={() => { setShowAll((value) => !value); setPage(0); setSelectedId(null); input.current?.focus() }}>{showAll ? '常用命令' : `全部命令 · ${matches.length}`}</button>}
     </footer>
   </dialog>
 }
