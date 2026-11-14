@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { DomainError, type AppError, type StudioApi } from '../../contracts/api'
 import {
   AI_PRESET_KINDS, AI_PRESETS_COMMANDS, MAX_AI_PRESETS, MAX_AI_PRESET_INSTRUCTION,
@@ -28,6 +28,7 @@ export interface AiPresetsPanelProps {
   initialConnectionId?: string | null
   layout?: 'presets' | 'routing'
   onSummary?: () => void
+  routingNotice?: ReactNode
 }
 
 const labels: Record<AiPresetKind, string> = { plan: '规划', continue: '续写', rewrite: '改写', review: '审稿', study: '拆书' }
@@ -37,7 +38,7 @@ export function AiPresetsPanel(props: AiPresetsPanelProps) {
 }
 
 function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, onApply, onChanged, onUnknown, onRecover,
-  connections, initialTitle, initialKind, initialInstruction, initialConnectionId, layout = 'presets', onSummary }: AiPresetsPanelProps) {
+  connections, initialTitle, initialKind, initialInstruction, initialConnectionId, layout = 'presets', onSummary, routingNotice }: AiPresetsPanelProps) {
   const headingId = useId()
   const [snapshot, setSnapshot] = useState<AiPresetsSnapshot | null>(null)
   const [draft, setDraft] = useState<SaveAiPresetInput | null>(null)
@@ -213,25 +214,25 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取预设与累计用量…' : '尚未取得任务预设，请点击“刷新”重试。'}</p> : <>
       {routing && <section className={styles.routing} aria-label="任务路由矩阵">
         <header className={styles.routeHeading}><h3><StudioIcon name="workflow" size={20} />任务路由矩阵</h3><span>本书默认预设</span></header>
-        <div className={styles.matrixScroll}><table className={styles.matrix}>
-          <thead><tr><th scope="col">任务类型</th>{connections?.map((connection) => <th scope="col" key={connection.id}>{connection.name}<small>{connection.model}</small></th>)}<th scope="col">当前协作连接</th><th scope="col">操作</th></tr></thead>
+        <div className={styles.matrixScroll} tabIndex={0} role="region" aria-label="任务路由矩阵，可横向滚动"><table className={styles.matrix}>
+          <thead><tr><th scope="col">任务类型</th>{connections?.map((connection) => <th scope="col" key={connection.id} title={connection.name}>{connection.model}</th>)}<th scope="col">当前协作连接</th></tr></thead>
           <tbody>{AI_PRESET_KINDS.map((kind) => {
             const route = snapshot.presets.find((item) => item.kind === kind && item.defaultForTask && !item.archived)
             const missing = route?.connectionId && !connections?.some((item) => item.id === route.connectionId)
-            return <tr key={kind}><th scope="row"><StudioIcon name={routeIcons[kind]} size={18} />{labels[kind]}</th>
-              {connections?.map((connection) => <td key={connection.id}>{route?.connectionId === connection.id ? <span className={styles.assignment}><i />{connection.model}</span> : <span className={styles.noRoute}>—</span>}</td>)}
+            return <tr key={kind}><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty} aria-label={`编辑${labels[kind]}默认预设`} title={blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={() => edit(route, false, kind)}><StudioIcon name={routeIcons[kind]} size={18} /><span>{labels[kind]}</span><span className={styles.routeEditHint}><StudioIcon name="pen" size={14} /></span></button></th>
+              {connections?.map((connection, index) => <td key={connection.id}>{route?.connectionId === connection.id ? <span className={styles.assignment} data-tone={index % 3}><i />{connection.model}</span> : <span className={styles.noRoute}>—</span>}</td>)}
               <td>{!route ? <span className={styles.noRoute}>未设置</span> : missing ? <span className={styles.unavailable}>绑定连接不可用</span> : route.connectionId === null ? <span className={styles.assignment}><i />发送前选择</span> : <span className={styles.noRoute}>—</span>}</td>
-              <td><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty} title={blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={() => edit(route, false, kind)}><StudioIcon name="pen" size={16} /><span>配置</span></button></td>
             </tr>
           })}
-            <tr><th scope="row"><StudioIcon name="layers" size={18} />摘要</th><td colSpan={(connections?.length ?? 0) + 1} className={styles.summaryRoute}>在分层汇总任务中选择连接</td><td><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || !onSummary} title={!onSummary ? '当前入口不可用' : '打开全书分层汇总'} onClick={onSummary}><StudioIcon name="chevron" size={16} /><span>查看</span></button></td></tr>
+            <tr><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || !onSummary} aria-label="打开全书分层汇总" title={!onSummary ? '当前入口不可用' : '打开全书分层汇总'} onClick={onSummary}><StudioIcon name="layers" size={18} /><span>摘要</span><span className={styles.routeEditHint}><StudioIcon name="chevron" size={14} /></span></button></th><td colSpan={(connections?.length ?? 0) + 1} className={styles.summaryRoute}>在分层汇总任务中选择连接</td></tr>
           </tbody>
         </table></div>
       </section>}
+      <div className={routing ? styles.routingSummary : undefined}>
       <section className={styles.usage} aria-label="本书累计模型用量"><h4>{routing && <StudioIcon name="chart" size={20} />}Token 用量统计</h4>
         {routing && <div className={styles.tokenBars}>
-          <label>输入 Token<meter value={snapshot.usage.inputTokens} max={Math.max(1, tokenTotal)} /><output>{snapshot.usage.inputTokens.toLocaleString()}</output></label>
-          <label>输出 Token<meter value={snapshot.usage.outputTokens} max={Math.max(1, tokenTotal)} /><output>{snapshot.usage.outputTokens.toLocaleString()}</output></label>
+          <label>输入 Token<meter value={snapshot.usage.inputTokens} max={Math.max(1, tokenTotal)} /><output><strong>{tokenTotal > 0 ? `${(snapshot.usage.inputTokens / tokenTotal * 100).toFixed(1)}%` : '—'}</strong><span title={`${snapshot.usage.inputTokens.toLocaleString()} / ${tokenTotal.toLocaleString()}`}>{snapshot.usage.inputTokens.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 })} / {tokenTotal.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 })}</span></output></label>
+          <label>输出 Token<meter value={snapshot.usage.outputTokens} max={Math.max(1, tokenTotal)} /><output><strong>{tokenTotal > 0 ? `${(snapshot.usage.outputTokens / tokenTotal * 100).toFixed(1)}%` : '—'}</strong><span title={`${snapshot.usage.outputTokens.toLocaleString()} / ${tokenTotal.toLocaleString()}`}>{snapshot.usage.outputTokens.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 })} / {tokenTotal.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 })}</span></output></label>
         </div>}
         <details className={styles.usageDetails} open={!routing}><summary>累计运行与统计口径</summary>
         <dl><div><dt>运行次数</dt><dd>{snapshot.usage.runCount.toLocaleString()}</dd></div>
@@ -242,8 +243,10 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
         <p className={styles.muted}>输入未知 {snapshot.usage.unknownInputRuns.toLocaleString()} 次，输出未知 {snapshot.usage.unknownOutputRuns.toLocaleString()} 次；两者可能重叠。token 合计仅包含已知部分；未知用量单独计数，不估算费用。</p>
         <p className={styles.muted}>运行次数包含开书与书内协作，以及进入生成流程后失败、中断和仍在生成的记录；未发送的预览不计入，不代表供应商的计费次数。</p>
         </details>
-        {routing && <p className={styles.muted}>{snapshot.usage.knownUsageRuns.toLocaleString()} 次用量完整，{snapshot.usage.unknownUsageRuns.toLocaleString()} 次用量未知或不完整；仅合计接口已返回的 Token。</p>}
+        {routing && <p className={styles.muted}>{snapshot.usage.knownUsageRuns.toLocaleString()} 次用量完整，{snapshot.usage.unknownUsageRuns.toLocaleString()} 次用量未知或不完整；条形与占比仅按接口已返回的输入和输出合计。</p>}
       </section>
+      {routing && routingNotice}
+      </div>
       {snapshot.requiresUpgrade ? <p className={styles.warning}>请通过作品工具备份并升级这部作品，再刷新本面板以保存任务预设。</p> : <>
         <div className={styles.actions}><div className={styles.actions}>
           <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty} onClick={() => edit()}>新建预设</button>
@@ -259,6 +262,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
         {visible.length === 0 && <p className={styles.empty}>{snapshot.presets.length ? '当前没有启用的预设，可勾选“显示已归档”查看。' : '还没有任务预设。把常用的续写、改写或审稿要求保存下来，下次直接填入。'}</p>}
       </>}
     </>}
+    {routing && !snapshot && routingNotice}
     {draft && <form className={styles.editor} onSubmit={(event) => void save(event)} ref={formRef} tabIndex={-1} aria-label="编辑任务预设">
       <h4>{draft.expectedRevision ? '编辑预设' : '新建预设'}</h4>
       <fieldset disabled={tool.locked || syncState !== 'idle'}>

@@ -167,7 +167,13 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
     if (result.data.book.id !== snapshot.bookId || result.data.book.revision < snapshot.bookRevision) throw new Error('Preset book mismatch')
     onBookChange(result.data)
   }
-  return <Dialog title="模型路由中心" onClose={onClose} busy={tool.locked} wide>
+  const securityNote = <aside className={styles.securityNote} aria-label="密钥保存范围">
+    <StudioIcon name="lock" size={28} />
+    <div><h3>密钥仅保存在本次会话内存</h3><p>不写入作品文件，结束桌面会话后清除。</p>
+      <p>连接测试仅读取模型列表；生成请求在固定预览经确认后发送。</p></div>
+    <span className={styles.securityEmblem} aria-hidden="true"><StudioIcon name="shield" size={88} /><StudioIcon name="spark" size={30} /></span>
+  </aside>
+  return <Dialog title={<span className={styles.pageTitle}>模型路由中心<small>智能调度 · 高效协同 · 稳定可靠</small></span>} onClose={onClose} busy={tool.locked} wide>
     <div className={styles.panel}>
       <div className={styles.toolbar}>
         <div className={styles.tabs} aria-label="连接范围">
@@ -188,9 +194,9 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
       <div className={styles.connections}>{connections.map((connection) => {
         const probe = probes[probeKey(connection)]
         return <article className={styles.connection} aria-label={connection.name} data-default={scope === 'studio' && studioConnections.find((item) => item.id === connection.id)?.isDefault} key={connection.id}>
-        <header><StudioIcon name="workflow" size={32} /><div><h3>{connection.name}</h3><p>{connection.model}</p></div>{scope === 'studio' && studioConnections.find((item) => item.id === connection.id)?.isDefault && <span className={styles.tag}><StudioIcon name="star" size={16} />默认</span>}</header>
-        <p className={styles.endpoint}>{connection.baseUrl}</p><dl><div><dt>上下文窗口</dt><dd>{connection.contextWindow.toLocaleString()}</dd></div><div><dt>输出预算</dt><dd>{connection.maxOutputTokens.toLocaleString()}</dd></div><div><dt>连接延迟</dt><dd title="模型列表请求的响应头耗时，不代表生成速度">{probe?.latencyMs != null ? `${probe.latencyMs} ms` : '—'}</dd></div></dl>
-        <footer><span className={styles.muted}>{keys.includes(connection.id) ? '本次会话已设置密钥' : '本次会话未设置密钥'}</span><div className={styles.actions}><button type="button" className={styles.button} disabled={tool.locked || tool.dirty || guard.current.presets || probe?.state === 'loading'} title="读取模型列表并核对模型名称，不发送正文或生成请求" onClick={() => void testConnection(connection)}><StudioIcon name="refresh" />{probe?.state === 'loading' ? '测试中…' : '测试连接'}</button>{probe?.state === 'loading' && <button type="button" className={styles.button} aria-label={`取消测试${connection.name}`} title="取消测试" onClick={() => void cancelTest(connection)}><StudioIcon name="close" /></button>}<button type="button" className={styles.button} disabled={tool.locked || tool.dirty || guard.current.presets || readOnly} onClick={() => edit(connection)}>编辑</button></div></footer>
+        <header><span className={styles.connectionEmblem}><StudioIcon name="workflow" size={48} /></span><div><h3>{connection.name}</h3><p>{connection.model}</p></div>{scope === 'studio' && studioConnections.find((item) => item.id === connection.id)?.isDefault && <span className={styles.tag}><StudioIcon name="star" size={16} />默认</span>}</header>
+        <dl className={styles.connectionMetrics}><div><dt>上下文窗口</dt><dd title={connection.contextWindow.toLocaleString()}>{connection.contextWindow.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 })}</dd></div><div className={styles.latency} data-state={probe?.state ?? 'idle'}><dt>连接延迟</dt><dd title="模型列表请求的响应头耗时，不代表生成速度"><i />延迟 {probe?.latencyMs != null ? `${probe.latencyMs} ms` : '—'}</dd></div></dl>
+        <footer><details className={styles.connectionDetails}><summary>会话与连接信息</summary><p className={styles.endpoint}>{connection.baseUrl}</p><p>输出预算 {connection.maxOutputTokens.toLocaleString()} tokens</p><p>{keys.includes(connection.id) ? '本次会话已设置密钥' : '本次会话未设置密钥'}</p></details><div className={styles.actions}><button type="button" className={styles.button} disabled={tool.locked || tool.dirty || guard.current.presets || probe?.state === 'loading'} title="读取模型列表并核对模型名称，不发送正文或生成请求" onClick={() => void testConnection(connection)}><StudioIcon name="refresh" />{probe?.state === 'loading' ? '测试中…' : '测试连接'}</button>{probe?.state === 'loading' && <button type="button" className={styles.button} aria-label={`取消测试${connection.name}`} title="取消测试" onClick={() => void cancelTest(connection)}><StudioIcon name="close" /></button>}<button type="button" className={styles.button} disabled={tool.locked || tool.dirty || guard.current.presets || readOnly} aria-label={`编辑连接${connection.name}`} title={`编辑连接${connection.name}`} onClick={() => edit(connection)}><StudioIcon name="pen" size={16} /></button></div></footer>
         <p className={styles.probeStatus} role={probe?.state === 'failed' ? 'alert' : 'status'} data-state={probe?.state ?? 'idle'}>{probe?.message ?? '尚未测试连接'}</p>
       </article>})}</div>
       {loaded && !connections.length && <div className={styles.empty}><StudioIcon name="workflow" size={28} /><h3>还没有模型连接</h3><p>添加接口地址和模型，开始配置创作任务。</p></div>}
@@ -217,8 +223,8 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
         <textarea aria-label="连接恢复记录" readOnly rows={7} value={recoveryText} /><label className={styles.check}><input type="checkbox" checked={preserved === recoveryText} onChange={(event) => setPreserved(event.target.checked ? recoveryText : null)} />已留存连接配置和原请求编号</label>
         <button type="button" className={styles.button} disabled={tool.busy || preserved !== recoveryText} onClick={() => { setSecret(''); onRecover() }}>进入恢复</button></section>}
       {scope === 'book' && book && loaded && <AiPresetsPanel api={api} bookId={book.book.id} bookRevision={book.book.revision} connections={connections} disabled={tool.locked || tool.dirty || Boolean(draft)} layout="routing" onSummary={onSummary}
-        onDirtyChange={(dirty) => { guard.current.presets = dirty; setPresetsDirty(dirty); callback.current(dirty || guard.current.connection) }} onApply={onApply} onChanged={syncBook} onRecover={onRecover} />}
-      <p className={styles.securityNote}><StudioIcon name="check" />密钥仅用于本次桌面会话，不写入作品文件。连接测试仅读取模型列表；生成请求在固定预览经确认后发送。</p>
+        routingNotice={securityNote} onDirtyChange={(dirty) => { guard.current.presets = dirty; setPresetsDirty(dirty); callback.current(dirty || guard.current.connection) }} onApply={onApply} onChanged={syncBook} onRecover={onRecover} />}
+      {!(scope === 'book' && book && loaded) && securityNote}
       {leave.confirming && <DialogDisplayContext.Provider value="modal"><Dialog title="离开模型配置？" onClose={leave.keepEditing} busy={tool.busy}>
         <p>当前连接有未保存修改。保存连接后离开，或明确放弃本次输入。</p>
         {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
