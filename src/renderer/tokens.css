@@ -371,6 +371,9 @@
   --genre-galaxy: #8B7CFF;
   --genre-system: #57D68A;
   --genre-accent: var(--genre-stellar);
+  --genre-decoration: var(--color-accent);
+  --genre-decoration-soft: var(--color-accent-soft);
+  --genre-decoration-haze: var(--stellar-haze);
   --stellar-star: transparent;
   --stellar-haze: transparent;
   --stellar-ai-haze: transparent;
@@ -427,6 +430,10 @@
   --stellar-star: rgba(232, 238, 249, .35);
   --stellar-haze: rgba(79, 209, 197, .10);
   --stellar-ai-haze: rgba(139, 124, 255, .10);
+  /* 题材只改变装饰；保存、警告、错误和主操作继续使用原语义色。 */
+  --genre-decoration: var(--genre-accent);
+  --genre-decoration-soft: color-mix(in srgb,var(--genre-accent) 12%,transparent);
+  --genre-decoration-haze: color-mix(in srgb,var(--genre-accent) 10%,transparent);
   --progress-track: rgba(255, 255, 255, .08);
   --galaxy-person: #5EA8FF;
   --galaxy-place: #4FD1C5;
