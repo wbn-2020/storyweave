@@ -344,7 +344,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
       <div className={styles.selectionActions}>
         <button type="button" className={appStyles.button} disabled={blocked} onClick={() => { invalidate(); setSelectedIds(book.chapters.map((chapter) => chapter.id)) }}>全选</button>
         <button type="button" className={appStyles.button} disabled={blocked || !selectedIds.length} onClick={() => { invalidate(); setSelectedIds([]) }}>清空选择</button>
-        <button type="button" className={appStyles.primaryButton} disabled={blocked || !selectedIds.length} onClick={() => void prepare()}>{preparing ? '正在核对…' : currentPreview ? '重新核对清单' : '生成导出预览'}</button>
+        <button type="button" className={appStyles.primaryButton} aria-busy={preparing} disabled={blocked || !selectedIds.length} onClick={() => void prepare()}>{preparing ? '正在核对…' : currentPreview ? '重新核对清单' : '生成导出预览'}</button>
       </div>
     </div>
     <label className={styles.search}>筛选章节<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(0) }} placeholder="输入章节名称" maxLength={120} /></label>
@@ -444,7 +444,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     </div>
     <p className={styles.help}>保存时新建 .{bookExportExtension(options.format)} 成品和同名 .manifest.json 版本清单。正文成品只包含选定内容；完整恢复请使用作品恢复包。单次成品上限 2 GiB。</p>
     <div className={styles.actions}>
-      <button type="button" className={appStyles.primaryButton} disabled={blocked || reading || alreadyExported || !directory || Boolean(fileNameProblem) || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '生成导出'}</button>
+      <button type="button" className={appStyles.primaryButton} aria-busy={exporting} disabled={blocked || reading || alreadyExported || !directory || Boolean(fileNameProblem) || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '生成导出'}</button>
       <button type="button" className={appStyles.button} disabled={busy || exporting || choosingDirectory} onClick={onClose}>取消</button>
     </div>
   </Dialog>

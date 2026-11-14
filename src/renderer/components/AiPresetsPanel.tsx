@@ -208,7 +208,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     </div>}
     {syncState !== 'idle' && <div className={styles.warning} role="status"><p>预设写入已确认，等待父层作品信息同步。</p>
       {syncError?.requestId && <button type="button" className={styles.button} disabled={disabled || tool.busy || syncState === 'busy'} onClick={() => void checkSyncReceipt()}>核对原同步读取</button>}
-      <button type="button" className={styles.button} disabled={disabled || tool.busy || syncState === 'busy' || Boolean(syncError?.requestId)} onClick={() => void synchronize()}>{syncState === 'busy' ? '正在同步…' : '重试同步'}</button></div>}
+      <button type="button" className={styles.button} aria-busy={syncState === 'busy'} disabled={disabled || tool.busy || syncState === 'busy' || Boolean(syncError?.requestId)} onClick={() => void synchronize()}>{syncState === 'busy' ? '正在同步…' : '重试同步'}</button></div>}
     {externalChange && <p className={styles.warning}>作品已有新版本。当前输入仍保留，可读取最新预设作比较，或处理输入后刷新。</p>}
     {snapshot?.archived && <p className={styles.warning}>作品已归档，任务预设仅供查看。</p>}
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取预设与累计用量…' : '尚未取得任务预设，请点击“刷新”重试。'}</p> : <>

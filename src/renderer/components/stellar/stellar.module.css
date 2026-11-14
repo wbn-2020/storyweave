@@ -12,15 +12,30 @@
   font-size: var(--text-sm);
   font-weight: 500;
   line-height: 1.4;
-  transition: background var(--duration), border-color var(--duration), color var(--duration);
+  transition: background var(--duration), border-color var(--duration), color var(--duration), filter var(--duration), box-shadow var(--duration);
 }
 .button:hover:not(:disabled), .icon:hover:not(:disabled) { background: var(--bg-raised); border-color: var(--color-accent); color: var(--color-ink); }
 .primary { background: var(--color-accent); color: var(--color-accent-ink); border-color: var(--color-accent); font-weight: 600; }
-.primary:hover:not(:disabled) { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.primary:hover:not(:disabled) { background: var(--color-accent-hover); border-color: var(--color-accent-hover); box-shadow: var(--shadow-glow); }
 .ghost { border-color: transparent; background: transparent; color: var(--color-muted); }
 .ghost:hover:not(:disabled) { color: var(--color-accent); background: var(--color-accent-soft); }
 .danger { background: var(--color-danger-soft); color: var(--color-danger); border-color: var(--color-danger); }
+.danger:hover:not(:disabled) { background: color-mix(in srgb,var(--color-danger) 20%,var(--bg-surface)); }
 .icon { width: var(--control-height); height: var(--control-height); padding: 0; flex: 0 0 auto; }
+:is(.button,.primary,.ghost,.danger,.icon):active:not(:disabled):not([aria-busy='true']) { filter: brightness(.82); }
+/* 只由按钮自己的处理状态显示加载；父面板忙碌时不把取消或恢复入口标为加载。 */
+:is(.button,.primary,.ghost,.danger,.icon)[aria-busy='true'] { opacity: 1; cursor: progress; }
+:is(.button,.primary,.ghost,.danger,.icon)[aria-busy='true']::before {
+  content: '';
+  width: var(--control-spinner-size);
+  height: var(--control-spinner-size);
+  flex: 0 0 var(--control-spinner-size);
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: buttonSpin 800ms linear infinite;
+}
+:is(.button,.primary,.ghost,.danger,.icon)[aria-busy='true'] > svg { display: none; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
 .chip { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--space-6); padding: 0 var(--space-2); border: 1px solid var(--color-line); border-radius: var(--radius-pill); background: var(--bg-subtle); color: var(--color-muted); font-size: var(--text-xs); }
 .chip[data-tone='accent'] { background: var(--color-accent-soft); border-color: var(--color-accent); color: var(--color-accent); }
@@ -55,5 +70,14 @@
 .genre small { color: var(--color-muted); font-size: var(--text-xs); }
 .genre:hover:not(:disabled), .genre[aria-pressed='true'] { border-color: var(--genre-accent); background: var(--bg-raised); }
 .pagination { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding-block: var(--space-4); color: var(--color-muted); }
+@keyframes buttonSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .button,.primary,.ghost,.danger,.icon { transition: none; }
+  :is(.button,.primary,.ghost,.danger,.icon)[aria-busy='true']::before { animation: none; }
+}
+@media (forced-colors: active) {
+  :is(.button,.primary,.ghost,.danger,.icon):active:not(:disabled):not([aria-busy='true']) { filter: none; }
+  :is(.button,.primary,.ghost,.danger,.icon)[aria-busy='true']::before { forced-color-adjust: none; border-color: ButtonText; border-right-color: transparent; }
+}
 @media (max-width: 1199px) { .genres { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 599px) { .genres { grid-template-columns: repeat(2, minmax(0, 1fr)); } .genre { padding: var(--space-3); } }

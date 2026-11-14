@@ -110,7 +110,7 @@ export function AiTextDiff({ originalText, suggestedText, disabled, onAcceptText
       </details>
       {(active.error || merged.error || (active.selected.length > 0 && limitError)) && <p className={styles.notice} role="alert">{active.error || merged.error || limitError}</p>}
       {active.accepted && <p className={styles.hint} role="status">完整合并文本已交回 AI 审阅流程。</p>}
-      <div className={styles.actions}><button className={styles.primary} type="button" disabled={!canAccept} onClick={() => void accept()}>{submitting ? '正在采用…' : '采用所选差异'}</button>
+      <div className={styles.actions}><button className={styles.primary} type="button" aria-busy={submitting} disabled={!canAccept} onClick={() => void accept()}>{submitting ? '正在采用…' : '采用所选差异'}</button>
         <span>将返回完整选区文本，包含所有保留段落。</span>
       </div>
     </>}
