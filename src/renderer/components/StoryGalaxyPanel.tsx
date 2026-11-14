@@ -179,6 +179,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const startedListing = useRef<PageRequest | null>(null)
   const bookBaseline = useRef<BookRequest | null>(null)
   const detailHeading = useRef<HTMLHeadingElement>(null)
+  const detailMore = useRef<HTMLDetailsElement>(null)
   const relationHeading = useRef<HTMLHeadingElement>(null)
   const confirmationHeading = useRef<HTMLHeadingElement>(null)
   const detailId = useId()
@@ -486,6 +487,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         detail.value.bookRevision !== page.bookRevision || detail.value.knowledgeRevision !== page.knowledgeRevision) {
       invalidateSnapshot('来源已不属于当前详情或页面版本。'); return
     }
+    if (detailMore.current) detailMore.current.open = true
     const ticket = ++readTicket.current
     readLock.current = true
     setOriginal(null); setOriginalSourceId(sourceId); setReadError(null); setReading('original')
@@ -541,6 +543,9 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const center = page?.focus ? page.nodes.find((node) => sameTarget(node, page.focus)) : undefined
   const nodes = page ? (center ? [center, ...page.nodes.filter((node) => !sameTarget(node, center))] : page.nodes) : []
   const adjacent = selected ? page?.edges.filter((edge) => sameTarget(edge.from, selected) || sameTarget(edge.to, selected)) ?? [] : []
+  // 关联标签只取本页明确引用的另一端，复合身份避免知识与故事重号时合并。
+  const relatedNodes = nodes.filter((node) => !sameTarget(node, selected) &&
+    adjacent.some((edge) => sameTarget(edge.from, node) || sameTarget(edge.to, node)))
   const detailFields = detail?.source === 'knowledge' ? detail.value : detail?.value.fields
   const storyContext = detail?.source === 'knowledge' ? detail.value.storyContext : undefined
   const firstAppearance = storyContext?.state === 'ready' ? storyContext.firstAppearance : null
@@ -560,6 +565,8 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   }).sort((first, second) => first.chapter.position - second.chapter.position) ?? []
   const firstRegistered = registeredChapters[0], lastRegistered = registeredChapters.at(-1)
   const jumpSource = detail?.value.sources.find((source) => source.sourceType === 'chapter_text')
+  const quoteChapter = jumpSource?.sourceType === 'chapter_text'
+    ? detailBook.chapters.find((chapter) => chapter.id === jumpSource.chapterId) : undefined
   const positionChapter = book.chapters[Math.min(chapterPosition, Math.max(0, book.chapters.length - 1))]
 
   return <Dialog title={view === 'relationships' ? '关系星网' : view === 'galaxy' ? '记忆星图' : view === 'matrix' ? '章节出场矩阵' : <><StudioIcon name="spark" size={32} /><span>伏笔雷达</span></>} className={view === 'relationships' ? styles.relationshipPage : view === 'galaxy' ? styles.galaxyPage : view === 'radar' ? `${styles.controlPage} ${styles.radarPage}` : `${styles.controlPage} ${styles.matrixPage}`} wide busy={busy || tool.busy} onClose={() => leave(onClose, true)} error={error}
@@ -743,10 +750,30 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
                 <dt>首次登记</dt><dd>{firstRegistered ? `第 ${firstRegistered.chapter.position + 1} 章 · ${firstRegistered.chapter.title}` : '未登记正文出处'}</dd>
                 <dt>最近登记</dt><dd>{lastRegistered ? `第 ${lastRegistered.chapter.position + 1} 章 · ${lastRegistered.chapter.title}` : '未登记正文出处'}</dd>
               </>}</dl>}
-            <div className={styles.detailActions}><span>{kindLabels[detailFields.kind]}</span><button type="button" className={shared.button} disabled={disabled || sameTarget(selected, page?.focus)} onClick={focusSelected}>{sameTarget(selected, page?.focus) ? '当前聚焦对象' : '聚焦直接关联'}</button></div>
             {detailFields.authorDecision === 'rejected' && <p className={styles.rejected}>作者已否决此记录，保留登记内容供回查。</p>}
             {detailFields.nature === 'future_plan' && <p className={styles.caution}>未来计划尚不表示已经发生。</p>}
             {detailFields.nature === 'ai_inference' && <p className={styles.caution}>AI 推断需要核对，不能视为既成事实。</p>}
+            {view === 'galaxy' && <>
+              <section className={styles.galaxyRelated} aria-label="本页关联对象">
+                <h4>关联对象 <small>本页</small></h4>
+                {relatedNodes.length ? <ul>{relatedNodes.map((node) => <li key={galaxyKey(node)}>
+                  <button type="button" className={styles.galaxyRelatedButton} disabled={disabled} aria-controls={detailId}
+                    aria-label={`查看${node.title}的登记详情`}
+                    title={`${kindLabels[node.kind]} · ${natureLabels[node.nature]} · ${decisionLabels[node.authorDecision]} · ${freshnessLabels[node.freshness]} · ${conflictLabels[node.conflictState]}`}
+                    onClick={() => void selectNode(node)}>{node.title}</button>
+                </li>)}</ul> : <p className={styles.help}>本页未返回相邻引用，可聚焦直接关联查看。</p>}
+                {page?.edgesTruncated && <p className={styles.caution}>本页引用已截取，关联对象可能不完整。</p>}
+              </section>
+              {jumpSource ? <figure className={styles.galaxyQuote} data-reference={jumpSource.referenceState ?? 'unknown'} data-validity={jumpSource.validity}>
+                <blockquote title={jumpSource.quote}>{jumpSource.quote}</blockquote>
+                <figcaption>{quoteChapter ? `第 ${quoteChapter.position + 1} 章 · ${quoteChapter.title}` : '固定正文来源'}
+                  <span>{jumpSource.referenceState ? referenceLabels[jumpSource.referenceState] : '版本登记未知'} · {validityLabels[jumpSource.validity]}</span>
+                </figcaption>
+              </figure> : <p className={styles.help}>尚未登记正文引文。</p>}
+            </>}
+            <details className={styles.galaxyRegistration} key={`${view}:${detail.source}:${detail.value.id}`} ref={detailMore} open={view !== 'galaxy'}>
+              <summary>更多资料与操作</summary>
+            <div className={styles.detailActions}><span>{kindLabels[detailFields.kind]}</span><button type="button" className={shared.button} disabled={disabled || sameTarget(selected, page?.focus)} onClick={focusSelected}>{sameTarget(selected, page?.focus) ? '当前聚焦对象' : '聚焦直接关联'}</button></div>
             {detail.source === 'knowledge' ? <div className={styles.knowledge}>
               <p>{detail.value.summary || '暂无补充说明。'}</p>
               <dl><dt>别名</dt><dd>{detail.value.aliases.length ? detail.value.aliases.join('、') : '未登记'}</dd><dt>性质</dt><dd>{natureLabels[detail.value.nature]}</dd><dt>作者决定</dt><dd>{decisionLabels[detail.value.authorDecision]}</dd><dt>新鲜度</dt><dd>{freshnessLabels[detail.value.freshness]}</dd><dt>冲突标注</dt><dd>{conflictLabels[detail.value.conflictState]}</dd></dl>
@@ -787,12 +814,13 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
                 </div>)}
               </div>}
             </section>
+            {view === 'galaxy' && selected && <button type="button" className={shared.button} disabled={disabled || !detail} onClick={() => void leave(() => selected.source === 'knowledge' ? onOpenKnowledge(selected.id) : onOpenRecords(selectedNode?.kind as StoryKind, selected.id))}>维护所选对象</button>}
+            </details>
           </>}
           </div>
           {view === 'galaxy' && <div className={styles.galaxyDetailFooter}>
             <button type="button" className={shared.primaryButton} disabled={disabled || !jumpSource || page?.bookRevision !== book.book.revision}
               title={!jumpSource ? '所选对象尚未登记正文出处' : '核对来源后跳到当前正文段落'} onClick={() => jumpSource && void jumpToOriginal(jumpSource.id)}><StudioIcon name="spark" />跳到正文</button>
-            {selected && <button type="button" className={shared.button} disabled={disabled || !detail} onClick={() => void leave(() => selected.source === 'knowledge' ? onOpenKnowledge(selected.id) : onOpenRecords(selectedNode?.kind as StoryKind, selected.id))}>维护所选对象</button>}
           </div>}
         </section>
       </div></div>
