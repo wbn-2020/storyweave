@@ -201,8 +201,12 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
     draftsRef.current = next; setDrafts(next); setDiscard(false); tool.setDirty(false)
   }
   function revealIssue(index: number) {
-    const blockId = parsed.proposal?.items[index]?.blockIds[0]
-    if (blockId) manuscriptBlocks.current.get(blockId)?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+    const item = parsed.proposal?.items[index]
+    // 多段替换的引文不一定在首段；定位同一固定稿中的逐字证据，章纲缺失项不猜正文位置。
+    const block = item && !item.requirement ? source.context.chapterBlocks.find((entry) => item.blockIds.includes(entry.blockId) && entry.text.includes(item.quote)) : undefined
+    const manuscript = block && manuscriptBlocks.current.get(block.blockId)
+    const target = manuscript?.querySelector('mark') ?? manuscript
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
     const element = editors.current.get(index)
     if (element) { element.open = true; element.scrollIntoView({ block: 'nearest', behavior: 'instant' }); element.querySelector('summary')?.focus({ preventScroll: true }) }
   }
