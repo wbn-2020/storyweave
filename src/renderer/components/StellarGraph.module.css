@@ -1,5 +1,32 @@
 .graph,.canvas { min-width: 0; border: 1px solid var(--color-line-strong); border-radius: var(--radius-lg); background: var(--bg-deep); color: var(--color-ink); overflow: hidden; }
-.graph { position: relative; border: 0; border-radius: 0; background: radial-gradient(ellipse at 45% 50%,var(--stellar-ai-haze),transparent 70%),var(--bg-canvas); }
+.graph { position: relative; isolation: isolate; border: 0; border-radius: 0; background: radial-gradient(ellipse at 45% 50%,var(--stellar-ai-haze),transparent 70%),var(--bg-canvas); }
+/* 星尘与斜向星云只作底层装饰，不参与节点命中、平移或分页。 */
+.graph::before,.graph::after { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.graph::before {
+  background:
+    radial-gradient(1px 1px at 12% 18%,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 45% 31%,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 73% 16%,var(--stellar-star),transparent),
+    radial-gradient(1px 1px at 88% 62%,var(--stellar-star),transparent),
+    radial-gradient(.8px .8px at 37% 58%,var(--stellar-star),transparent),
+    radial-gradient(.8px .8px at 63% 43%,var(--stellar-star),transparent),
+    radial-gradient(.6px .6px at 19% 81%,var(--stellar-haze),transparent),
+    radial-gradient(.6px .6px at 81% 27%,var(--stellar-ai-haze),transparent);
+  background-size: 89px 113px,137px 151px,173px 127px,211px 193px,157px 179px,103px 139px,47px 83px,79px 97px;
+}
+.graph::after {
+  background:
+    radial-gradient(.7px .7px at 17% 31%,var(--stellar-star),transparent),
+    radial-gradient(.6px .8px at 61% 73%,var(--stellar-ai-haze),transparent),
+    radial-gradient(.6px .6px at 83% 47%,var(--stellar-star),transparent),
+    radial-gradient(ellipse 18% 12% at 15% 86%,var(--stellar-ai-haze),transparent),
+    radial-gradient(ellipse 24% 18% at 31% 68%,var(--stellar-haze),transparent),
+    radial-gradient(ellipse 22% 14% at 68% 29%,var(--stellar-ai-haze),transparent),
+    radial-gradient(ellipse 16% 18% at 88% 12%,var(--stellar-ai-haze),transparent),
+    linear-gradient(145deg,transparent 32%,var(--stellar-ai-haze) 46%,var(--stellar-haze) 51%,transparent 66%);
+  background-size: 13px 19px,23px 17px,31px 29px,100% 100%,100% 100%,100% 100%,100% 100%,100% 100%;
+  mask-image: linear-gradient(145deg,transparent 20%,var(--color-ink) 45%,var(--color-ink) 55%,transparent 78%);
+}
 .graph .stage { height: max(300px,calc(100dvh - 600px)); min-height: 300px; }
 .graph .node { color: var(--galaxy-other); fill: currentColor; stroke: var(--color-ink); stroke-width: .8; }
 .graph .node[data-kind='person'] { color: var(--galaxy-person); }
@@ -21,6 +48,10 @@
 .symbolLine { fill: none !important; stroke: var(--bg-deep); stroke-width: 1.5; }
 .orbits { fill: none; stroke: var(--color-line-strong); stroke-width: .7; pointer-events: none; }
 .orbits > circle { stroke: var(--color-accent); opacity: .35; }
+.focusOrbits { stroke: var(--color-accent); opacity: .35; }
+.focusOrbits > circle:first-child { stroke-width: 1; stroke-dasharray: 1 7; }
+.focusOrbits > circle:nth-child(2) { stroke-width: 2; stroke-dasharray: 12 38; }
+.focusOrbits > circle:last-child { stroke-dasharray: 32 12 2 12; opacity: .5; }
 .graph .label,.graph .activeLabel { font-size: var(--text-sm); }
 .graph .controls { gap: var(--space-1); border: 0; background: var(--bg-sidebar); }
 .graph .controls > button { display: grid; place-items: center; width: var(--control-compact); height: var(--control-compact); padding: 0; }
@@ -153,3 +184,6 @@
 @media(max-width:1199px) { .relationshipToolbar { gap: var(--space-2); } .layerTabs > button { padding-inline: var(--space-3); } .storyControls { flex-basis: 240px; padding-inline: var(--space-3); gap: var(--space-2); } }
 @media(max-width:999px) { .relationshipToolbar .scanButton { margin-left: 0; } .relationshipActions { position: static; max-width: none; border-inline: 0; border-radius: 0; background: transparent; } .relationshipViewport { height: clamp(400px,calc(100dvh - 380px),560px); } }
 @media(max-width:699px) { .storyControls { order: 1; flex-basis: 100%; } .relationshipActions > label { flex: 1; } .relationshipViewport { height: 480px; } .relationshipLegend { max-width: 160px; } }
+@media (forced-colors: active) {
+  .graph::before,.graph::after,.focusOrbits { display: none; }
+}

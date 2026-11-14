@@ -172,7 +172,9 @@ export function StoryGalaxyView({ nodes, edges, focus, selected, disabled, onSel
       <g className={styles.orbits} aria-hidden="true" transform={`translate(${width / 2 + view.x} ${height / 2 + view.y})`}>
         <ellipse rx={Math.min(width * .43,360) * view.zoom} ry={height * .42 * view.zoom} />
         <ellipse rx={Math.min(width * .32,270) * view.zoom} ry={height * .31 * view.zoom} />
-        {focusKey && <><circle r={84 * view.zoom} /><circle r={112 * view.zoom} strokeDasharray="2 12" /></>}
+        {focusKey && <><circle r={84 * view.zoom} /><circle r={112 * view.zoom} strokeDasharray="2 12" />
+          <g className={styles.focusOrbits}><circle r={64 * view.zoom} /><circle r={96 * view.zoom} /><circle r={136 * view.zoom} /></g>
+        </>}
       </g>
       <g>
         {edges.map((edge) => {
