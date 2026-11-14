@@ -38,6 +38,10 @@
 .monthNav label { width: 142px; }
 .monthNav input { min-height: var(--control-compact); padding: var(--space-1) var(--space-2); font-size: var(--text-xs); background: transparent; }
 .yearLabel { margin-left: auto; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); background: var(--bg-subtle); color: var(--color-ink-secondary); font-family: var(--font-num); }
+.yearPicker { width: 104px; margin-left: auto; flex-shrink: 0; }
+.yearPicker .yearLabel { min-height: var(--control-compact); border-color: transparent; font-size: var(--text-md); }
+.yearPicker .yearLabel:hover:not(:disabled) { border-color: var(--color-line-strong); }
+.yearPicker .yearLabel:disabled { opacity: .45; cursor: not-allowed; }
 .weekdays,.grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); }
 .weekdays { padding-block: var(--space-2); color: var(--color-muted); text-align: center; font-size: var(--text-sm); }
 .grid { gap: var(--space-1); grid-auto-rows: var(--space-12); }

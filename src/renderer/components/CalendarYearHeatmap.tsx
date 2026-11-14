@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { WritingCalendarApi } from '../../contracts/writing-calendar'
-import { calendarMonthDates, isCalendarSnapshot } from '../../contracts/writing-calendar'
+import { MIN_CALENDAR_MONTH, MAX_CALENDAR_MONTH, calendarMonthDates, isCalendarSnapshot, parseCalendarMonth } from '../../contracts/writing-calendar'
 import { request } from '../request'
 import { StudioIcon } from './StudioIcon'
 import styles from './StellarCalendar.module.css'
@@ -13,7 +13,16 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
   api: WritingCalendarApi; bookId: string; bookRevision: number; month: string; today: string; disabled: boolean; compact?: boolean; children?: ReactNode
 }) {
   const gradient = useId()
-  const year = month.slice(0, 4)
+  const [selectedYear, setSelectedYear] = useState(() => month.slice(0, 4))
+  const year = compact ? month.slice(0, 4) : selectedYear
+  // 完整年份范围只在非紧凑实例缓存，避免逐月读取进度更新时重建下拉选项。
+  const yearOptions = useMemo(() => compact ? [] : Array.from(
+    { length: Number(MAX_CALENDAR_MONTH.slice(0, 4)) - Number(MIN_CALENDAR_MONTH.slice(0, 4)) + 1 },
+    (_, index) => {
+      const value = String(Number(MIN_CALENDAR_MONTH.slice(0, 4)) + index)
+      return <option key={value} value={value}>{value}</option>
+    },
+  ), [compact])
   const months = useMemo(() => Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`), [year])
   const [data, setData] = useState<YearSnapshot | null>(null)
   const [reading, setReading] = useState(false)
@@ -65,6 +74,15 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
     requestEpoch.current += 1; locked.current = false; setReading(false)
     setNotice('已取消全年读取。尚未完成的月份未计入统计。')
   }
+  function changeYear(next: string) {
+    if (compact || disabled || locked.current || next === year) return
+    try { parseCalendarMonth(`${next}-01`) } catch {
+      setError(`年份须为 ${MIN_CALENDAR_MONTH.slice(0, 4)} 至 ${MAX_CALENDAR_MONTH.slice(0, 4)} 之间的四位年份。`); return
+    }
+    // 换年只撤下旧年度快照，不改月历草稿；作废代次防止取消后的迟到回包重新显示。
+    requestEpoch.current += 1
+    setSelectedYear(next); setData(null); setCompleted(0); setError(null); setNotice(null)
+  }
 
   if (compact) return <section className={styles.compactAnnual} aria-label={`${year} 年创作热力图`}>
     <header className={styles.compactHeading}><h4>创作热力图{data ? ` · ${data.days.size} 天` : ` · ${year}`}</h4>
@@ -88,7 +106,8 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
   </section>
 
   return <><section className={styles.annual} aria-label={`${year} 年创作热力图`}>
-    <header className={styles.calendarHeading}><h4><StudioIcon name="grid" size={24} />{data ? `${data.days.size} 天热力图` : '全年创作热力图'}</h4><span className={styles.yearLabel}>{year}</span>
+    <header className={styles.calendarHeading}><h4><StudioIcon name="grid" size={24} />{data ? `${data.days.size} 天热力图` : '全年创作热力图'}</h4>
+      <label className={styles.yearPicker}><span className={styles.visuallyHidden}>全年热力图与月度趋势年份</span><select className={styles.yearLabel} value={year} disabled={disabled || reading} onChange={(event) => changeYear(event.target.value)}>{yearOptions}</select></label>
       {reading ? <button type="button" className={styles.button} onClick={cancel}>取消读取</button>
         : <button type="button" className={styles.button} disabled={disabled} title={disabled ? '请先处理当前输入或刷新作品版本' : '读取所选年份的十二个月'} onClick={() => void load()}><StudioIcon name="refresh" size={14} />{data ? '刷新全年' : '读取全年'}</button>}
     </header>
