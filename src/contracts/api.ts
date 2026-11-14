@@ -34,7 +34,7 @@ import type { StudyAdoptInput, StudyAdoptReceipt, StudySavedInput, StudySavedRes
 import type { AiPresetsApi, AiPresetsSnapshot, GetAiPresetsInput, SaveAiPresetInput } from './ai-presets'
 import type { BookMediaApi, BookMediaImage, BookMediaSnapshot, GetBookMediaInput, ReadBookMediaInput, SaveBookMediaInput, ExportBookMediaServiceInput, BookMediaExportReceipt } from './book-media'
 import type { RevisionMergeInput, RevisionMergeOutput } from './revision-merge'
-import type { BookExportPrepareInput, BookExportPreview, BookExportChapterInput, BookExportChapterPreview, BookExportCommitInput, BookExportCommitServiceInput, BookExportReceipt } from './export'
+import type { BookExportPrepareInput, BookExportPreview, BookExportChapterInput, BookExportChapterPreview, BookExportFileInput, BookExportDirectory, BookExportCommitServiceInput, BookExportReceipt } from './export'
 
 export const IPC_CHANNEL = 'storyweave:request'
 export const CLOSE_REQUEST_CHANNEL = 'storyweave:close-request'
@@ -386,7 +386,8 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   mergeRevision(input: RevisionMergeInput): Promise<Result<RevisionMergeOutput>>
   prepareBookExport(input: BookExportPrepareInput): Promise<Result<BookExportPreview>>
   readBookExportChapter(input: BookExportChapterInput): Promise<Result<BookExportChapterPreview>>
-  commitBookExport(input: BookExportCommitInput): Promise<Result<BookExportReceipt | null>>
+  chooseBookExportDirectory(): Promise<Result<BookExportDirectory | null>>
+  commitBookExport(input: BookExportFileInput): Promise<Result<BookExportReceipt | null>>
   revealBookExport(input: { exportId: string }): Promise<Result<null>>
   getWorkbench(input: BookInput): Promise<Result<WorkbenchSnapshot>>
   saveWritingBrief(input: SaveBriefInput): Promise<Result<WorkbenchSnapshot>>
@@ -514,7 +515,7 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
 export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'book.media.export' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare' | 'generation.connection.save' | 'generation.claim' | 'generation.checkpoint' | 'generation.finish' | 'generation.interrupt'>
   | 'workspace.select' | 'request.status' | 'import.select' | 'book.exportFile' | 'draft.copy' | 'service.restart'
   | 'recovery.exportFile' | 'recovery.select'
-  | 'book.export.commitFile' | 'book.export.reveal'
+  | 'book.export.directory' | 'book.export.commitFile' | 'book.export.reveal'
   | 'book.media.exportFile'
   | 'book.image.list' | 'book.image.get' | 'book.image.start' | 'book.image.cancel' | 'book.image.discard'
   | 'draft.checkpoint' | 'draft.list' | 'draft.rotate' | 'draft.select' | 'draft.preview' | 'draft.commit'

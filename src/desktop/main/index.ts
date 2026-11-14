@@ -16,7 +16,7 @@ import { ConnectionProbes } from './connection-probes'
 import { parseConnectionProbeCancel, parseConnectionProbeInput } from '../../contracts/ai-connection-probe'
 import type { AiConnectionPage } from '../../contracts/ai'
 import { parseBookRecoveryExportInput, parseBookRecoveryRestoreInput } from '../../contracts/book-recovery'
-import { bookExportExtension, parseBookExportCommitInput, type BookExportReceipt } from '../../contracts/export'
+import { bookExportExtension, parseBookExportFileInput, type BookExportReceipt } from '../../contracts/export'
 import { parseExportBookMediaInput } from '../../contracts/book-media'
 
 let mainWindow: BrowserWindow | null = null
@@ -36,6 +36,7 @@ let recoveredInstance: ServiceClient | null = null
 let recoveryRequestId: string | null = null
 const previousReceipts = new Map<string, CompletedRequest>()
 const exportedFiles = new Map<string, { root: string | null; filePath: string }>()
+const exportDirectories = new Map<string, { root: string; directoryPath: string }>()
 let closeResponse: { id: string; resolve: (value: boolean) => void } | null = null
 let lastAiRecoveryNotice: string | null = null
 const draftRecovery = new DraftRecovery()
@@ -64,7 +65,7 @@ const rendererCommands = new Set<RendererCommand>([
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
-  'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.commitFile', 'book.export.reveal',
+  'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.directory', 'book.export.commitFile', 'book.export.reveal',
   'import.select', 'import.reparse', 'import.chapter', 'import.commit', 'book.exportFile', 'draft.copy', 'service.restart',
   'recovery.exportFile', 'recovery.select', 'recovery.restore',
   'draft.checkpoint', 'draft.list', 'draft.rotate', 'draft.select', 'draft.preview', 'draft.commit',
@@ -416,22 +417,49 @@ function setupIpc(): void {
           return await service.request('book.media.export', { ...input, filePath: selection.filePath })
         } finally { choosingFile = false }
       }
+      if (command === 'book.export.directory') {
+        if (payload !== undefined) return failure('INVALID_INPUT', '请从原生窗口选择导出目录。')
+        const client = service, root = client.getWorkspaceRoot(), target = mainWindow
+        if (!root) return failure('WORKSPACE_REQUIRED', '请先选择作品库。')
+        if (!target) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
+        choosingFile = true
+        try {
+          const selection = await dialog.showOpenDialog(target, {
+            title: '选择导出保存位置', buttonLabel: '使用此文件夹', properties: ['openDirectory'],
+          })
+          if (selection.canceled || selection.filePaths.length !== 1) return { ok: true, data: null }
+          if (closing || draining || service !== client || client.getWorkspaceRoot() !== root) return failure('WORKSPACE_BUSY', '作品库正在切换或关闭，请重新选择保存位置。')
+          const directoryPath = checkedLocalDirectory(selection.filePaths[0]!)
+          const id = randomUUID()
+          // 路径只由主进程保管；前端持有当前书库内的有界会话编号，不能自行指定磁盘目录。
+          exportDirectories.set(id, { root, directoryPath })
+          if (exportDirectories.size > 32) exportDirectories.delete(exportDirectories.keys().next().value!)
+          return { ok: true, data: { id, directoryPath } }
+        } finally { choosingFile = false }
+      }
       if (command === 'book.export.commitFile') {
-        const input = parseBookExportCommitInput(payload)
+        const { destination, ...input } = parseBookExportFileInput(payload)
+        const directory = destination ? exportDirectories.get(destination.directoryId) : undefined
+        if (destination && (!directory || directory.root !== service.getWorkspaceRoot())) return failure('INVALID_INPUT', '保存位置已失效，请重新选择文件夹。')
         const target = mainWindow
         if (!target) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
         choosingFile = true
         try {
-          const extension = bookExportExtension(input.format)
-          const selection = await dialog.showSaveDialog(target, {
-            title: '按已确认预览导出（仅新建文件）', buttonLabel: '创建导出文件和清单',
-            defaultPath: `作品导出-${Date.now()}.${extension}`,
-            filters: [{ name: input.format === 'docx' ? 'Word 文档' : input.format === 'epub' ? 'EPUB 电子书' : input.format === 'markdown' ? 'Markdown 文本' : '纯文本', extensions: [extension] }],
-          })
-          if (selection.canceled || !selection.filePath) return { ok: true, data: null }
+          let filePath: string
+          if (destination && directory) filePath = join(checkedLocalDirectory(directory.directoryPath), destination.fileName)
+          else {
+            const extension = bookExportExtension(input.format)
+            const selection = await dialog.showSaveDialog(target, {
+              title: '按已确认预览导出（仅新建文件）', buttonLabel: '创建导出文件和清单',
+              defaultPath: `作品导出-${Date.now()}.${extension}`,
+              filters: [{ name: input.format === 'docx' ? 'Word 文档' : input.format === 'epub' ? 'EPUB 电子书' : input.format === 'markdown' ? 'Markdown 文本' : '纯文本', extensions: [extension] }],
+            })
+            if (selection.canceled || !selection.filePath) return { ok: true, data: null }
+            filePath = selection.filePath
+          }
           if (closing || draining) return failure('WORKSPACE_BUSY', '正在关闭，未创建导出文件。')
           // 导出模块按固定预览独占创建正文和清单，主进程只负责原生路径选择。
-          return await service.request('book.export.commit', { ...input, filePath: selection.filePath })
+          return await service.request('book.export.commit', { ...input, filePath })
         } finally { choosingFile = false }
       }
       if (command === 'book.exportFile') {

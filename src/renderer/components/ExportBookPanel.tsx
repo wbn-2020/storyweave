@@ -1,12 +1,13 @@
 import { createElement, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { isRecord, type BookSnapshot, type RequestStatus, type Result, type StudioApi } from '../../contracts/api'
 import {
-  MAX_EXPORT_NOTE_LENGTH, bookExportExtension, bookExportReference, type BookExportChapterEntry, type BookExportChapterInput,
-  type BookExportChapterPreview, type BookExportCommitInput, type BookExportOptions,
+  MAX_EXPORT_NOTE_LENGTH, bookExportExtension, bookExportFileNameProblem, bookExportReference, type BookExportChapterEntry, type BookExportChapterInput,
+  type BookExportChapterPreview, type BookExportDirectory, type BookExportFileInput, type BookExportFormat, type BookExportOptions,
   type BookExportPrepareInput, type BookExportPreview, type BookExportReceipt,
 } from '../../contracts/export'
 import type { InlineNode } from '../../contracts/manuscript'
 import { displayTime, request, statusLabels } from '../request'
+import type { RegisterPanelLeaveGuard } from '../hooks/usePanelLeave'
 import { Dialog } from './Dialog'
 import { StudioIcon } from './StudioIcon'
 import { BookCover } from './LibraryPanels'
@@ -18,6 +19,7 @@ export interface BookExportPanelApi {
   readBookExportChapter(input: BookExportChapterInput): Promise<Result<BookExportChapterPreview>>
   getRequestStatus(input: { requestId: string }): Promise<Result<RequestStatus>>
   revealBookExport(input: { exportId: string }): Promise<Result<null>>
+  chooseBookExportDirectory(): Promise<Result<BookExportDirectory | null>>
 }
 
 type PendingRead = { requestId: string; bookKey: string } & (
@@ -31,8 +33,9 @@ export interface ExportBookPanelProps {
   book: BookSnapshot
   busy: boolean
   error?: string | null
+  registerLeaveGuard?: RegisterPanelLeaveGuard
   onClose: () => void
-  onExport: (input: BookExportCommitInput) => Promise<void> | void
+  onExport: (input: BookExportFileInput) => Promise<void> | void
 }
 
 const PAGE_SIZE = 50
@@ -47,6 +50,10 @@ const exportFormats = [
 
 function fileSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`
+}
+
+function defaultFileName(title: string, format: BookExportFormat): string {
+  return `织章_${title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 160).trim() || '作品导出'}.${bookExportExtension(format)}`
 }
 
 function inlinePreview(nodes: InlineNode[]): ReactNode[] {
@@ -70,7 +77,7 @@ function ChapterContent({ chapter, submissionLayout }: { chapter: BookExportChap
   </article>
 }
 
-export function ExportBookPanel({ api, book, busy, error, onClose, onExport, workspaceScope, receipt }: ExportBookPanelProps) {
+export function ExportBookPanel({ api, book, busy, error, onClose, onExport, workspaceScope, receipt, registerLeaveGuard }: ExportBookPanelProps) {
   const [options, setOptions] = useState<Omit<BookExportOptions, 'chapterIds'>>({ format: 'txt', scope: 'working', includeChapterTitles: true, author: '', language: 'zh-CN' })
   const [selectedIds, setSelectedIds] = useState<string[]>(() => book.chapters.map((chapter) => chapter.id))
   const [preview, setPreview] = useState<BookExportPreview | null>(null)
@@ -85,11 +92,17 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   const [showManifest, setShowManifest] = useState(false)
   const [pendingRead, setPendingRead] = useState<PendingRead | null>(null)
   const [checking, setChecking] = useState(false)
+  const [fileName, setFileName] = useState(() => defaultFileName(book.book.title, 'txt'))
+  const [directory, setDirectory] = useState<BookExportDirectory | null>(null)
+  const [choosingDirectory, setChoosingDirectory] = useState(false)
   const headingId = useId()
   const mounted = useRef(true)
   const prepareTicket = useRef(0)
   const chapterTicket = useRef(0)
   const exportInFlight = useRef(false)
+  const directoryInFlight = useRef(false)
+  const leavingBlocked = useRef(busy)
+  leavingBlocked.current = busy
   const activeToken = useRef<string | null>(null)
   const currentBook = `${book.book.id}:${book.book.revision}`
   const currentBookRef = useRef(currentBook)
@@ -111,7 +124,8 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
       title: chapter.volumeId === null ? '未分卷' : book.volumes.find((volume) => volume.id === chapter.volumeId)?.title ?? '分卷信息未载入',
       chapters: [chapter] })
   }
-  const blocked = busy || preparing || exporting || Boolean(pendingRead)
+  const blocked = busy || preparing || exporting || choosingDirectory || Boolean(pendingRead)
+  const fileNameProblem = bookExportFileNameProblem(fileName, options.format)
   const currentPreview = preview?.manifest.bookId === book.book.id && preview.manifest.bookRevision === book.book.revision ? preview : null
   const docxOptions = options.docx ?? defaultDocxOptions
   const exported = receipt?.bookId === book.book.id ? receipt : null
@@ -123,12 +137,38 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   }, [])
 
   useEffect(() => {
+    registerLeaveGuard?.(async () => {
+      // 父层在导出导航预检后建立写锁，不能用子层提交标记拦住本次导出自身。
+      if (leavingBlocked.current || directoryInFlight.current) {
+        setReadError('正在选择保存位置或导出，请先完成当前操作并核对回执。')
+        return false
+      }
+      return true
+    })
+    return () => registerLeaveGuard?.(null)
+  }, [registerLeaveGuard])
+
+  useEffect(() => {
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat ||
+          leavingBlocked.current || directoryInFlight.current || exportInFlight.current || document.querySelector('dialog[open]') ||
+          event.target instanceof HTMLSelectElement) return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', closeWithEscape)
+    return () => window.removeEventListener('keydown', closeWithEscape)
+  }, [onClose])
+
+  useEffect(() => {
     invalidate()
     setPage(0)
     if (lastBookId.current !== book.book.id) {
       setSelectedIds(book.chapters.map((chapter) => chapter.id))
       setOptions({ format: 'txt', scope: 'working', includeChapterTitles: true, author: '', language: 'zh-CN' })
       setSearch('')
+      setFileName(defaultFileName(book.book.title, 'txt'))
+      setDirectory(null)
     } else {
       const ids = new Set(book.chapters.map((chapter) => chapter.id))
       setSelectedIds((current) => current.filter((id) => ids.has(id)))
@@ -144,7 +184,29 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
 
   function updateOptions(fields: Partial<Omit<BookExportOptions, 'chapterIds'>>) {
     invalidate()
+    if (fields.format && fields.format !== options.format) {
+      const next = fields.format
+      const suffix = `.${bookExportExtension(options.format)}`
+      setFileName((current) => `${current.toLowerCase().endsWith(suffix) ? current.slice(0, -suffix.length) : current}.${bookExportExtension(next)}`)
+    }
     setOptions((current) => ({ ...current, ...fields }))
+  }
+
+  async function chooseDirectory() {
+    if (blocked || directoryInFlight.current) return
+    directoryInFlight.current = true
+    setChoosingDirectory(true)
+    setReadError(null)
+    const bookKey = currentBook
+    try {
+      const result = await request(() => api.chooseBookExportDirectory())
+      if (!mounted.current || currentBookRef.current !== bookKey) return
+      if (!result.ok) { setReadError(result.error.message); return }
+      if (result.data) setDirectory(result.data)
+    } finally {
+      directoryInFlight.current = false
+      if (mounted.current) setChoosingDirectory(false)
+    }
   }
 
   function selectChapter(chapterId: string, checked: boolean) {
@@ -246,11 +308,12 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   }
 
   async function submit() {
-    if (blocked || exportInFlight.current || alreadyExported || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)) return
+    if (blocked || reading || exportInFlight.current || alreadyExported || !directory || fileNameProblem || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)) return
     exportInFlight.current = true
     setExporting(true); setReadError(null)
     try {
-      await onExport({ ...bookExportReference(currentPreview), format: currentPreview.manifest.outputFormat, acknowledgeOmissions: acknowledged })
+      await onExport({ ...bookExportReference(currentPreview), format: currentPreview.manifest.outputFormat, acknowledgeOmissions: acknowledged,
+        destination: { directoryId: directory.id, fileName } })
     } catch {
       if (mounted.current) setReadError('导出结果尚未确认，请核对所选保存位置和任务回执后再操作。')
     } finally {
@@ -266,8 +329,8 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
       {entry.state === 'included' && entry.characterCount === 0 && <small className={styles.problem}>空白正文，仍会导出</small>}</>
   }
 
-  return <Dialog title="交付与导出" wide className={`${appStyles.lightDialog} ${styles.dialog}`} busy={busy || exporting} error={error ?? readError} onClose={onClose}>
-    <p className={styles.introduction}>《{book.book.title}》按作品目录顺序交付。先核对章节和正文，再选择保存位置。</p>
+  return <Dialog title="导出" wide className={`${appStyles.lightDialog} ${styles.dialog}`} busy={busy || exporting || choosingDirectory} error={error ?? readError} onClose={onClose}>
+    <p className={styles.introduction}>将《{book.book.title}》导出为多种格式，便于分享与发布。</p>
     {pendingRead && <p className={styles.pending} role="status">预览请求尚未确认，暂时保留当前选择。
       <button type="button" className={appStyles.button} disabled={checking || busy} onClick={() => void checkPending()}>{checking ? '查询中…' : '查询原请求结果'}</button>
     </p>}
@@ -316,6 +379,20 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     <fieldset className={styles.formats} disabled={blocked}><legend className={styles.srOnly}>成品格式</legend>{exportFormats.map((format) => <label className={styles.formatCard} data-selected={options.format === format.id} key={format.id}>
       <StudioIcon name={format.icon} size={32} /><strong>{format.name}</strong><small>{format.detail}</small><input type="radio" name={`${headingId}-format`} value={format.id} checked={options.format === format.id} onChange={() => updateOptions({ format: format.id })} />
     </label>)}</fieldset>
+    <div className={styles.destinationFields}>
+      <label className={styles.destinationField} htmlFor={`${headingId}-filename`}>文件名
+        <input id={`${headingId}-filename`} value={fileName} maxLength={200} disabled={blocked} autoComplete="off" spellCheck={false}
+          aria-invalid={Boolean(fileNameProblem)} aria-describedby={fileNameProblem ? `${headingId}-filename-error` : undefined} onChange={(event) => setFileName(event.target.value)} />
+      </label>
+      {fileNameProblem && <p id={`${headingId}-filename-error`} className={styles.problem}>{fileNameProblem}</p>}
+      <div className={styles.destinationField}><label htmlFor={`${headingId}-directory`}>保存位置</label>
+        <div className={styles.directoryPicker}><StudioIcon name="folder" size={20} />
+          <input id={`${headingId}-directory`} readOnly value={directory?.directoryPath ?? ''} title={directory?.directoryPath} disabled={blocked} placeholder="请选择保存文件夹" />
+          <button type="button" disabled={blocked} title="选择保存文件夹" aria-label={choosingDirectory ? '正在选择保存文件夹' : '选择保存文件夹'} onClick={() => void chooseDirectory()}><StudioIcon name="folder" size={20} /></button>
+        </div>
+      </div>
+    </div>
+    <details className={styles.advancedOptions}><summary>正文与排版选项</summary>
     <div className={styles.options}>
       <label>正文范围<select value={options.scope} disabled={blocked} onChange={(event) => updateOptions({ scope: event.target.value as BookExportOptions['scope'] })}>
         <option value="working">当前工作稿</option><option value="finalized">作者定稿</option>
@@ -338,6 +415,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     </fieldset>}
     <label className={`${appStyles.checkLabel} ${styles.check}`}><input type="checkbox" checked={options.includeChapterTitles} disabled={blocked} onChange={(event) => updateOptions({ includeChapterTitles: event.target.checked })} />正文包含章节标题</label>
     <p className={styles.help}>{options.scope === 'finalized' ? '尚未定稿的章节会列出跳过原因；定稿后对工作稿的修改不进入本次成品。' : '预览使用已经保存的当前稿，生成预览后修改作品需要重新核对。'}{options.format === 'epub' && ' EPUB 目录保留章节名，实际分页与字体由阅读器决定。'}{options.format === 'docx' && ' DOCX 预览展示固定正文与格式，实际分页和字体以打开文档的软件为准。'}</p>
+    </details>
     </section>
 
     <section className={styles.summary} aria-label="本次交付核对结果" aria-live="polite">
@@ -366,8 +444,8 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     </div>
     <p className={styles.help}>保存时新建 .{bookExportExtension(options.format)} 成品和同名 .manifest.json 版本清单。正文成品只包含选定内容；完整恢复请使用作品恢复包。单次成品上限 2 GiB。</p>
     <div className={styles.actions}>
-      <button type="button" className={appStyles.primaryButton} disabled={blocked || reading || alreadyExported || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '选择位置并导出'}</button>
-      <button type="button" className={appStyles.button} disabled={busy || exporting} onClick={onClose}>关闭</button>
+      <button type="button" className={appStyles.primaryButton} disabled={blocked || reading || alreadyExported || !directory || Boolean(fileNameProblem) || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '生成导出'}</button>
+      <button type="button" className={appStyles.button} disabled={busy || exporting || choosingDirectory} onClick={onClose}>取消</button>
     </div>
   </Dialog>
 }

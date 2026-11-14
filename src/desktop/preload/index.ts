@@ -38,6 +38,7 @@ const api: StudioApi = {
   mergeRevision: (input) => invoke('revision.merge', input),
   prepareBookExport: (input) => invoke('book.export.prepare', input),
   readBookExportChapter: (input) => invoke('book.export.chapter', input),
+  chooseBookExportDirectory: () => invoke('book.export.directory'),
   commitBookExport: (input) => invoke('book.export.commitFile', input),
   revealBookExport: (input) => invoke('book.export.reveal', input),
   getWorkbench: (input) => invoke('workbench.get', input),

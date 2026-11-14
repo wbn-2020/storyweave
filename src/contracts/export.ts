@@ -104,6 +104,10 @@ export interface BookExportChapterPreview {
 
 export interface BookExportCommitInput extends BookExportReference { format: BookExportFormat; acknowledgeOmissions: boolean }
 export interface BookExportCommitServiceInput extends BookExportCommitInput { filePath: string }
+export interface BookExportDirectory { id: string; directoryPath: string }
+export interface BookExportFileInput extends BookExportCommitInput {
+  destination?: { directoryId: string; fileName: string }
+}
 export interface BookExportReceipt extends FileWriteReceipt {
   exportId: string
   bookId: string
@@ -175,6 +179,27 @@ export function parseBookExportCommitInput(value: unknown): BookExportCommitInpu
   const data = record(value, [...referenceKeys, 'format', 'acknowledgeOmissions'])
   if ((data.format !== 'txt' && data.format !== 'markdown' && data.format !== 'epub' && data.format !== 'docx') || typeof data.acknowledgeOmissions !== 'boolean') return invalid()
   return { ...reference(data), format: data.format, acknowledgeOmissions: data.acknowledgeOmissions }
+}
+
+export function bookExportFileNameProblem(value: string, format: BookExportFormat): string | null {
+  if (!value || value.length > 200) return '文件名须为 1 至 200 个字符。'
+  if (value !== value.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(value) || /[ .]$/.test(value) ||
+      /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:[ .]|$)/i.test(value)) {
+    return '请使用普通文件名，不含路径、特殊字符、保留名称或首尾空格。'
+  }
+  const extension = `.${bookExportExtension(format)}`
+  return value.length > extension.length && value.toLowerCase().endsWith(extension) ? null : `文件名须包含名称并以 ${extension} 结尾。`
+}
+
+export function parseBookExportFileInput(value: unknown): BookExportFileInput {
+  const data = record(value, [...referenceKeys, 'format', 'acknowledgeOmissions', 'destination'])
+  const input = parseBookExportCommitInput({ ...reference(data), format: data.format, acknowledgeOmissions: data.acknowledgeOmissions })
+  if (data.destination === undefined) return input
+  const destination = record(data.destination, ['directoryId', 'fileName'])
+  if (typeof destination.fileName !== 'string') return invalid('请填写导出文件名。')
+  const problem = bookExportFileNameProblem(destination.fileName, input.format)
+  if (problem) return invalid(problem)
+  return { ...input, destination: { directoryId: requiredId(destination.directoryId).toLowerCase(), fileName: destination.fileName } }
 }
 
 export function parseBookExportCommitServiceInput(value: unknown): BookExportCommitServiceInput {
