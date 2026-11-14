@@ -32,12 +32,18 @@ export function BookOverview({ api, scope, book, snapshot, reading, error, busy,
   const words = book.chapters.reduce((n, item) => n + item.characterCount, 0)
   const finalized = book.chapters.filter((item) => item.status === 'finalized').length
   const recent = [...book.chapters].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4)
-  const stale = snapshot?.outlines.filter((item) => item.stale) ?? []
+  // 读取中、失败或旧格式的空快照不代表没有待办；章节审稿仍可按已读取目录展示。
+  const currentSnapshot = !reading && !error && snapshot && !snapshot.requiresUpgrade ? snapshot : null
+  const stale = currentSnapshot?.outlines.filter((item) => item.stale) ?? []
   const reviews = book.chapters.filter((item) => item.status === 'review')
   const pending = [
     ...stale.map((item) => ({ id: `outline:${item.id}`, title: item.fields.title, detail: '大纲依赖已变化，待复核', destination: 'living' as const, tone: 'warning' })),
     ...reviews.map((item) => ({ id: `review:${item.id}`, title: item.title, detail: '审稿待处理', destination: 'workbench' as const, tone: 'accent' })),
   ]
+  const pendingStatus = reading ? '正在核对创作状态，当前仅列出已读取章节中的审稿待办。'
+    : error ? `创作状态读取未完成：${error} 当前仅列出已读取章节中的审稿待办。`
+      : snapshot?.requiresUpgrade ? '本书尚未启用演进大纲，大纲待办未知。可前往大纲沙盘核对备份升级说明。'
+        : !snapshot ? '创作状态尚未读取，当前仅列出已读取章节中的审稿待办。' : null
   return <section className={styles.page} aria-label="作品总览"><div className={styles.pageInner}>
     <header className={styles.overviewHeading}><h1>五域星轨</h1><span className={ui.chip} data-tone={book.book.archivedAt ? 'warning' : 'accent'}>{book.book.archivedAt ? '归档 · 只读' : book.book.lifecycle === 'finished' ? '已完结' : '创作中'}</span></header>
     <CreativeSpine snapshot={snapshot} reading={reading} error={error} disabled={busy} onNavigate={onDomain} onReload={onReload} variant="orbit" />
@@ -51,10 +57,18 @@ export function BookOverview({ api, scope, book, snapshot, reading, error, busy,
         <details className={styles.identityDetails}><summary>作品资料</summary><p>{book.book.genre || '未设置题材'}</p><p>{book.book.synopsis || '尚未填写简介'}</p><button className={ui.button} type="button" disabled={busy} onClick={() => onNavigate('bookDetails')}>编辑资料</button></details>
       </section>
       <div className={styles.destinations}>{BOOK_DESTINATIONS.slice(0, 4).map((item, index) => <button className={styles.destination} key={item.id} type="button" disabled={busy} onClick={() => onNavigate(item.id)}><StudioIcon name={item.icon} size={48} /><strong>{item.label}</strong><span>{destinationDescriptions[index]}</span><StudioIcon name="chevron" size={20} /></button>)}</div>
-      <aside className={styles.overviewQueue} aria-label="待处理事项"><h2><StudioIcon name="spark" size={20} />待处理<span className={ui.chip}>{pending.length}</span></h2><ul className={styles.overviewQueueList}>
+      <aside className={styles.overviewQueue} aria-label="待处理事项"><h2><StudioIcon name="spark" size={20} />待处理<span className={ui.chip} aria-label={currentSnapshot ? `已读取的大纲与章节审稿待办 ${pending.length} 项` : `已知章节审稿待办 ${reviews.length} 项，大纲待办未确认`}>{currentSnapshot ? pending.length : pending.length ? `已知 ${pending.length}` : '待核对'}</span></h2><ul className={styles.overviewQueueList}>
         {pending.slice(0, 4).map((item) => <li key={item.id}><button type="button" disabled={busy} onClick={() => onNavigate(item.destination)}><i data-tone={item.tone} /><span><strong>{item.title}</strong><small>{item.detail}</small></span><StudioIcon name="chevron" size={20} /></button></li>)}
-      </ul>{pending.length === 0 && <p>{snapshot ? '暂无待处理事项' : reading ? '正在读取创作状态…' : '创作状态尚未读取'}</p>}
-        {pending.length > 4 && <button className={ui.ghost} type="button" disabled={busy} onClick={() => onNavigate('workbench')}>查看章节规划与审稿<StudioIcon name="arrow" size={16} /></button>}
+      </ul>{pendingStatus ? <div className={styles.overviewQueueStatus} data-tone={!reading && error ? 'danger' : undefined} role={!reading && error ? 'alert' : 'status'}>
+        <p>{pendingStatus}</p>
+        {!reading && !error && snapshot?.requiresUpgrade
+          ? <button className={ui.ghost} type="button" disabled={busy} onClick={() => onNavigate('living')}>查看大纲启用说明<StudioIcon name="arrow" size={16} /></button>
+          : <button className={ui.ghost} type="button" disabled={busy || reading} aria-busy={reading} onClick={onReload}>{reading ? '核对中…' : '重新读取创作状态'}<StudioIcon name="refresh" size={16} /></button>}
+      </div> : pending.length === 0 && <p>暂无待处理事项</p>}
+        {pending.length > 4 && <nav className={styles.overviewQueueActions} aria-label="全部待处理事项入口">
+          {stale.length > 0 && <button className={ui.ghost} type="button" disabled={busy} onClick={() => onNavigate('living')}>查看大纲待复核（{stale.length}）<StudioIcon name="arrow" size={16} /></button>}
+          {reviews.length > 0 && <button className={ui.ghost} type="button" disabled={busy} onClick={() => onNavigate('workbench')}>查看章节规划与审稿（{reviews.length}）<StudioIcon name="arrow" size={16} /></button>}
+        </nav>}
       </aside>
     </div>
     <section className={styles.activity}><h2><StudioIcon name="chart" size={20} />最近动态</h2><div className={styles.activityList}>{recent.map((item) => <button key={item.id} type="button" disabled={busy} onClick={() => onChapter(item.id)}><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time><strong>{item.title}</strong><span>{item.characterCount.toLocaleString()} 字</span></button>)}</div>{!recent.length && <p className={ui.muted}>暂无正文章节</p>}</section>
