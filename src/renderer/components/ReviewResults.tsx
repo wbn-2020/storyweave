@@ -40,13 +40,13 @@ function ReviewWorkspace({ source, proposal, state, caption, readerNotice, selec
   return <div className={styles.workspace}>
     <section className={styles.manuscript} aria-label="审稿固定稿件"><header><StudioIcon name="notes" size={24} /><h3>{source.context.chapterTitle}</h3><span className={styles.reviewState} role="status"><StudioIcon name={proposal ? 'check' : 'clock'} size={14} />{state}</span></header>
       <p className={styles.sourceCaption}>{caption}</p>
-      <div className={styles.manuscriptScroll}>{source.context.chapterBlocks.map((block) => {
+      <div className={styles.manuscriptScroll} tabIndex={0} role="region" aria-label="固定稿件正文与页边批注">{source.context.chapterBlocks.map((block) => {
         const indexes = reviewItems.flatMap((item, index) => item.blockIds.includes(block.blockId) ? [index] : [])
         const selectedItem = selected === null ? undefined : reviewItems[selected], quote = selectedItem?.blockIds.includes(block.blockId) ? selectedItem.quote : undefined
         const start = quote ? block.text.indexOf(quote) : -1
         return <div className={styles.manuscriptBlock} data-selected={selectedItem?.blockIds.includes(block.blockId)} key={block.blockId} ref={(element) => onBlockRef?.(block.blockId, element)}>
           <p>{start >= 0 && quote ? <>{block.text.slice(0, start)}<mark>{quote}</mark>{block.text.slice(start + quote.length)}</> : block.text}</p>
-          <aside>{indexes.map((index) => <button type="button" key={index} className={styles.annotation} data-lens={reviewItems[index]!.lens} aria-label={`批注 ${index + 1}：${reviewItems[index]!.title}`} aria-pressed={selected === index} onClick={() => onFocusIssue?.(index)}><span>{index + 1}</span>{reviewItems[index]!.title}</button>)}</aside>
+          <aside>{indexes.map((index) => <button type="button" key={index} className={styles.annotation} data-lens={reviewItems[index]!.lens} aria-label={`批注 ${index + 1}：${reviewItems[index]!.title}`} aria-pressed={selected === index} onClick={() => onFocusIssue?.(index)}><span className={styles.annotationNumber}>{index + 1}</span><span className={styles.annotationTitle}>{reviewItems[index]!.title}</span></button>)}</aside>
         </div>
       })}</div>
     </section>
@@ -58,12 +58,12 @@ function ReviewWorkspace({ source, proposal, state, caption, readerNotice, selec
         return <section className={styles.reader} data-lens={lens.key} key={lens.key}>
           <header><span className={styles.readerSymbol}><StudioIcon name={lens.icon} size={40} /></span><h4>{lens.name}</h4>
             <span className={styles.readerScore} data-unknown={score === null} title="模型主观试读评分，满分 10 分" aria-label={score === null ? proposal ? '模型评分未提供' : '尚无已核对的模型评分' : `模型主观评分 ${score.toFixed(1)}，满分 10 分`}><StudioIcon name="star" size={20} />{score === null ? <small>{source.state === 'running' ? '待完成' : source.state === 'succeeded' ? '未提供' : '未载入'}</small> : score.toFixed(1)}</span></header>
-          <p className={styles.readerComment}>{feedback?.comment || readerNotice || (indexes.length ? reviewItems[indexes[0]!]!.title : '本次未提供该角度的短评。')}</p>
-          <div className={styles.comments}>{indexes.map((index) => <div key={index} data-selected={selected === index}>
+          <p className={styles.readerComment} tabIndex={0}>{feedback?.comment || readerNotice || (indexes.length ? reviewItems[indexes[0]!]!.title : '本次未提供该角度的短评。')}</p>
+          <div className={styles.readerActions}><div className={styles.comments} tabIndex={indexes.length ? 0 : -1} role="region" aria-label={`${lens.name}审稿建议`}>{indexes.map((index) => <div key={index} data-selected={selected === index}>
             {indexes.length > 1 && <p>{reviewItems[index]!.title}</p>}
             <button type="button" className={styles.locateButton} onClick={() => onFocusIssue?.(index)} aria-label={`定位并改写：${reviewItems[index]!.title}`}><StudioIcon name="focus" size={18} />定位并改写</button>
             <small>{decisionLabel(savedItem?.(index))}</small></div>)}</div>
-          {score !== null && <svg className={styles.scoreRing} width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" /><circle cx="18" cy="18" r="14" pathLength="100" strokeDasharray={`${score * 10} 100`} /></svg>}
+          {score !== null && <svg className={styles.scoreRing} width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" /><circle cx="18" cy="18" r="14" pathLength="100" strokeDasharray={`${score * 10} 100`} /></svg>}</div>
         </section>
       })}
       {reviewItems.some((item) => item.lens === 'editor') && <details className={styles.editorOpinions}><summary>综合审稿 · {reviewItems.filter((item) => item.lens === 'editor').length} 条</summary>{reviewItems.map((item, index) => item.lens === 'editor' ? <button type="button" className={ui.button} key={index} onClick={() => onFocusIssue?.(index)}>{item.title}</button> : null)}</details>}
@@ -91,7 +91,7 @@ export function ReviewResults(props: Props) {
       <p className={ui.muted} role="status">{notice}</p>
       <ReviewWorkspace source={run} proposal={null} state={state} caption={`固定稿件 · 已保存输出 ${run.outputText.length.toLocaleString()} 字符`} readerNotice={running ? orphaned ? '任务待核对，尚无完整评分。' : '审稿中，等待完整结果。' : `本次${state}，未载入可登记的试读结果。`} />
       <details className={styles.reviewTools}><summary>任务标识与已保存输出</summary><p className={ui.identity}>任务 {run.id} · 固定正文修订 {run.context.chapterRevisionId}</p><pre className={styles.partialOutput}>{run.outputText || '尚无已保存输出。'}</pre></details>
-      <footer className={styles.footer}><span className={ui.muted}><StudioIcon name="info" size={16} />模型建议，非事实判定</span>
+      <footer className={styles.footer}><span className={`${ui.muted} ${styles.disclaimer}`}><StudioIcon name="info" size={16} />模型建议，非事实判定</span>
         {taskControls && running && <><button type="button" className={ui.button} disabled={locked} onClick={taskControls.onRefresh}><StudioIcon name="refresh" size={18} />核对任务状态</button><button type="button" className={ui.button} disabled={locked} onClick={orphaned ? taskControls.onInterrupt : taskControls.onCancel}>{orphaned ? '标记中断并保留输出' : '取消审稿并保留输出'}</button></>}
         {taskControls?.onRetry && ['failed', 'cancelled', 'interrupted'].includes(run.state) && <button type="button" className={ui.button} disabled={locked} onClick={() => { setExpanded(false); taskControls.onRetry?.() }}>重新准备本次要求</button>}
         <button type="button" className={ui.button} onClick={() => setExpanded(false)}>收起审稿试读</button>
@@ -263,8 +263,8 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
           : <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={blocked} onClick={() => void save(index, 'open')}>采纳建议</button><button className={ui.button} type="button" disabled={blocked} onClick={() => void save(index, 'dismissed')}>忽略建议</button><button className={ui.button} type="button" disabled={blocked} onClick={() => void save(index, 'intentional')}>这是刻意安排</button></div>}
       </details></article>
     })}
-    <footer className={styles.footer}><span><StudioIcon name="check" />采纳 {decisions.filter((item) => !['dismissed', 'intentional'].includes(item.status)).length} 条</span><span><StudioIcon name="close" />忽略 {decisions.filter((item) => item.status === 'dismissed').length} 条</span><span className={ui.muted}><StudioIcon name="info" size={16} />模型建议，非事实判定</span>
-      {onOpenChecklist && <button type="button" className={ui.primaryButton} disabled={tool.locked || sync || hasEdits(drafts) || !applicationTarget}
+    <footer className={styles.footer}><span className={styles.decisionCount} data-decision="accepted"><StudioIcon name="check" />采纳 {decisions.filter((item) => !['dismissed', 'intentional'].includes(item.status)).length} 条</span><span className={styles.decisionCount} data-decision="dismissed"><StudioIcon name="close" />忽略 {decisions.filter((item) => item.status === 'dismissed').length} 条</span><span className={`${ui.muted} ${styles.disclaimer}`}><StudioIcon name="info" size={16} />模型建议，非事实判定</span>
+      {onOpenChecklist && <button type="button" className={`${ui.primaryButton} ${styles.applyButton}`} disabled={tool.locked || sync || hasEdits(drafts) || !applicationTarget}
         title={hasEdits(drafts) ? '请先采纳或放弃未保存的编辑' : !applicationTarget ? '请先采纳或忽略所选建议' : canPreviewTarget ? `核对“${applicationTarget.title}”的差异后确认应用` : '查看所选问题的状态、来源及作者决定'}
         onClick={() => openDecision(applicationTarget?.id)}><StudioIcon name="spark" size={20} />{canPreviewTarget ? '应用修改' : '查看审稿决定'}</button>}
     </footer>
