@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { DomainError, type BookSnapshot, type StudioApi } from '../../contracts/api'
+import { DomainError, failure, type BookSnapshot, type Result, type StudioApi } from '../../contracts/api'
 import { parseAiConnectionConfig, type AiConnection, type AiConnectionConfig, type AiConnectionPage } from '../../contracts/ai'
 import type { StudioAiConnection } from '../../contracts/generation'
 import type { AiPreset, AiPresetsSnapshot } from '../../contracts/ai-presets'
 import type { AiConnectionProbeResult } from '../../contracts/ai-connection-probe'
+import type { AiKeySessionInput } from '../../contracts/ai-key-session'
 import { AiPresetsPanel } from './AiPresetsPanel'
 import { Dialog, DialogDisplayContext } from './Dialog'
 import { StudioIcon } from './StudioIcon'
@@ -48,6 +49,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   const [probes, setProbes] = useState<Record<string, ProbeState>>({})
   const probeRequests = useRef(new Map<string, string>())
   const probeEpoch = useRef(0)
+  const keyPage = useRef<AiKeySessionInput | null>(null)
   const needsRead = useRef(true)
   const guard = useRef({ connection: false, presets: false })
   const callback = useRef(onDirtyChange)
@@ -72,7 +74,16 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
     onDiscard: () => { setDraft(null); setSecret(''); setDiscard(false); tool.setDirty(false) },
   })
 
-  useEffect(() => { needsRead.current = true; setLoaded(false) }, [scope, api, book?.book.id])
+  useEffect(() => {
+    const page: AiKeySessionInput = scope === 'book' && book ? { sessionId: crypto.randomUUID(), scope, bookId: book.book.id }
+      : { sessionId: crypto.randomUUID(), scope: 'studio' }
+    keyPage.current = page
+    return () => {
+      if (keyPage.current === page) keyPage.current = null
+      void request(() => api.closeAiKeySession({ sessionId: page.sessionId }))
+    }
+  }, [scope, api, book?.book.id])
+  useEffect(() => { needsRead.current = true; setLoaded(false); setStudioKeys([]); setBookPage(null) }, [scope, api, book?.book.id])
   useEffect(() => {
     if (!disabled && needsRead.current) { needsRead.current = false; void reload() }
   }, [scope, api, book?.book.id, disabled])
@@ -98,7 +109,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   function probeKey(connection: AiConnection) { return JSON.stringify([scope, scope === 'book' ? book?.book.id : null, connection.id, connection.version]) }
   async function testConnection(connection: AiConnection) {
     const key = probeKey(connection)
-    if (tool.locked || tool.hasChanges() || guard.current.presets || probeRequests.current.has(key) || scope === 'book' && !book) return
+    if (!loaded || tool.locked || tool.hasChanges() || guard.current.presets || probeRequests.current.has(key) || scope === 'book' && !book) return
     const requestId = crypto.randomUUID(), epoch = probeEpoch.current
     probeRequests.current.set(key, requestId)
     setProbes((items) => ({ ...items, [key]: { state: 'loading', latencyMs: null, message: '正在测试连接…' } }))
@@ -117,12 +128,20 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
     if (!result.ok && epoch === probeEpoch.current) tool.setError(result.error.message)
   }
 
+  async function readConnections<T>(read: () => Promise<Result<T>>): Promise<Result<T>> {
+    const page = keyPage.current
+    if (!page) return failure('SERVICE_UNAVAILABLE', '模型页面尚未就绪，请重新打开。')
+    const opened = await request(() => api.openAiKeySession(page))
+    if (!opened.ok) return opened
+    if (keyPage.current !== page || opened.data.sessionId !== page.sessionId) return failure('REVISION_CONFLICT', '模型页面已变化，请重新读取连接。')
+    return read()
+  }
   async function reload() {
     if (tool.hasChanges() || guard.current.presets) { tool.setError('请先保存或放弃当前修改。'); return }
-    if (scope === 'studio') await tool.read(() => api.listStudioAiConnections(), (value) => {
+    if (scope === 'studio') await tool.read(() => readConnections(() => api.listStudioAiConnections()), (value) => {
       setStudioConnections(value.connections); setStudioKeys(value.sessionKeyIds); setLoaded(true)
     })
-    else if (book) await tool.read(() => api.listAiConnections({ bookId: book.book.id }), (value) => {
+    else if (book) await tool.read(() => readConnections(() => api.listAiConnections({ bookId: book.book.id })), (value) => {
       if (value.bookId !== book.book.id) throw new Error('Connection book mismatch')
       setBookPage(value); setLoaded(true)
     })
@@ -133,7 +152,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
     setDraft(null); setSecret(''); setLoaded(false); setScope(value)
   }
   function edit(connection?: AiConnection) {
-    if (tool.locked || tool.hasChanges() || guard.current.presets || readOnly) return
+    if (!loaded || tool.locked || tool.hasChanges() || guard.current.presets || readOnly) return
     if (scope === 'book') { onConfigureBook(); return }
     setDraft(connection ? fieldsOf(connection) : { id: crypto.randomUUID(), name: '', baseUrl: '', model: '', contextWindow: 32_000, maxOutputTokens: 2048 })
     setDefault(scope === 'studio' && (studioConnections.find((item) => item.id === connection?.id)?.isDefault ?? !connections.length))
@@ -169,8 +188,9 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   }
   const securityNote = <aside className={styles.securityNote} aria-label="密钥保存范围">
     <StudioIcon name="lock" size={28} />
-    <div><h3>密钥仅保存在本次会话内存</h3><p>不写入作品文件，结束桌面会话后清除。</p>
-      <p>连接测试仅读取模型列表；生成请求在固定预览经确认后发送。</p></div>
+    <div><h3>密钥仅保存在本次会话内存</h3><p>离开页面后将自动清除</p>
+      <details><summary>查看清除范围</summary><p>关闭模型页或切换连接范围时，清除本页工作室共享密钥{scope === 'book' ? '及当前作品的会话密钥' : ''}，不写入作品文件。下一次需要认证的新请求须重新填写。</p>
+        <p>清除的是后续请求可复用的内存记录；已发出的模型请求仍按原流程完成或取消。连接测试仅读取模型列表，不发送正文。</p></details></div>
     <span className={styles.securityEmblem} aria-hidden="true"><StudioIcon name="shield" size={88} /><StudioIcon name="spark" size={30} /></span>
   </aside>
   return <Dialog title={<span className={styles.pageTitle}>模型路由中心<small>智能调度 · 高效协同 · 稳定可靠</small></span>} onClose={onClose} busy={tool.locked} wide>

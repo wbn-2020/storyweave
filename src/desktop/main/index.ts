@@ -15,6 +15,7 @@ import { GenerationSessions } from './generation-sessions'
 import { ImageSessions } from './image-sessions'
 import { ConnectionProbes } from './connection-probes'
 import { parseConnectionProbeCancel, parseConnectionProbeInput } from '../../contracts/ai-connection-probe'
+import { parseAiKeySessionClose, parseAiKeySessionInput } from '../../contracts/ai-key-session'
 import type { AiConnectionPage } from '../../contracts/ai'
 import { parseBookRecoveryExportInput, parseBookRecoveryRestoreInput } from '../../contracts/book-recovery'
 import { bookExportExtension, parseBookExportFileInput, type BookExportReceipt } from '../../contracts/export'
@@ -46,6 +47,17 @@ const generationSessions = new GenerationSessions()
 const connectionProbes = new ConnectionProbes()
 const aiSessions = new AiSessions((root, connection) => generationSessions.sessionKey(root, connection))
 const imageSessions = new ImageSessions()
+let connectionKeyPage: { sessionId: string; root: string; bookId?: string } | null = null
+
+function closeConnectionKeyPage(sessionId?: string): void {
+  const page = connectionKeyPage
+  // 旧页面的迟到卸载不能清除新页面会话；根目录固定于进入时，切库后也不会清错书库。
+  if (!page || sessionId !== undefined && page.sessionId !== sessionId) return
+  connectionKeyPage = null
+  generationSessions.clearSessionKeys(page.root)
+  if (page.bookId) aiSessions.clearSessionKeys(page.root, page.bookId)
+  connectionProbes.abortAll()
+}
 
 const rendererCommands = new Set<RendererCommand>([
   'living.get', 'living.archive', 'living.save', 'living.history', 'living.restore', 'living.prepare', 'living.run', 'living.adopt',
@@ -53,6 +65,7 @@ const rendererCommands = new Set<RendererCommand>([
   'generation.connections', 'generation.configure', 'generation.draft', 'generation.get', 'generation.prepare',
   'generation.start', 'generation.cancel', 'generation.select', 'generation.adopt',
   'connection.probe', 'connection.probe.cancel',
+  'connection.keys.open', 'connection.keys.close',
   'workspace.get', 'workspace.select', 'book.create', 'book.get',
   'workbench.get', 'workbench.brief', 'workbench.scene', 'workbench.scenes.reorder', 'workbench.issue', 'workbench.applyIssue', 'workbench.goal', 'workbench.session',
   'inspiration.list', 'inspiration.thumbnail', 'inspiration.upgrade', 'inspiration.save', 'inspiration.copy', 'inspiration.import',
@@ -207,6 +220,12 @@ function setupIpc(): void {
         connectionProbes.cancel(parseConnectionProbeCancel(payload).requestId)
         return { ok: true, data: null }
       }
+      // 释放内存不经过服务写入，关闭握手、切库或服务失联也不能阻止离页清理。
+      if (command === 'connection.keys.close') {
+        const input = parseAiKeySessionClose(payload)
+        closeConnectionKeyPage(input.sessionId)
+        return { ok: true, data: input }
+      }
       // 检查点独立于业务进程；只有切库、关闭排空或恢复中才暂缓，防止保存到错误书库。
       if (command === 'draft.checkpoint' || command === 'draft.list' || command === 'draft.rotate') {
         if (choosingFile || restarting || draining) return failure('WORKSPACE_BUSY', '桌面正在切换或关闭，请稍后再处理草稿副本。')
@@ -275,6 +294,18 @@ function setupIpc(): void {
       if (choosingFile) return failure('WORKSPACE_BUSY', '请先完成当前文件选择，本次操作未提交。')
       if (closing && !['chapter.save', 'chapter.read', 'workspace.get'].includes(command)) {
         return failure('SERVICE_UNAVAILABLE', '正在保存并关闭，请等待当前操作完成。')
+      }
+      if (command === 'connection.keys.open') {
+        const input = parseAiKeySessionInput(payload), root = service.getWorkspaceRoot()
+        if (!root) return failure('WORKSPACE_REQUIRED', '请先选择作品库。')
+        const bookId = input.scope === 'book' ? input.bookId : undefined
+        if (connectionKeyPage?.sessionId === input.sessionId) {
+          if (connectionKeyPage.root !== root || connectionKeyPage.bookId !== bookId) return failure('REVISION_CONFLICT', '模型页面范围已变化，请重新打开页面。')
+        } else {
+          closeConnectionKeyPage()
+          connectionKeyPage = { sessionId: input.sessionId, root, bookId }
+        }
+        return { ok: true, data: { sessionId: input.sessionId } }
       }
       if (command === 'connection.probe') {
         const input = parseConnectionProbeInput(payload), client = service, root = client.getWorkspaceRoot()
@@ -637,6 +668,7 @@ function createWindow(): void {
   window.webContents.on('will-frame-navigate', (event) => event.preventDefault())
   window.webContents.on('will-redirect', (event) => event.preventDefault())
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
+  window.webContents.on('render-process-gone', () => closeConnectionKeyPage())
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   window.webContents.session.setPermissionCheckHandler(() => false)
   window.webContents.session.on('will-download', (event) => event.preventDefault())
@@ -648,7 +680,7 @@ function createWindow(): void {
     event.preventDefault()
     void requestClose()
   })
-  window.on('closed', () => { connectionProbes.abortAll(); aiSessions.abortAll(); generationSessions.abortAll(); imageSessions.abortAll(); mainWindow = null })
+  window.on('closed', () => { closeConnectionKeyPage(); connectionProbes.abortAll(); aiSessions.abortAll(); generationSessions.abortAll(); imageSessions.abortAll(); mainWindow = null })
   window.once('ready-to-show', () => window.show())
   void window.loadURL(expectedRendererUrl).then(() => { rendererSessionStarted = true }).catch(() => {
     initialRendererLoadFailed = true

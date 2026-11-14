@@ -1,5 +1,6 @@
 import type { ManuscriptDocument } from './manuscript'
 import type { AiConnectionProbeInput, AiConnectionProbeResult } from './ai-connection-probe'
+import type { AiKeySessionInput, AiKeySessionReceipt } from './ai-key-session'
 import type { ImageGenerationApi } from './image-generation'
 import type { LivingApi, LivingSnapshot, LivingRunDetail, LivingPrepareInput, LivingRunInput, LivingAdoptInput, LivingAdoptReceipt, SaveOutlineInput, OutlineHistoryInput, OutlineHistoryPage, RestoreOutlineInput, MemoryArchiveInput, MemoryArchivePage } from './living'
 import type { ForgeApi, ForgeSnapshot, ForgeReadInput, ForgePrepareInput, ForgeRunInput, ForgeRunDetail, ForgeAdoptInput, ForgeAdoptReceipt } from './forge'
@@ -483,6 +484,8 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   configureAiConnection(input: AiConfigureInput): Promise<Result<AiConnectionPage>>
   testAiConnection(input: AiConnectionProbeInput): Promise<Result<AiConnectionProbeResult>>
   cancelAiConnectionTest(input: { requestId: string }): Promise<Result<null>>
+  openAiKeySession(input: AiKeySessionInput): Promise<Result<AiKeySessionReceipt>>
+  closeAiKeySession(input: AiKeySessionReceipt): Promise<Result<AiKeySessionReceipt>>
   listAiRuns(input: AiListInput): Promise<Result<AiRunPage>>
   getAiRun(input: AiRunInput): Promise<Result<AiRun>>
   prepareAiRun(input: AiPrepareInput): Promise<Result<AiRun>>
@@ -522,6 +525,7 @@ export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'servic
   | 'draft.checkpoint' | 'draft.list' | 'draft.rotate' | 'draft.select' | 'draft.preview' | 'draft.commit'
   | 'ai.configure' | 'ai.start' | 'ai.cancel'
   | 'connection.probe' | 'connection.probe.cancel'
+  | 'connection.keys.open' | 'connection.keys.close'
   | 'generation.configure' | 'generation.start' | 'generation.cancel'
   | 'memory.vector.start'
 

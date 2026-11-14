@@ -124,6 +124,7 @@ export class AiSessions {
     return key?.baseUrl === connection.baseUrl ? key.value : this.workspaceKey?.(root, connection)
   }
   private readonly keys = new Map<string, SessionKey>()
+  private keyEpoch = 0
   private readonly uncertainWrites = new Map<string, UncertainRequest>()
   private readonly pendingConfigurations = new Map<string, PendingConfiguration>()
   private active: ActiveRequest | null = null
@@ -134,6 +135,18 @@ export class AiSessions {
   private restoringResults: Promise<Result<null>> | null = null
   private restoredRoot: string | null = null
   private recoveryWarning: Result<null> | null = null
+
+  clearSessionKeys(root: string, bookId: string): void {
+    this.keyEpoch += 1
+    for (const scope of this.keys.keys()) {
+      const [, keyRoot, keyBook] = JSON.parse(scope) as [string, string, string, string]
+      if (keyRoot === root && keyBook === bookId) this.keys.delete(scope)
+    }
+    // 释放待确认配置的密钥，保留原请求身份与忙锁，不能把离页解释为写入结束。
+    for (const pending of this.pendingConfigurations.values()) {
+      if (pending.root === root && pending.input.bookId === bookId) pending.input = { ...pending.input, apiKey: undefined }
+    }
+  }
 
   restorePending(service: ServiceClient): Promise<Result<null>> {
     if (this.restoringResults) return this.restoringResults
@@ -695,6 +708,7 @@ export class AiSessions {
     const input = parseAiConfigureInput(payload)
     if (this.hasActive() || this.configuring) return failure('WORKSPACE_BUSY', '生成或配置操作尚未结束，请稍后再保存连接。')
     this.configuring = true
+    const keyEpoch = this.keyEpoch
     try {
       const page = await service.request('ai.connection.list', { bookId: input.bookId })
       if (!page.ok) return page
@@ -707,7 +721,8 @@ export class AiSessions {
       const saved = await service.request('ai.connection.save', save)
       if (!saved.ok) {
         if (saved.error.code === 'REQUEST_TIMEOUT' && saved.error.requestId && !service.hasExited()) {
-          this.pendingConfigurations.set(scope, { root, input, service, requestId: saved.error.requestId })
+          this.pendingConfigurations.set(scope, { root, input: keyEpoch === this.keyEpoch ? input : { ...input, apiKey: undefined },
+            service, requestId: saved.error.requestId })
           this.discardUnavailableConfigurations(service)
         }
         return saved
@@ -716,7 +731,7 @@ export class AiSessions {
       if (service.getWorkspaceRoot() !== root || !matchesConfiguration(connection, input)) {
         return failure('STORAGE_ERROR', '连接保存回执无法核对，请重新读取配置后再输入会话密钥。')
       }
-      this.applySessionKey(scope, connection, apiKey)
+      if (keyEpoch === this.keyEpoch) this.applySessionKey(scope, connection, apiKey)
       return { ok: true, data: this.connectionPage(root, { ...page.data,
         connections: [...page.data.connections.filter((item) => item.id !== connection.id), connection] }, service) }
     } finally { this.configuring = false }

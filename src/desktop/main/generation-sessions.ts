@@ -21,6 +21,7 @@ const localEndpoint = (url: string) => ['localhost', '127.0.0.1', '[::1]'].inclu
 
 export class GenerationSessions {
   private readonly keys = new Map<string, { baseUrl: string; value: string }>()
+  private keyEpoch = 0
   private readonly journal = new PendingAiResults('pending-generation-results')
   private active: ActiveGeneration | null = null
   private pending: PendingGeneration | null = null
@@ -32,6 +33,12 @@ export class GenerationSessions {
   sessionKey(root: string, connection: AiConnection): string | undefined {
     const key = this.keys.get(keyScope(root, connection.id))
     return key?.baseUrl === connection.baseUrl ? key.value : undefined
+  }
+  clearSessionKeys(root: string): void {
+    this.keyEpoch += 1
+    for (const scope of this.keys.keys()) {
+      if ((JSON.parse(scope) as [string, string])[0] === root) this.keys.delete(scope)
+    }
   }
   hasActive(includePending = true): boolean { this.resolveUncertain(); return this.active !== null || this.working || this.restoring !== null || this.uncertain !== null || (includePending && this.pending !== null) }
   abortAll(): void { this.active?.controller.abort() }
@@ -92,12 +99,15 @@ export class GenerationSessions {
         case 'generation.configure': {
           if (this.hasActive()) return failure('WORKSPACE_BUSY', '请先结束或核对当前开书请求。')
           const input = parseStudioAiConnectionInput(payload), { apiKey, ...configuration } = input
+          const keyEpoch = this.keyEpoch
           this.working = true
           try {
             const result = await service.request('generation.connection.save', configuration)
             if (!result.ok) { this.remember(result, service); return result }
             if (service.getWorkspaceRoot() !== root) return failure('REVISION_CONFLICT', '作品库已变化，请重新读取配置。')
             const scope = keyScope(root, result.data.id)
+            // 离页后仍可确认配置写入，但迟到回执不能重新启用该页的密钥。
+            if (keyEpoch !== this.keyEpoch) return result
             if (apiKey !== undefined) {
               if (apiKey) this.keys.set(scope, { baseUrl: result.data.baseUrl, value: apiKey })
               else this.keys.delete(scope)
