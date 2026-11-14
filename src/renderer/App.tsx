@@ -245,6 +245,9 @@ export function App({ api }: Props) {
   const chapter = session.session.chapter
   const creative = useLivingSnapshot(api, book?.book.id, book?.book.revision)
   const archived = Boolean(book?.book.archivedAt)
+  const storageReason = session.session.error?.code === 'STORAGE_ERROR'
+    && (session.session.error.storageReason === 'disk-full' || session.session.error.storageReason === 'database-full')
+    ? session.session.error.storageReason : undefined
   const baseStudioView = surface === 'write' && book ? 'write' : surface === 'book' && book ? 'book' : surface === 'shelf' && workspace.rootPath ? 'shelf' : 'home'
 
   // 判断当前 modal 是否为内嵌在主画布的全屏视图，还是传统的遮罩弹窗
@@ -1528,18 +1531,20 @@ export function App({ api }: Props) {
       {message && !hasBlockingDialog && <div className={styles.notice} role="alert"><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
       {display.warning && !hasBlockingDialog && <div className={styles.notice} role="status"><span>{display.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={display.retrySave}>保存当前显示偏好</button></div>}
       {pendingMessage && <div className={styles.notice} role="alert"><span>{pendingMessage}</span><button className={styles.receiptButton} type="button" onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
-      {session.session.error && <StellarEmpty compact role="alert" heading="h2" icon="warning" hintIcon="refresh"
-        tone={['REVISION_CONFLICT', 'REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(session.session.error.code) ? 'warning' : 'danger'}
-        title={saveLabel(session.session)} description={session.session.error.message}
-        hint={session.session.error.code === 'REVISION_CONFLICT' ? '请从“草稿与恢复”另存后重载磁盘版本。'
+      {session.session.error && <StellarEmpty compact role="alert" heading="h2" icon={storageReason ? 'database' : 'warning'} hintIcon="refresh"
+        tone={storageReason ? 'default' : ['REVISION_CONFLICT', 'REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(session.session.error.code) ? 'warning' : 'danger'}
+        title={storageReason === 'disk-full' ? '磁盘空间不足' : storageReason === 'database-full' ? '数据库可用空间不足' : saveLabel(session.session)} description={session.session.error.message}
+        hint={storageReason === 'disk-full' ? '请保留窗口；检查书库所在磁盘的可用空间，或将草稿副本另存到其他本地磁盘。'
+          : storageReason === 'database-full' ? '请保留窗口；检查数据库容量限制及临时存储空间，或将草稿副本另存到其他本地磁盘。'
+          : session.session.error.code === 'REVISION_CONFLICT' ? '请从“草稿与恢复”另存后重载磁盘版本。'
           : session.session.error.code === 'REQUEST_TIMEOUT' || session.session.error.code === 'SERVICE_UNAVAILABLE' ? '先核对原保存回执，未获确认前请保留窗口和草稿。' : '当前草稿仍在窗口中，可重试保存或另存草稿副本。'}>
         {session.session.error.code !== 'REVISION_CONFLICT' && <button className={styles.primaryButton} type="button" aria-busy={session.session.saving}
           onClick={() => void session.flush()} disabled={!api || busy || archived || bookRecoveryLocked || hasBlockingDialog || !session.session.dirty || session.session.saving || session.session.composing}>
-          <StudioIcon name="refresh" size={20} />{session.session.error.code === 'REQUEST_TIMEOUT' || session.session.error.code === 'SERVICE_UNAVAILABLE' ? '核对保存回执' : '重试'}
+          <StudioIcon name="refresh" size={20} />{storageReason ? '处理空间后重试' : session.session.error.code === 'REQUEST_TIMEOUT' || session.session.error.code === 'SERVICE_UNAVAILABLE' ? '核对保存回执' : '重试'}
         </button>}
         <button className={session.session.error.code === 'REVISION_CONFLICT' ? styles.primaryButton : styles.button} type="button"
           onClick={() => openRecovery()} disabled={!api || hasBlockingDialog || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}>
-          <StudioIcon name="copy" size={20} />{session.session.error.code === 'REVISION_CONFLICT' ? '草稿与恢复' : '另存为草稿'}
+          <StudioIcon name="copy" size={20} />{storageReason ? '另存草稿副本' : session.session.error.code === 'REVISION_CONFLICT' ? '草稿与恢复' : '另存为草稿'}
         </button>
       </StellarEmpty>}
       {session.session.dirty && protection.state.error && <div className={`${styles.notice} ${styles.noticeError}`} role="alert"><span>恢复检查点未更新：{protection.state.error}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={protection.retry}>重试留存</button><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing || hasBlockingDialog} onClick={showDraftProtection}>查看容量与分代</button></div>}

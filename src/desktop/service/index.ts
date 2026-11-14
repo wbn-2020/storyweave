@@ -1,4 +1,5 @@
 import { DomainError, failure, isRecord, requiredId, type Result, type CommandMap, type ServiceCommand, type ServiceRequest } from '../../contracts/api'
+import { storageError } from '../../infrastructure/storage/storage-error'
 import { KnowledgeRepository } from '../../infrastructure/knowledge/knowledge-repository'
 import { StoryRepository } from '../../infrastructure/story/story-repository'
 import { StoryTimelineRepository } from '../../infrastructure/story/timeline-repository'
@@ -277,7 +278,7 @@ parentPort.on('message', (event: { data: unknown }) => {
     } catch (error) {
       result = error instanceof DomainError
         ? { ok: false, error: error.detail }
-        : failure('STORAGE_ERROR', '本地数据操作失败，未确认保存成功，请保留当前稿件。')
+        : { ok: false, error: storageError(error, '本地数据操作失败，未确认保存成功，请保留当前稿件。').detail }
     } finally {
       pendingRequests -= 1
     }

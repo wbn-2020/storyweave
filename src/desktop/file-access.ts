@@ -1,6 +1,7 @@
 import { closeSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { DomainError, type FileWriteReceipt } from '../contracts/api'
+import { storageError } from '../infrastructure/storage/storage-error'
 
 function localPath(value: string): string {
   if (!/^[a-z]:[\\/]/i.test(value) || value.slice(2).includes(':') || value.includes('\0')) {
@@ -93,6 +94,6 @@ function writeNewFile<T>(filePath: string, producer: (write: (chunk: Uint8Array)
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
       throw new DomainError({ code: 'INVALID_INPUT', message: '同名文件已存在，未覆盖任何内容。请选择新的文件名。' })
     }
-    throw new DomainError({ code: 'STORAGE_ERROR', message: `文件写入未完成，请核对所选文件；可能已保留部分内容：${target}` })
+    throw storageError(error, `文件写入未完成，请核对所选文件；可能已保留部分内容：${target}`)
   }
 }

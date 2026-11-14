@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, DomainError, IPC_CHANNEL, failure, isRecord, requiredId, type CompletedRequest, type RendererCommand, type Result, type SaveChapterOutput, type WorkspaceSnapshot } from '../../contracts/api'
+import { storageError, storageFailureReason } from '../../infrastructure/storage/storage-error'
 import { parseServiceRequest } from '../request-validation'
 import { checkedLocalDirectory } from '../file-access'
 import { ServiceClient } from './service-client'
@@ -488,7 +489,9 @@ function setupIpc(): void {
     } catch (error) {
       return error instanceof DomainError
         ? { ok: false, error: error.detail }
-        : failure('SERVICE_UNAVAILABLE', '本地操作未完成，请保留当前稿件。')
+        : storageFailureReason(error)
+          ? { ok: false, error: storageError(error, '本地操作未完成，请保留当前稿件。').detail }
+          : failure('SERVICE_UNAVAILABLE', '本地操作未完成，请保留当前稿件。')
     }
   })
   ipcMain.on(CLOSE_RESPONSE_CHANNEL, (event, requestId: unknown, ready: unknown) => {

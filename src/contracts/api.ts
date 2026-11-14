@@ -55,6 +55,7 @@ export type ErrorCode =
 export interface AppError {
   code: ErrorCode
   message: string
+  storageReason?: 'disk-full' | 'database-full'
   currentRevisionId?: string
   requestId?: string
 }

@@ -40,6 +40,7 @@ import { recordWritingActivity } from '../workbench/writing-activity'
 import type { WritingDay } from '../../contracts/workbench'
 import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
 import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION, STUDIO_APPLICATION_ID, STUDIO_SCHEMA, STUDIO_SCHEMA_VERSION } from './schema'
+import { storageError } from './storage-error'
 
 interface BookRow {
   id: string; title: string; genre: string; synopsis: string; archived_at: string | null
@@ -116,14 +117,14 @@ function assertRecoveryComplete(directory: string, bookId: string, required = fa
   }
 }
 
-function storageFailure(): DomainError {
-  return new DomainError({ code: 'STORAGE_ERROR', message: '本地资料读写失败，当前草稿请继续保留。请检查目录、磁盘空间及文件是否可用。' })
+function storageFailure(error?: unknown): DomainError {
+  return storageError(error, '本地资料读写失败，当前草稿请继续保留。请检查目录、磁盘空间及文件是否可用。')
 }
 
 function perform<T>(operation: () => T): T {
   try { return operation() } catch (error) {
     if (error instanceof DomainError) throw error
-    throw storageFailure()
+    throw storageFailure(error)
   }
 }
 
