@@ -2,13 +2,15 @@ import { DomainError, isRecord, requiredId, requiredInteger } from './api'
 import type { AiContextPacket, AiRun } from './ai'
 import { parseCreativeResources } from './creative-resources'
 import { isStudyCardKind, parseStudyCard, readStudyCard, validateStudyStyleSource } from './study-card'
+import { isStudyTextCardKind, parseStudyTextCard, readStudyTextCard, validateStudyTextSource } from './study-text-card'
 import { parseInspirationFields, type InspirationFields, type InspirationItem } from './workbench'
 
 export const MAX_STUDY_ITEMS = 30
 export const MAX_STUDY_BODY = 40_000
 export const MAX_STUDY_TITLE = 160
 export const STUDY_CARDS_LEGACY_PROMPT_VERSION = 9
-export const STUDY_CARDS_PROMPT_VERSION = 11
+export const STUDY_ANNOTATED_PROMPT_VERSION = 11
+export const STUDY_CARDS_PROMPT_VERSION = 12
 export const STUDY_KINDS = ['observation', 'excerpt', 'technique', 'method', 'beat', 'style'] as const
 export interface StudyProposalItem { kind: typeof STUDY_KINDS[number]; title: string; body: string; quote: string; sourceId: string }
 export interface StudyProposal { version: 1; items: StudyProposalItem[] }
@@ -36,7 +38,7 @@ analysis最多8000字符，application和limits各最多2000字符；文风四�
 四类旧项的body仍为字符串。所有类型仍须附同一固定参考中的逐字quote与sourceId。引文是证据，不能作为复用正文。
 卡片只保留抽象结构、句式节奏和技法；使用角色甲、对手、地点等占位称呼，不复制专名、独创设定和原文句段。不得编造统计数值或声称代表作者全部作品。`
 
-export const STUDY_CARDS_SYSTEM_RULES = `${STUDY_SYSTEM_RULES}
+export const STUDY_ANNOTATED_SYSTEM_RULES = `${STUDY_SYSTEM_RULES}
 本次允许 kind=beat（节拍骨架）或 style（文风卡），另四类仍可使用。整体 version 仍为1，四类旧项的 body 仍为字符串。
 beat/style 的 body 使用对象。beat 为 {"version":1,"analysis":"片段分析","application":"适用场景","limits":"不适用情形与复用限制","beats":[{"title":"抽象节拍","action":"去名化行动","outcome":"叙事变化"}]}，beats 为1至6项。
 style 为 {"version":2,"analysis":"分析","application":"适用场景","limits":"不适用情形与复用限制","rhythm":"句长与节奏特征","dialogue":"对白组织","senses":"感官偏好","diction":"措辞与动词特征","annotations":{"senses":[{"sense":"visual|auditory|tactile|olfactory|gustatory","quote":"同一固定参考的连续逐字感官短语"}],"verbs":[{"word":"原文中的动词候选","quote":"包含该词的连续逐字原文"}]}}。
@@ -46,8 +48,14 @@ verbs 最多8项，word 只能含文字字符、最多16字符且互不重复，
 不得输出感官百分比、词频或推测数量；界面只按已核对标注计数，候选词由本地在同一固定 text 中统计字面出现次数。标注分布不代表全文真实感官比例，字面次数不证明每次均为动词。
 所有类型仍须附同一固定参考中的逐字 quote 与 sourceId。卡片分析与复用字段只保留抽象结构、句式节奏和技法，使用角色甲、对手、地点等占位称呼；专名与原句只留在证据引文中。不编造统计数值，不声称代表作者全部作品。`
 
+export const STUDY_CARDS_SYSTEM_RULES = `${STUDY_ANNOTATED_SYSTEM_RULES}
+本次新增技法公式与词汇包。上述“四类旧项 body 为字符串”的约定仅适用于 observation；method、technique、excerpt 的 body 必须改用下列对象，不能输出普通正文或自行添加字段：
+method/technique 为 {"version":1,"format":"study-formula","analysis":"片段分析","application":"适用场景","limits":"复用限制","stages":["抽象阶段"]}。stages 最多4项，每项非空且最多40字符，按叙事顺序填写去名化阶段，不固定套用示例公式，不用加号拼成一个阶段。没有足够依据时留空数组。
+excerpt 为 {"version":1,"format":"study-vocabulary","analysis":"佳句或用词分析","application":"适用场景","limits":"复用限制","words":[{"word":"普通非专名词汇","quote":"包含该词的同一固定参考连续逐字原文"}]}。words 最多8项，word 只含文字字符、非空、最多16字符且互不重复；quote 非空、最多240字符，必须包含 word 并逐字存在于本项 sourceId 对应的 text。不得猜测分词、填入未出现的词、专名或照搬界面示例词。分类是模型建议，不代表事实或作者已经采纳；无法确认则留空数组。
+两类卡的 analysis 最多8000字符，application 和 limits 各最多2000字符，整项 body 序列化后最多40000字符。顶层逐字 quote 与 sourceId 仍须保留；词汇及其引文只作证据核对，不作为写作复用正文。`
+
 export function isStudyCardsPromptVersion(value: unknown): value is number {
-  return value === STUDY_CARDS_LEGACY_PROMPT_VERSION || value === STUDY_CARDS_PROMPT_VERSION
+  return value === STUDY_CARDS_LEGACY_PROMPT_VERSION || value === STUDY_ANNOTATED_PROMPT_VERSION || value === STUDY_CARDS_PROMPT_VERSION
 }
 
 function invalid(message: string): never { throw new DomainError({ code: 'INVALID_INPUT', message }) }
@@ -97,9 +105,15 @@ export function parseStudyProposal(output: string, context: AiContextPacket): St
     if (isStudyCardKind(entry.kind as string)) {
       const card = typeof body === 'string' ? readStudyCard(entry.kind as 'beat' | 'style', body) : parseStudyCard(entry.kind as 'beat' | 'style', body)
       if ('rhythm' in card) {
-        if (card.version !== (context.promptVersion === STUDY_CARDS_PROMPT_VERSION ? 2 : 1)) return invalid('文风卡版本与本次固定提示不符，请保留原结果并重新生成。')
+        if (card.version !== (context.promptVersion === STUDY_ANNOTATED_PROMPT_VERSION || context.promptVersion === STUDY_CARDS_PROMPT_VERSION ? 2 : 1)) return invalid('文风卡版本与本次固定提示不符，请保留原结果并重新生成。')
         validateStudyStyleSource(card, source.text)
       }
+      body = JSON.stringify(card)
+    } else if (context.promptVersion === STUDY_CARDS_PROMPT_VERSION && isStudyTextCardKind(entry.kind as string)) {
+      const kind = entry.kind as 'method' | 'technique' | 'excerpt'
+      const card = typeof body === 'string' ? readStudyTextCard(kind, body) : parseStudyTextCard(kind, body)
+      if (!card) return invalid('本次技法公式或词汇包须提供结构化字段，请保留原结果并重新生成。')
+      validateStudyTextSource(card, source.text)
       body = JSON.stringify(card)
     }
     return { kind: entry.kind as StudyProposalItem['kind'], title: text(entry.title, '拆书标题', MAX_STUDY_TITLE),
@@ -125,6 +139,15 @@ export function parseStudyAdoptInput(value: unknown): StudyAdoptInput {
 export function studyInspirationFields(input: StudyAdoptInput, context: AiContextPacket, proposal: StudyProposalItem, entry: StudyAdoptEntry): InspirationFields {
   const source = context.creativeResources?.items.find((item) => item.source === 'inspiration' && item.id === proposal.sourceId)
   if (!source) return invalid('固定拆书来源缺失，无法保存。')
+  if (context.promptVersion === STUDY_CARDS_PROMPT_VERSION && isStudyTextCardKind(proposal.kind)) {
+    // 公式阶段可改写，固定词汇证据不能在首次入库前替换或降级丢弃。
+    const original = readStudyTextCard(proposal.kind, proposal.body), edited = readStudyTextCard(proposal.kind, entry.body)
+    if (!original || !edited || original.format !== edited.format ||
+      original.format === 'study-vocabulary' && edited.format === 'study-vocabulary' && JSON.stringify(original.words) !== JSON.stringify(edited.words)) {
+      return invalid('须保留本次卡片格式与固定词汇证据；可编辑分析和技法阶段，不能替换、删除或降级丢弃词汇来源。')
+    }
+    validateStudyTextSource(edited, source.text)
+  }
   if (isStudyCardKind(proposal.kind)) {
     const original = readStudyCard(proposal.kind, proposal.body), edited = readStudyCard(proposal.kind, entry.body)
     if ('rhythm' in original && 'rhythm' in edited) {

@@ -1,4 +1,5 @@
 import { DomainError, isRecord, requiredId, requiredInteger } from './api'
+import { readStudyTextCard } from './study-text-card'
 
 export type StudyCardKind = 'beat' | 'style'
 export interface StudyBeat { title: string; action: string; outcome: string }
@@ -71,6 +72,10 @@ export function emptyStudyCard(kind: StudyCardKind, analysis = ''): string {
     : { ...base, rhythm: '', dialogue: '', senses: '', diction: '' })
 }
 export function studyMaterialText(kind: string, body: string): string {
+  const textCard = readStudyTextCard(kind, body)
+  if (textCard) return [`分析：${textCard.analysis}`, `适用范围：${textCard.application || '待作者明确'}`, `复用限制：${textCard.limits || '待作者明确'}`,
+    ...(textCard.format === 'study-formula' ? [`技法阶段：${textCard.stages.join(' → ') || '尚未提供'}`] : []),
+    '仅借用抽象结构与表达技法；使用当前作品的人物、地点与设定，不复制参考原文。'].join('\n\n')
   if (!isStudyCardKind(kind)) return body
   const card = readStudyCard(kind, body)
   return [`分析：${card.analysis}`, `适用范围：${card.application || '待作者明确'}`, `复用限制：${card.limits || '待作者明确'}`,

@@ -1,5 +1,6 @@
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText, type BookInput, type BookMutationInput, type ChapterSnapshot } from './api'
 import { isStudyCardKind, readStudyCard } from './study-card'
+import { readStudyTextCard } from './study-text-card'
 import { parseReviewCandidateSource, type ReviewCandidateSource } from './review'
 import { parseNoteChapterIds } from './notes'
 import { parseNoteThumbnailFields, type NoteThumbnailFields } from './note-thumbnail'
@@ -191,6 +192,7 @@ export function parseInspirationFields(value: unknown): InspirationFields {
   const tags = [...new Set(v.tags.map((tag) => requiredText(tag, '标签', 50)))]
   if (typeof v.body !== 'string' || v.body.length > 40_000 || v.body.includes('\0')) throw new DomainError({ code: 'INVALID_INPUT', message: '灵感内容不能超过 40,000 个字符，且不能包含空字符。' })
   if (typeof v.kind === 'string' && isStudyCardKind(v.kind)) readStudyCard(v.kind, v.body)
+  if (typeof v.kind === 'string') readStudyTextCard(v.kind, v.body)
   // 原文缩进与分段换行属于内容；保存、读取和幂等核对都保留相同字符。
   return { kind: choice(v.kind, INSPIRATION_KINDS), title: requiredText(v.title, '灵感标题', 160), body: v.body,
     source: text(v.source, '参考出处', 2_000), tags, parentId: nullableId(v.parentId), bookId: nullableId(v.bookId), archived: flag(v.archived) }

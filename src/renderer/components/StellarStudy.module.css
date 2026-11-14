@@ -54,6 +54,16 @@
 .waitingCard > p { margin: 0; font-size: var(--text-sm); }
 .previewTitle { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 500; overflow-wrap: anywhere; }
 .analysisItem > .previewNotice { margin: var(--space-2) 0 0; color: var(--color-muted); font-size: var(--text-xs); }
+.textPreview { min-width: 0; }
+.textPreview > p { max-height: calc(2 * var(--space-12)); margin: var(--space-3) 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); color: var(--color-ink-secondary); }
+.textPreview > .previewNotice { margin-top: var(--space-2); color: var(--color-muted); font-size: var(--text-xs); }
+.textPreview > p:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.formulaStages,.vocabularyTags { list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; }
+.formulaStages > li { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 100%; }
+.formulaStages > li > span,.vocabularyTags > li { min-width: 0; max-width: 100%; padding: var(--space-2) var(--space-3); background: var(--bg-raised); color: var(--color-ink); font-size: var(--text-md); line-height: 1.4; overflow-wrap: anywhere; }
+.formulaStages > li > span { border-radius: var(--radius-md); }
+.formulaStages > li > b { flex-shrink: 0; color: var(--color-ink-secondary); font-size: var(--text-md); font-weight: 400; }
+.vocabularyTags > li { border-radius: var(--radius-pill); }
 .analysisActions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); font-size: var(--text-xs); }
 .analysisActions label { margin-bottom: 0; }
 .analysisActions button { min-height: var(--control-compact); padding-block: var(--space-1); }
@@ -86,3 +96,4 @@
 @container(max-width:600px) { .review { grid-template-columns: minmax(0,1fr); } .evidence { padding: 0; border: 0; } }
 @media(max-width:799px) { .review { grid-template-columns: minmax(0,1fr); } .evidence { padding: 0; border: 0; } }
 @media(forced-colors:active) { .referenceText mark { outline: 1px solid Highlight; color: CanvasText; }.analysisSection { border-color: CanvasText; }.analysisSection h3 > i { background: CanvasText; }.beats li > span { color: CanvasText; border-color: CanvasText; background: Canvas; }.beats li:not(:last-child)::before { background: CanvasText; }.waitingCard > span { border: 1px solid GrayText; } }
+@media(forced-colors:active) { .formulaStages > li > span,.vocabularyTags > li { border: 1px solid CanvasText; background: Canvas; color: CanvasText; } }

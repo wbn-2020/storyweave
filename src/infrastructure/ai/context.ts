@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { creativeRef, parseCreativeResources } from '../../contracts/creative-resources'
 import { readCreativeResources } from './creative-context'
-import { STUDY_SYSTEM_RULES, STUDY_CARDS_SYSTEM_RULES, STUDY_CARDS_LEGACY_SYSTEM_RULES, STUDY_CARDS_PROMPT_VERSION, STUDY_CARDS_LEGACY_PROMPT_VERSION, isStudyCardsPromptVersion } from '../../contracts/study'
+import { STUDY_SYSTEM_RULES, STUDY_CARDS_SYSTEM_RULES, STUDY_CARDS_LEGACY_SYSTEM_RULES, STUDY_ANNOTATED_SYSTEM_RULES, STUDY_CARDS_PROMPT_VERSION, STUDY_CARDS_LEGACY_PROMPT_VERSION, STUDY_ANNOTATED_PROMPT_VERSION, isStudyCardsPromptVersion } from '../../contracts/study'
 import { REVIEW_PROMPT_VERSION, REVIEW_LEGACY_PROMPT_VERSION, REVIEW_SYSTEM_RULES, REVIEW_LEGACY_SYSTEM_RULES, isReviewPromptVersion } from '../../contracts/review'
 import { forgeInstructionKind, forgeUsesChapter } from '../../contracts/forge'
 import { FORGE_SYSTEM_RULES } from './forge-prompt'
@@ -254,7 +254,8 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
   const structuredReview = data.purpose === 'review' && isReviewPromptVersion(reviewPromptVersion)
   const studyPromptVersion = dedicatedPromptVersion ?? STUDY_CARDS_PROMPT_VERSION
   const studyCards = data.purpose === 'study' && isStudyCardsPromptVersion(studyPromptVersion)
-  const studyRules = studyCards ? studyPromptVersion === STUDY_CARDS_LEGACY_PROMPT_VERSION ? STUDY_CARDS_LEGACY_SYSTEM_RULES : STUDY_CARDS_SYSTEM_RULES : STUDY_SYSTEM_RULES
+  const studyRules = studyCards ? studyPromptVersion === STUDY_CARDS_LEGACY_PROMPT_VERSION ? STUDY_CARDS_LEGACY_SYSTEM_RULES
+    : studyPromptVersion === STUDY_ANNOTATED_PROMPT_VERSION ? STUDY_ANNOTATED_SYSTEM_RULES : STUDY_CARDS_SYSTEM_RULES : STUDY_SYSTEM_RULES
   // 逐段替换必须以完整段落为基线，不能把邻近范围的裁剪片段当作整段原稿。
   if (structuredReview && data.contextScope !== 'chapter') invalid('结构化审稿需要完整本章，请切换到当前整章后重新准备。')
   if (character && !isAiCharacterContextPromptVersion(characterPromptVersion)) throw storageFailure()
