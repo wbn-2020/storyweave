@@ -121,9 +121,9 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
     const measurable = task.done !== undefined && task.total !== undefined && task.total > 0 && task.state !== 'planning'
     const pending = ['running', 'planning'].includes(task.state)
     return <li key={task.id} data-state={task.state} data-kind={task.destination}>
-      <StudioIcon name={icons[task.destination]} size={24} />
-      <div className={styles.taskInfo}><strong>{task.title}</strong><p>{task.detail}</p><span className={styles.taskState}>{taskStateLabel(task)} · {task.timeLabel && `${task.timeLabel} `}
-        <time dateTime={task.time} title={`${task.timeLabel ?? '更新'}于 ${displayTime(task.time)}`}>{clock(task.time)}</time></span></div>
+      <span className={styles.taskMark} aria-hidden="true"><StudioIcon name={icons[task.destination]} size={24} /></span>
+      <div className={styles.taskInfo}><strong>{task.title}</strong><div className={styles.taskMeta}><p>{task.detail}</p><span className={styles.taskState}>{taskStateLabel(task)} · {task.timeLabel && `${task.timeLabel} `}
+        <time dateTime={task.time} title={`${task.timeLabel ?? '更新'}于 ${displayTime(task.time)}`}>{clock(task.time)}</time></span></div></div>
       <div className={styles.taskProgress}>{measurable ? <><progress aria-label={`${task.title}数量进度`} value={task.done} max={task.total} /><span>{Math.floor(task.done! * 100 / task.total!)}%</span></>
         : pending ? <><progress aria-label={`${task.title}${taskStateLabel(task)}`} /><span>{taskStateLabel(task)}</span></> : <span>{taskStateLabel(task)}</span>}</div>
       <div className={styles.taskActions}>{task.stop && <button type="button" className={styles.stopButton} disabled={disabled || reading || stopping || Boolean(pendingMessage)}
@@ -152,7 +152,7 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
       {stopError && !pendingMessage && <p className={styles.error} role="alert">{stopError}</p>}
       {tab === 'notices' ? <>
       {[...groups].map(([day, values]) => <section className={styles.group} key={day}><h3>{day}</h3><ul className={styles.notices}>{values.map((item) => <li key={item.id} data-tone={item.tone} data-unread={!seen.has(item.id)}>
-        <StudioIcon name={item.tone === 'danger' ? 'warning' : item.destination ? icons[item.destination] : 'bell'} size={28} /><div><strong>{item.title}</strong><p>{item.detail}</p></div>
+        <span className={styles.noticeMark} aria-hidden="true"><StudioIcon name={item.tone === 'danger' ? 'warning' : item.destination ? icons[item.destination] : 'bell'} size={28} /></span><div className={styles.noticeInfo}><strong>{item.title}</strong><p>{item.detail}</p></div>
         {item.time && <time dateTime={item.time} title={displayTime(item.time)}>{clock(item.time)}</time>}
         <button type="button" title={item.destination ? '查看通知' : '标为已读'} aria-label={`${item.destination ? '查看' : '标为已读'}：${item.title}`} disabled={item.destination ? disabled || stopping : seen.has(item.id)}
           onClick={() => { onSeen([item.id]); if (item.destination) onNavigate(item.destination, item.aiTarget, item.taskId) }}><StudioIcon name={item.destination ? 'chevron' : 'check'} size={20} /></button>
@@ -166,7 +166,7 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
           : '这条运行记录已无本机活动请求，将明确标记为中断；已有向量和检索快照仍保留，不会重发。'
       : confirmStop.destination === 'ai' ? '已生成的输出仍保留，不会自动重发请求。' : '已保存的记录和作者决定仍保留。若模型仍在生成，须先停止对应生成。'}</p><div><button ref={keepTask} type="button" className={styles.button} disabled={stopping} onClick={() => setConfirmStop(null)}>继续保留</button><button type="button" className={styles.stopButton} disabled={disabled || stopping || Boolean(pendingMessage)} onClick={() => void stopConfirmed()}>{stopping ? '正在停止…' : '确认停止'}</button></div></section>}
     <footer className={styles.footer} inert={Boolean(confirmStop)}><button type="button" className={styles.refreshButton} aria-label="刷新任务与通知" title={readAt ? `最近读取 ${displayTime(readAt)}` : '刷新'} disabled={reading || stopping || !bookId || !api || Boolean(pendingMessage)} onClick={() => setRefresh((value) => value + 1)}><StudioIcon name="refresh" size={18} /></button>
-      {tab === 'notices' && <button type="button" className={styles.readAll} disabled={!allNotices.some((item) => !seen.has(item.id))} onClick={() => onSeen(allNotices.map((item) => item.id))}><StudioIcon name="check" size={20} />全部标为已读</button>}
+      {tab === 'notices' && <button type="button" className={styles.readAll} disabled={!allNotices.some((item) => !seen.has(item.id))} onClick={() => onSeen(allNotices.map((item) => item.id))}><span className={styles.readMark} aria-hidden="true"><StudioIcon name="check" size={20} /></span>全部标为已读</button>}
     </footer>
   </dialog>
 }
