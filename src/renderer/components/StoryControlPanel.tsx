@@ -7,7 +7,7 @@ import { parseManuscript } from '../../contracts/manuscript'
 import { appearanceState, APPEARANCE_CHAPTER_PAGE, APPEARANCE_ENTITY_PAGE, FORESHADOW_RADAR_PAGE,
   type AppearanceMatrixInput, type AppearanceMatrixPage, type ControlVersions,
   type ForeshadowRadarInput, type ForeshadowRadarItem, type ForeshadowRadarPage, type RadarDue, type RadarScope } from '../../contracts/story-control'
-import type { StoryKind, StoryRecordDetail } from '../../contracts/story'
+import type { StoryKind, StoryRecordDetail, StorySource } from '../../contracts/story'
 import { parseForeshadowThumbnailMetadata } from '../../contracts/foreshadow-thumbnail'
 import { request } from '../request'
 import { blockText, plannedPayoffLabel, stageLabels, StoryFieldsView } from './StoryFieldsEditor'
@@ -31,6 +31,8 @@ const entityLabels: Record<KnowledgeKind, string> = { person: '人物', place: '
 const cellLabels = { present: '登场行动', mentioned: '被提及', absent: '已核对缺席', conflict: '登记有冲突', stale: '旧稿／待复核', unknown: '未知' }
 const cellMarks = { present: '●', mentioned: '○', absent: '—', conflict: '!', stale: '↺', unknown: '?' }
 const cellLegend = { present: '登场', mentioned: '提及', absent: '缺席', conflict: '冲突', stale: '旧稿／待复核', unknown: '未知' } satisfies Record<keyof typeof cellLabels, string>
+const sourceValidityLabels = { valid: '出处可查', partial: '出处部分缺失', missing: '出处缺失' }
+const sourceReferenceLabels = { current: '当前稿登记', historical: '历史稿登记' }
 export const radarDueLabels: Record<RadarDue, string> = { overdue: '已过计划位置', due: '本章／本卷到期', upcoming: '尚未到期', unplaced: '范围待定位', unconfirmed: '待作者复核', closed: '已经结束' }
 const snapshot = (value: ControlVersions) => ({ expectedBookRevision: value.bookRevision, expectedKnowledgeRevision: value.knowledgeRevision })
 function matchesVersions(page: ControlVersions, input: { expectedBookRevision?: number; expectedKnowledgeRevision?: number }): boolean {
@@ -43,6 +45,13 @@ function radarThumbnailValid(item: ForeshadowRadarItem): boolean {
     const thumbnail = parseForeshadowThumbnailMetadata(item.thumbnail)
     return thumbnail.recordId === item.id && thumbnail.knowledgeRevision <= item.revision
   } catch { return false }
+}
+
+function evidenceSourceLabel(source: StorySource): string {
+  // 固定章、修订或段落缺失时不会返回稿件状态，不能把未知登记归为历史稿。
+  return source.sourceType === 'chapter_text'
+    ? `固定正文 · ${source.referenceState ? sourceReferenceLabels[source.referenceState] : '版本登记未知'} · ${sourceValidityLabels[source.validity]}`
+    : '作者／外部来源说明'
 }
 
 function RecordEvidence({ api, book, disabled, id, expected, onOpenRecord, onNavigate }: Pick<Props, 'api' | 'book' | 'disabled' | 'onOpenRecord' | 'onNavigate'> & {
@@ -111,7 +120,7 @@ function RecordEvidence({ api, book, disabled, id, expected, onOpenRecord, onNav
       <StoryFieldsView fields={detail.fields} book={book} names={detail.labels} />
       <p className={styles.help}>登记引文用于追溯出处，陈述本身仍需作者判断。跳转定位当前稿；固定原稿保留引用时的版本。</p>
       {/* 读取锁拦截重复操作，保留按钮焦点，避免原生禁用后 Esc 无法送达证据区。 */}
-      <ul className={styles.sourceList}>{detail.sources.map((source) => <li key={source.id}><p className={styles.help}>{source.sourceType === 'chapter_text' ? `固定正文 · ${source.referenceState === 'current' ? '当前稿登记' : '历史稿登记'}` : '作者／外部来源说明'}</p><blockquote>{source.quote}</blockquote>{source.sourceType === 'chapter_text' && <div className={styles.actions}><button type="button" className={shared.button} disabled={disabled} aria-disabled={reading || undefined} onClick={() => void read(source)}>核对固定原文</button><button type="button" className={shared.button} disabled={disabled} aria-disabled={reading || undefined} onClick={() => void navigate(source)}>跳到当前稿段落</button></div>}</li>)}</ul>
+      <ul className={styles.sourceList}>{detail.sources.map((source) => <li key={source.id}><p className={styles.help}>{evidenceSourceLabel(source)}</p><blockquote>{source.quote}</blockquote>{source.sourceType === 'chapter_text' && <div className={styles.actions}><button type="button" className={shared.button} disabled={disabled} aria-disabled={reading || undefined} onClick={() => void read(source)}>核对固定原文</button><button type="button" className={shared.button} disabled={disabled} aria-disabled={reading || undefined} onClick={() => void navigate(source)}>跳到当前稿段落</button></div>}</li>)}</ul>
       {!detail.sources.length && <p className={styles.help}>尚无登记引文；整章缺席只代表作者对固定稿的明确核对。</p>}
     </>}
     {original && <div><p className={styles.ids}>固定版本 {original.source.revisionId} · 段落 {original.source.blockId}</p><p className={styles.help} role="status">{original.matches ? '登记引文逐字匹配该固定段落。' : '引文没有逐字匹配，请复核登记。'}</p><blockquote>{original.text}</blockquote></div>}
@@ -187,7 +196,7 @@ export function AppearanceMatrix(props: Props) {
         const source = detail.sources.find((item) => item.sourceType === 'chapter_text' && item.chapterId === hover.chapterId)
         const check = detail.fields.kind === 'event' && detail.fields.appearanceCheck?.chapterId === hover.chapterId ? detail.fields.appearanceCheck : null
         setPreview({ api, input, page, hover, title: detail.fields.title, quote: source?.quote.slice(0, 240) || check?.note.slice(0, 240) || '未登记该章的段落引文。',
-          state: source ? `固定正文 · ${source.referenceState === 'current' ? '当前稿登记' : '历史稿登记'}` : check ? '作者整章缺席核对' : '点击查看记录详情' })
+          state: source ? evidenceSourceLabel(source) : check ? '作者整章缺席核对' : '点击查看记录详情' })
       })()
     }, 300)
     return () => { active = false; clearTimeout(timer) }
