@@ -79,6 +79,25 @@
 .chapterToolItems { position: fixed; right: var(--space-5); top: var(--topbar-height); z-index: var(--z-dropdown); width: min(280px,calc(100vw - var(--space-8))); max-height: calc(100dvh - var(--topbar-height) - var(--statusbar-height) - var(--space-4)); overflow: auto; display: grid; gap: var(--space-1); padding: var(--space-2); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--bg-surface); box-shadow: var(--shadow-md); }
 .chapterToolItems button { padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-ink-secondary); text-align: left; font-size: var(--text-xs); }
 .chapterToolItems button:hover { background: var(--color-accent-soft); color: var(--color-accent); }
+.saveButton { composes: button from './components/stellar/Workspace.module.css'; }
+.standaloneSave { display: inline-flex; flex-shrink: 0; }
+.saveActions { display: inline-flex; align-items: stretch; min-width: 0; flex-shrink: 0; border-radius: var(--radius-md); }
+.saveActions > .saveButton { display: inline-flex; gap: var(--space-2); width: auto; height: var(--control-height); padding-inline: var(--space-3); border: 1px solid var(--color-line-strong); border-start-end-radius: 0; border-end-end-radius: 0; background: var(--bg-surface); color: var(--color-ink-secondary); }
+.saveActions > .chapterTools > summary { justify-content: center; min-width: var(--control-compact); height: var(--control-height); border: 1px solid var(--color-line-strong); border-inline-start-width: 0; border-radius: 0 var(--radius-md) var(--radius-md) 0; background: var(--bg-surface); }
+.saveActions > .saveButton:hover:not(:disabled),.saveActions > .chapterTools > summary:hover { background: var(--bg-raised); color: var(--color-accent); }
+.saveActions > .chapterTools[open] > summary { background: var(--color-accent-soft); color: var(--color-accent); }
+.saveActions > .chapterTools > summary:active { filter: brightness(.82); }
+@media (prefers-reduced-motion: reduce) { .saveActions > .saveButton { transition: none; } }
+@media (forced-colors: active) {
+  .saveActions > .saveButton,.saveActions > .chapterTools > summary { border-color: ButtonText; background: ButtonFace; color: ButtonText; }
+  .saveActions > .chapterTools[open] > summary { background: Highlight; color: HighlightText; }
+  .saveActions > .chapterTools > summary:active { filter: none; }
+}
+@media (max-width:1199px) { .saveActions > .saveButton > span { display: none; } }
+@media (max-width:599px) {
+  .saveActions > .saveButton { display: none; }
+  .saveActions > .chapterTools > summary { border-inline-start-width: 1px; border-radius: var(--radius-md); }
+}
 .writeLayout { position: relative; display: grid; grid-template-columns: var(--outline-width) minmax(0, 1fr) var(--inspector-width); min-height: 0; flex: 1; }
 .writeLayout.asideCollapsed { grid-template-columns: var(--outline-width) minmax(0, 1fr); }
 .writeLayout.outlineCollapsed { grid-template-columns: minmax(0, 1fr) var(--inspector-width); }

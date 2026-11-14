@@ -1434,7 +1434,7 @@ export function App({ api }: Props) {
     onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.open = false }}
     onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false }}>
-    <summary ref={chapterToolsTrigger} title="章节与作品工具" aria-label="章节与作品工具"><StudioIcon name="more" size={20} /></summary>
+    <summary ref={chapterToolsTrigger} title="章节与作品工具" aria-label="章节与作品工具"><StudioIcon name={chapter ? 'down' : 'more'} size={20} /></summary>
     <div className={styles.chapterToolItems}>
       <button type="button" onClick={toggleOutline} disabled={busy || session.session.composing}>章节目录 · {book.chapters.length} 章</button>
       <button type="button" onClick={() => switchWriteAside(companionOpen ? 'collapsed' : 'companion')} disabled={busy}>伴随资料</button>
@@ -1450,6 +1450,10 @@ export function App({ api }: Props) {
       {BOOK_DESTINATIONS.map((item) => <button type="button" key={item.id} disabled={busy || bookRecoveryLocked} onClick={() => navigateBook(item.id)}>{item.label}</button>)}
     </div>
   </details>
+  const saveAction = <StellarTooltip><button className={`${styles.iconButton} ${styles.topbarSave} ${styles.saveButton}`} type="button" title="保存 · Ctrl+S" aria-label="保存当前章节"
+    aria-busy={session.session.saving} onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}>
+    <StudioIcon name="save" size={20} />{!focused && <span>保存</span>}
+  </button></StellarTooltip>
 
   return <div className={`${styles.appShell} ${sidebarCollapsed ? styles.sidebarCollapsed : ''} ${modal?.kind === 'reader' && api && book ? styles.readerMode : ''} ${studioView === 'write' && !isCanvasView && focused && chapter ? styles.focusMode : ''}`}>
     {taskCenterOpen && <TaskCenter key={`${workspace.rootPath}:${book?.book.id}`} api={api} bookId={book?.book.id} notices={currentNotices} seen={seenNotices}
@@ -1499,9 +1503,7 @@ export function App({ api }: Props) {
           <StellarTooltip><button className={styles.iconButton} type="button" title="通知与任务" aria-label={`通知与任务${currentNotices.some((item) => !seenNotices.has(item.id)) ? '，有未读提示' : ''}`} disabled={hasBlockingDialog || commandOpen || session.session.composing} onClick={() => setTaskCenterOpen(true)}><StudioIcon name="bell" size={20} />{currentNotices.some((item) => !seenNotices.has(item.id)) && <i className={styles.unreadDot} />}</button></StellarTooltip>
           <StellarTooltip><button className={styles.iconButton} type="button" aria-label="搜索命令与章节" aria-keyshortcuts="Control+k Meta+k" disabled={busy || hasBlockingDialog || bookRecoveryLocked} onClick={() => { setNavigationOpen(false); setCommandOpen(true) }} title="搜索命令与章节 · Ctrl+K"><StudioIcon name="search" size={20} /></button></StellarTooltip>
           {studioView === 'write' && !isCanvasView && chapter && <>
-            <StellarTooltip><button className={`${styles.iconButton} ${styles.topbarSave}`} type="button" title="保存 · Ctrl+S" aria-label="保存当前章节" onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}>
-              <StudioIcon name="save" size={20} />
-            </button></StellarTooltip>
+            <div className={focused ? styles.standaloneSave : styles.saveActions} role="group" aria-label={focused ? '章节保存' : '章节保存与工具'}>{saveAction}{!focused && writingTools}</div>
             <StellarTooltip><button className={`${styles.iconButton} ${styles.focusButton}`} type="button" aria-label="专注写作" aria-pressed={focused} title="专注写作 · Ctrl+Shift+Enter" onClick={() => setFocused(!focused)} disabled={session.session.composing || (busy && !focused)}>
               <StudioIcon name="focus" size={20} />
             </button></StellarTooltip>
@@ -1509,7 +1511,7 @@ export function App({ api }: Props) {
           {studioView === 'write' && !isCanvasView && book ? focused ? <>
             <button className={styles.button} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}><StudioIcon name="settings" size={14} />外观</button>
             <button className={styles.button} type="button" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={14} />恢复</button>
-          </> : writingTools : <>
+          </> : !chapter && writingTools : <>
             <span className={styles.localBadge}><span className={styles.statusDot} />{workspace.rootPath ? '仅本机 · 已连接' : '仅本机'}</span>
             <StellarTooltip><button className={styles.profileButton} type="button" aria-label="外观与显示偏好" title="工作室配色与稿纸偏好" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked}><StudioIcon name="user" size={20} /></button></StellarTooltip>
           </>}
