@@ -246,6 +246,10 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     setKind(next); tool.setError(null)
     const target = snapshot?.items.find((item) => item.kind === next)
     if (target) void view(target)
+    else {
+      // 空分类不能沿用另一用途的详情；清除读取标记，后续刷新仍可重读原资源。
+      setSelectedId(null); setImage(null); setImageDecoded(false); imageAttempt.current = null
+    }
   }
   async function view(item: BookMediaMetadata) {
     if (!canSwitch()) return
@@ -527,7 +531,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
                   : <div className={styles.empty}><StudioIcon name="image" size={36} /><p role="status">{tool.busy ? '正在读取所选原图…' : '尚未取得原图'}</p><button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => void view(selected)}>重新读取原图</button></div>}
                 <h3 className={styles.detailName}>{sceneMode ? placeName : personName(selected.personId)}</h3>
                 <dl className={styles.facts}><dt>版本</dt><dd>v{selected.bookRevision} <span className={styles.muted}>{currentIds.has(selected.id) ? '当前使用' : '未使用'}</span></dd>
-                  <dt>来源</dt><dd>{selectedSource ? `模型生成 · ${selectedSource.model}` : '未登记'}</dd></dl>
+                  <dt>来源</dt><dd>{selectedSource ? `模型生成 · ${selectedSource.model}` : !sceneMode && (!generationPage || generationWarning) ? '来源待核对' : '未登记'}</dd></dl>
                 {selectedPerson && <div className={styles.related}><h4>关联角色卡</h4><button type="button" className={styles.personLink} disabled={navigationBlocked || !onPerson} title={onPerson ? `打开${selectedPerson.name}的人物资料` : '人物资料入口不可用'}
                   onClick={() => { if (canSwitch()) onPerson?.(selectedPerson.id) }}><SavedMediaImage api={api} bookId={bookId} metadata={snapshot.items.find((item) => item.personId === selectedPerson.id)} name={selectedPerson.name} className={styles.personImage} fallback={<StudioIcon name="user" size={24} />} /><span>{selectedPerson.name}</span><StudioIcon name="chevron" /></button></div>}
                 <details><summary>资源校验信息</summary><dl className={styles.facts}><dt>格式</dt><dd>{selected.mime.replace('image/', '').toUpperCase()} · {sizeLabel(selected.byteLength)}</dd>
