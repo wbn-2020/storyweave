@@ -64,6 +64,7 @@ import { isRevisionMergeOutputFor, type RevisionMergeInput } from '../contracts/
 import type { BookExportFileInput, BookExportReceipt } from '../contracts/export'
 import { STUDIO_THEMES, STUDIO_THEME_META } from './display-preferences'
 import { lastWritingBook, rememberWritingPosition, writingPosition, type WritingPosition } from './writing-location'
+import { recentBookOpens, rememberBookOpen } from './recent-book-opens'
 import { useChapterSession } from './hooks/useChapterSession'
 import { useDraftProtection } from './hooks/useDraftProtection'
 import { useDisplayPreferences } from './hooks/useDisplayPreferences'
@@ -226,6 +227,11 @@ export function App({ api }: Props) {
     setWorkspace((current) => ({ ...current, books: current.books.some((item) => item.id === summary.id)
       ? current.books.map((item) => item.id === summary.id && item.revision <= summary.revision ? summary : item) : [...current.books, summary] }))
   }, [])
+
+  function recordBookOpen(origin: WorkspaceSnapshot, bookId: string) {
+    if (origin.rootPath !== workspaceRef.current.rootPath || origin.recoveryScope !== workspaceRef.current.recoveryScope) return
+    rememberBookOpen(origin, bookId)
+  }
 
   const onSaved = useCallback((saved: ChapterSnapshot) => {
     const current = bookRef.current
@@ -543,12 +549,13 @@ export function App({ api }: Props) {
   async function openBook(bookId: string, chapterId?: string) {
     if (!api) return
     await changeView(async () => {
+      const origin = workspaceRef.current
       const result = await request(() => api.getBook({ bookId }))
       if (!result.ok) { setMessage(result.error.message); return }
       if (result.data.book.id !== bookId) { setMessage('返回的作品与所选作品不一致，请重新打开。'); return }
       if (result.data.book.lifecycle === 'kickstarting') {
         session.load(null); updateCurrentBook(null); upsertShelf(result.data.book); setReturnLocation(null)
-        setModal({ kind: 'kickstart', bookId }); return
+        setModal({ kind: 'kickstart', bookId }); recordBookOpen(origin, bookId); return
       }
       const last = writingPosition(workspaceRef.current.rootPath, bookId)
       const targetChapter = chapterId ? result.data.chapters.find((item) => item.id === chapterId)
@@ -558,7 +565,7 @@ export function App({ api }: Props) {
       if (current?.bookId !== bookId) setReturnLocation(null)
       // 同一章且目录版本未变化时只恢复页面，保留正文选区和撤销栈。
       if (current?.bookId === bookId && current.id === targetChapter?.id && current.revisionId === targetChapter.revisionId && current.bookRevision === result.data.book.revision) {
-        updateCurrentBook(result.data); upsertShelf(result.data.book); setModal(null); setSurface('write'); return
+        updateCurrentBook(result.data); upsertShelf(result.data.book); setModal(null); setSurface('write'); recordBookOpen(origin, bookId); return
       }
       let first: ChapterSnapshot | null = null
       if (targetChapter) {
@@ -568,6 +575,7 @@ export function App({ api }: Props) {
         first = read.data
       }
       session.load(first); updateCurrentBook(result.data); upsertShelf(result.data.book); setModal(null); setSurface('write')
+      recordBookOpen(origin, bookId)
     })
   }
 
@@ -580,6 +588,7 @@ export function App({ api }: Props) {
   async function openSavedNote(bookId: string, noteId: string) {
     if (!api) return
     await changeView(async () => {
+      const origin = workspaceRef.current
       const result = await request(() => api.getBook({ bookId }))
       if (!result.ok) { setMessage(result.error.message); return }
       if (result.data.book.id !== bookId || bookRef.current?.book.id === bookId && bookRef.current.book.revision > result.data.book.revision) {
@@ -588,6 +597,7 @@ export function App({ api }: Props) {
       if (session.getCurrent().chapter?.bookId !== bookId) { session.load(null); setReturnLocation(null) }
       upsertShelf(result.data.book); updateCurrentBook(result.data); setSurface('book')
       setModal({ kind: 'notes', initialId: noteId })
+      recordBookOpen(origin, bookId)
     })
   }
 
@@ -652,16 +662,18 @@ export function App({ api }: Props) {
   async function openBookOverview(bookId: string) {
     if (!api) return
     await changeView(async () => {
+      const origin = workspaceRef.current
       const result = await request(() => api.getBook({ bookId }))
       if (!result.ok) { setMessage(result.error.message); return }
       if (result.data.book.id !== bookId) { setMessage('作品身份不匹配，请重新打开。'); return }
       if (result.data.book.lifecycle === 'kickstarting') {
         session.load(null); updateCurrentBook(null); setReturnLocation(null)
-        setModal({ kind: 'kickstart', bookId }); return
+        setModal({ kind: 'kickstart', bookId }); recordBookOpen(origin, bookId); return
       }
       // 总览只切换呈现；同书正文实例留在原位置，保留撤销栈与光标。
       if (bookRef.current?.book.id !== bookId) { session.load(null); setReturnLocation(null) }
       updateCurrentBook(result.data); upsertShelf(result.data.book); setSurface('book'); setModal(null); setFocused(false)
+      recordBookOpen(origin, bookId)
     })
   }
 
@@ -682,6 +694,7 @@ export function App({ api }: Props) {
   async function enterKickstart(snapshot: KickstartSnapshot): Promise<boolean> {
     if (!api || !snapshot.adoption || transition.current || recoveryLock.current) return false
     transition.current = true; setBusy(true)
+    const origin = workspaceRef.current
     const root = workspaceRef.current.rootPath, bookId = snapshot.book.book.id, chapterId = snapshot.adoption.firstChapterId
     try {
       const read = await request(() => api.readChapter({ bookId, chapterId }))
@@ -691,6 +704,7 @@ export function App({ api }: Props) {
       }
       auxiliaryDirty.current = false
       applyBook(snapshot.book, true); session.load(read.data); setModal(null); setSurface('write'); setMessage(null)
+      recordBookOpen(origin, bookId)
       return true
     } finally { transition.current = false; setBusy(false) }
   }
@@ -698,6 +712,7 @@ export function App({ api }: Props) {
   async function openWorkspaceTool(bookId: string, kind: WorkspaceTool) {
     if (!api) return
     await changeView(async () => {
+      const origin = workspaceRef.current
       // 工具只需要作品目录。跨作品时等新目录读取成功后再释放旧章节。
       if (bookRef.current?.book.id !== bookId) {
         const result = await request(() => api.getBook({ bookId }))
@@ -706,6 +721,7 @@ export function App({ api }: Props) {
         session.load(null); updateCurrentBook(result.data); upsertShelf(result.data.book)
       }
       setModal({ kind })
+      recordBookOpen(origin, bookId)
     })
   }
 
@@ -1645,7 +1661,7 @@ export function App({ api }: Props) {
         onTool={(id, kind) => void openWorkspaceTool(id, kind)}
         busy={busy || bookRecoveryLocked}
       />}
-      {!isCanvasView && studioView === 'shelf' && <StellarShelf api={api} scope={workspace.rootPath ? JSON.stringify([workspace.rootPath, workspace.recoveryScope]) : undefined} books={workspace.books} onOpen={(id) => void openBookOverview(id)} onWrite={(id) => void openBook(id)} onEdit={(item) => showDialog({ kind: 'bookDetails', book: item })} onCreate={() => showDialog({ kind: 'kickstart' })} onImport={() => showDialog({ kind: 'import' })} onRecover={() => showDialog({ kind: 'orphans' })} busy={busy || bookRecoveryLocked} />}
+      {!isCanvasView && studioView === 'shelf' && <StellarShelf api={api} scope={workspace.rootPath ? JSON.stringify([workspace.rootPath, workspace.recoveryScope]) : undefined} books={workspace.books} recentOpens={recentBookOpens(workspace)} onOpen={(id) => void openBookOverview(id)} onWrite={(id) => void openBook(id)} onEdit={(item) => showDialog({ kind: 'bookDetails', book: item })} onCreate={() => showDialog({ kind: 'kickstart' })} onImport={() => showDialog({ kind: 'import' })} onRecover={() => showDialog({ kind: 'orphans' })} busy={busy || bookRecoveryLocked} />}
       {!isCanvasView && studioView === 'book' && book && <BookOverview api={api} scope={workspace.rootPath ? JSON.stringify([workspace.rootPath, workspace.recoveryScope]) : undefined} book={book} snapshot={creative.snapshot} reading={creative.reading} error={creative.error} busy={busy || bookRecoveryLocked} onNavigate={navigateBook} onChapter={(id) => void openChapter(id)} onDomain={openCreativeDomain} onReload={creative.reload} />}
       {book && <div className={styles.editorSurface} hidden={studioView !== 'write' || isCanvasView} inert={studioView !== 'write' || isCanvasView}>
         <div className={`${styles.writeLayout} ${outlineOpen === true ? styles.outlineExpanded : outlineOpen === false ? styles.outlineCollapsed : ''} ${!rightAsideExpanded ? styles.asideCollapsed : ''} ${inspectorRequested ? styles.inspectorExpanded : ''}`}>

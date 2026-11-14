@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { BookSummary, StudioApi } from '../../contracts/api'
 import { displayTime } from '../request'
+import type { RecentBookOpen } from '../recent-book-opens'
 import { BookCover } from './LibraryPanels'
 import { StudioIcon } from './StudioIcon'
 import { genreTone, STELLAR_GENRES } from './stellar/Genres'
@@ -32,8 +33,8 @@ export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdi
   </article>
 }
 
-export function StellarShelf({ api, scope, books, busy, onOpen, onWrite, onEdit, onCreate, onImport, onRecover }: {
-  api?: StudioApi; scope?: string; books: BookSummary[]; busy: boolean
+export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onWrite, onEdit, onCreate, onImport, onRecover }: {
+  api?: StudioApi; scope?: string; books: BookSummary[]; recentOpens: readonly RecentBookOpen[]; busy: boolean
   onOpen: (id: string) => void; onWrite: (id: string) => void; onEdit: (book: BookSummary) => void
   onCreate: () => void; onImport: () => void; onRecover: () => void
 }) {
@@ -43,6 +44,10 @@ export function StellarShelf({ api, scope, books, busy, onOpen, onWrite, onEdit,
   const [mode, setMode] = useState<'grid' | 'list'>('grid')
   const [page, setPage] = useState(0)
   const recent = [...books].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  const opened = recentOpens.flatMap((entry) => {
+    const book = books.find((item) => item.id === entry.bookId)
+    return book ? [{ book, openedAt: entry.openedAt }] : []
+  }).slice(0, 3)
   const visible = recent.filter((item) => Boolean(item.archivedAt) === archived && (!genre || item.genre === genre)
     && `${item.title} ${item.genre} ${item.synopsis}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
   const pageCount = Math.max(1, Math.ceil(visible.length / 6))
@@ -65,7 +70,7 @@ export function StellarShelf({ api, scope, books, busy, onOpen, onWrite, onEdit,
           {query || genre ? <button className={ui.button} type="button" onClick={() => { setQuery(''); setGenre('') }}>清空筛选</button> : <><button className={ui.primary} type="button" disabled={busy} onClick={onCreate}><StudioIcon name="plus" size={20} />新建作品</button><button className={ui.button} type="button" disabled={busy} onClick={onImport}>导入稿件</button></>}
         </StellarEmpty>}
       {pageCount > 1 && <div className={ui.pagination}><button className={ui.button} type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button><span>{currentPage + 1} / {pageCount}</span><button className={ui.button} type="button" disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>下一页</button></div>}
-    </div><aside className={`${styles.sideColumn} ${styles.shelfSidebar}`} aria-label="书库工具"><section className={styles.sideSection}><h2><StudioIcon name="clock" size={18} />最近更新</h2><ul className={`${styles.queue} ${styles.recentBooks}`}>{recent.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={busy} onClick={() => onOpen(item.id)}><span className={styles.recentCover}><BookCover api={api} workspaceScope={scope} book={item} /></span><span>{item.title}<small>{item.genre || '未设置题材'}</small><small>{displayTime(item.updatedAt)}</small></span></button></li>)}</ul></section>
+    </div><aside className={`${styles.sideColumn} ${styles.shelfSidebar}`} aria-label="书库工具"><section className={styles.sideSection}><h2><StudioIcon name="clock" size={18} />最近打开</h2><ul className={`${styles.queue} ${styles.recentBooks}`}>{opened.map(({ book: item, openedAt }) => <li key={item.id}><button type="button" disabled={busy} onClick={() => onOpen(item.id)}><span className={styles.recentCover}><BookCover api={api} workspaceScope={scope} book={item} /></span><span>{item.title}<small>{item.genre || '未设置题材'}</small><small><time dateTime={openedAt}>{displayTime(openedAt)}</time> 打开</small></span></button></li>)}</ul>{!opened.length && <p>尚无打开记录</p>}</section>
       <section className={`${styles.sideSection} ${styles.shelfImport}`}><StudioIcon name="notes" size={40} /><h2>导入作品</h2><p>TXT / Markdown</p><button className={ui.button} type="button" disabled={busy} onClick={onImport}><StudioIcon name="plus" size={16} />导入作品</button></section><button className={ui.ghost} type="button" disabled={busy} onClick={onRecover}><StudioIcon name="history" size={16} />找回未登记作品</button></aside></div>
   </div></section>
 }
