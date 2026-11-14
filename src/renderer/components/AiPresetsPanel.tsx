@@ -69,7 +69,8 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const routeIcons: Record<AiPresetKind, StudioIconName> = { plan: 'layers', continue: 'pen', rewrite: 'refresh', review: 'check', study: 'read', summarize: 'notes' }
   const recoveryRecord = JSON.stringify({ version: 1, bookId, bookRevision: snapshot?.bookRevision ?? bookRevision,
     command: AI_PRESETS_COMMANDS.save, requestId: tool.pending?.error.requestId ?? null, input: submitted, draft,
-    savedPreset: syncRef.current ? snapshot?.presets.find((item) => item.id === submitted?.id) : undefined, syncError }, null, 2)
+    savedPreset: syncRef.current ? snapshot?.presets.find((item) => item.id === submitted?.id) : undefined, syncError,
+    readRequestId: tool.readFailure?.requestId ?? null }, null, 2)
 
   useEffect(() => {
     mounted.current = true
@@ -203,12 +204,19 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   }
   const routing = layout === 'routing'
   const tokenTotal = snapshot ? snapshot.usage.inputTokens + snapshot.usage.outputTokens : 0
+  // 路由模式隐藏通用标题栏，未读和已读两种状态都需要可见的原刷新入口。
+  const refreshButton = <button type="button" className={styles.button} aria-label={routing ? '刷新任务路由与用量' : undefined}
+    disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => void reload()}>刷新</button>
 
   return <section className={styles.panel} aria-labelledby={headingId} data-layout={layout}>
     <header className={styles.heading}><div><h3 id={headingId}>任务预设与用量</h3><p className={styles.muted}>保存这部作品常用的协作要求。应用预设会填入编辑框，由你确认后发送。</p></div>
-      <button type="button" className={styles.button} disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => void reload()}>刷新</button></header>
+      {refreshButton}</header>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
+    {tool.readFailure?.requestId && <div className={styles.actions}>
+      <button type="button" className={styles.button} disabled={tool.locked || syncState === 'busy'} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>
+      <span className={styles.muted}>原读取编号：<code>{tool.readFailure.requestId}</code></span>
+    </div>}
     {tool.pending && <div className={styles.warning}><p>保存结果尚未确认，当前输入已保留。</p>
       {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} onClick={() => void checkReceipt()}>核对原请求</button>
         : <p>缺少可查询的请求编号，请通过主窗口恢复流程核对作品。</p>}
@@ -219,9 +227,10 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
       <button type="button" className={styles.button} aria-busy={syncState === 'busy'} disabled={disabled || tool.busy || syncState === 'busy' || Boolean(syncError?.requestId)} onClick={() => void synchronize()}>{syncState === 'busy' ? '正在同步…' : '重试同步'}</button></div>}
     {externalChange && <p className={styles.warning}>作品已有新版本。当前输入仍保留，可读取最新预设作比较，或处理输入后刷新。</p>}
     {snapshot?.archived && <p className={styles.warning}>作品已归档，任务预设仅供查看。</p>}
+    {routing && !snapshot && <div className={styles.actions}>{refreshButton}</div>}
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取预设与累计用量…' : '尚未取得任务预设，请点击“刷新”重试。'}</p> : <>
       {routing && <section className={styles.routing} aria-label="任务路由矩阵">
-        <header className={styles.routeHeading}><h3><StudioIcon name="workflow" size={20} />任务路由矩阵</h3><span>本书默认预设</span></header>
+        <header className={styles.routeHeading}><h3><StudioIcon name="workflow" size={20} />任务路由矩阵</h3><span>本书默认预设</span>{refreshButton}</header>
         <div className={styles.matrixScroll} tabIndex={0} role="region" aria-label="任务路由矩阵，可横向滚动"><table className={styles.matrix}>
           <thead><tr><th scope="col">任务类型</th>{connections?.map((connection) => <th scope="col" key={connection.id} title={connection.name}>{connection.model}</th>)}<th scope="col">当前协作连接</th></tr></thead>
           <tbody>{AI_PRESET_KINDS.map((kind) => {
@@ -297,7 +306,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
           <textarea readOnly rows={5} value={latest.instruction} aria-label="最新保存的协作要求" /></> : <p>最新版本中尚无此预设。</p>}
         <button type="button" className={styles.button} disabled={tool.locked || conflict.archived || conflict.requiresUpgrade || conflict.bookRevision < bookRevision || (draft.expectedRevision > 0 && !latest)} onClick={rebase}>我已比较，沿用当前输入</button></div>}
     </form>}
-    {(draft || tool.pending || syncState !== 'idle') && <details className={styles.details} open={Boolean(tool.pending || syncState === 'needed')}><summary>查看并复制完整输入与提交记录</summary><textarea readOnly rows={8} aria-label="完整预设输入、版本与原请求记录" value={recoveryRecord} /></details>}
+    {(draft || tool.pending || tool.readFailure || syncState !== 'idle') && <details className={styles.details} open={Boolean(tool.pending || syncState === 'needed')}><summary>查看并复制完整输入与提交记录</summary><textarea readOnly rows={8} aria-label="完整预设输入、版本与原请求记录" value={recoveryRecord} /></details>}
     {(tool.pending || syncState === 'needed') && onRecover && <div className={styles.warning}><label className={styles.check}><input type="checkbox" checked={preserved === recoveryRecord} disabled={tool.busy}
       onChange={(event) => setPreserved(event.target.checked ? recoveryRecord : null)} />我已留存当前输入、预设标识和请求记录</label>
       <button type="button" className={styles.button} disabled={tool.busy || preserved !== recoveryRecord} onClick={() => {
