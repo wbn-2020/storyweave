@@ -33,7 +33,7 @@ function commandIcon(command: StudioCommand): StudioIconName {
   }
   return icons[command.id] ?? 'arrow'
 }
-const groupIcons: Record<string, StudioIconName> = { 跳转: 'compass', 生成: 'spark', 审稿: 'check', 设置: 'settings', 正文: 'pen' }
+const groupIcons: Record<string, StudioIconName> = { 跳转: 'navigation', 生成: 'spark', 审稿: 'shield', 设置: 'settings', 正文: 'pen' }
 export function CommandPalette({ commands, onClose }: { commands: StudioCommand[]; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const input = useRef<HTMLInputElement>(null)
