@@ -212,7 +212,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   }
 
   return <section className={styles.panel} aria-label="创作日历">
-    <header className={styles.heading}><div><h3>创作数据</h3><p className={styles.muted}>{book.book.title}</p></div>
+    <header className={styles.heading}><div><h3><StudioIcon name="chart" size={24} />创作数据</h3><p className={styles.muted}>{book.book.title}</p></div>
       <div className={styles.actions}><button type="button" className={styles.button} disabled={tool.locked || tool.dirty} onClick={() => void reload()}><StudioIcon name="refresh" size={16} />{syncRequired ? '重试同步' : '刷新日历'}</button>
         <button type="button" className={styles.button} disabled={tool.locked} onClick={closePanel}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />返回</button></div></header>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
@@ -238,7 +238,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
           </div>
           <div className={styles.dashboard}>
             <section className={styles.calendar} aria-label="月度创作日历">
-              <header className={styles.calendarHeading}><h4><StudioIcon name="calendar" size={20} />创作日历</h4>
+              <header className={styles.calendarHeading}><h4><StudioIcon name="calendar" size={24} />创作日历 · {Number(month.slice(5))} 月</h4>
                 <nav className={styles.monthNav} aria-label="选择月份">
                   <button type="button" className={styles.iconButton} aria-label="上一月" title="上一月" disabled={navigationBlocked || month === MIN_CALENDAR_MONTH} onClick={() => changeMonth(adjacentMonth(month, -1))}><StudioIcon name="chevron" size={16} style={{ transform: 'rotate(180deg)' }} /></button>
                   <label><span className={styles.visuallyHidden}>月份</span><input type="month" min={MIN_CALENDAR_MONTH} max={MAX_CALENDAR_MONTH} value={month} disabled={navigationBlocked} onChange={(event) => changeMonth(event.target.value)} /></label>
@@ -265,10 +265,10 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
                 <button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => changeMonth(today.slice(0, 7), today)}>今天</button></footer>
             </section>
             <CalendarYearHeatmap key={`${bookId}:${month.slice(0, 4)}`} api={api} bookId={bookId} bookRevision={book.book.revision} month={month} today={today} disabled={navigationBlocked || externalChange}>
-              <section className={styles.composition} aria-label="本月产出构成"><h4><StudioIcon name="layers" size={20} />产出构成<span>{Number(month.slice(5))} 月新增</span></h4>
+              <section className={styles.composition} aria-label="本月产出构成"><h4><StudioIcon name="layers" size={24} />产出构成<span>{Number(month.slice(5))} 月新增</span></h4>
                 {!totalAdded && <p className={styles.muted}>本月尚无已保存的新增字数。</p>}
-                <ul className={styles.sources}>{sourceTotals.map((item) => <li key={item.source}><span>{item.label}</span><progress aria-label={`${item.label}新增字数占比`} value={item.added} max={Math.max(1, totalAdded)} /><strong>{item.added.toLocaleString()} 字</strong></li>)}</ul>
-                <p className={styles.muted}>常规编辑含手工记录；AI 仅计已采用内容。恢复与导入按保存来源分别统计。</p>
+                <ul className={styles.sources}>{sourceTotals.map((item) => <li key={item.source} data-source={item.source}><span>{item.label}</span><progress aria-label={`${item.label}新增字数占比`} value={item.added} max={Math.max(1, totalAdded)} /><strong>{item.added.toLocaleString()} 字<small>{totalAdded ? `${Math.round(item.added / totalAdded * 100)}%` : '—'}</small></strong></li>)}</ul>
+                <p className={styles.muted}>常规编辑含手工记录；AI 仅计已采用内容。恢复与导入按保存来源分别统计，占比四舍五入。</p>
               </section>
             </CalendarYearHeatmap>
           </div>

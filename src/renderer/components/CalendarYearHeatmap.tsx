@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { WritingCalendarApi } from '../../contracts/writing-calendar'
 import { calendarMonthDates, isCalendarSnapshot } from '../../contracts/writing-calendar'
 import { request } from '../request'
@@ -7,10 +7,12 @@ import styles from './StellarCalendar.module.css'
 
 interface DayTotal { added: number; removed: number; net: number }
 interface YearSnapshot { revision: number; days: Map<string, DayTotal> }
+const trendAxisNumber = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 })
 
 export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, disabled, compact = false, children }: {
   api: WritingCalendarApi; bookId: string; bookRevision: number; month: string; today: string; disabled: boolean; compact?: boolean; children?: ReactNode
 }) {
+  const gradient = useId()
   const year = month.slice(0, 4)
   const months = useMemo(() => Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`), [year])
   const [data, setData] = useState<YearSnapshot | null>(null)
@@ -29,7 +31,7 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
   const minimumNet = Math.min(0, ...monthlyNet)
   const maximumNet = Math.max(1, ...monthlyNet)
   const trendY = (value: number) => 152 - (value - minimumNet) / (maximumNet - minimumNet) * 136
-  const trendPoints = monthlyNet.map((net, index) => `${44 + index * 50},${trendY(net)}`).join(' ')
+  const trendPoints = monthlyNet.map((net, index) => `${64 + index * 48},${trendY(net)}`).join(' ')
 
   async function load() {
     if (disabled || locked.current) return
@@ -86,7 +88,7 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
   </section>
 
   return <><section className={styles.annual} aria-label={`${year} 年创作热力图`}>
-    <header className={styles.calendarHeading}><h4><StudioIcon name="grid" size={20} />{data ? `${data.days.size} 天热力图` : '全年创作热力图'}</h4><span className={styles.yearLabel}>{year}</span>
+    <header className={styles.calendarHeading}><h4><StudioIcon name="grid" size={24} />{data ? `${data.days.size} 天热力图` : '全年创作热力图'}</h4><span className={styles.yearLabel}>{year}</span>
       {reading ? <button type="button" className={styles.button} onClick={cancel}>取消读取</button>
         : <button type="button" className={styles.button} disabled={disabled} title={disabled ? '请先处理当前输入或刷新作品版本' : '读取所选年份的十二个月'} onClick={() => void load()}><StudioIcon name="refresh" size={14} />{data ? '刷新全年' : '读取全年'}</button>}
     </header>
@@ -98,7 +100,7 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
       <div className={styles.heatmapScroll} tabIndex={0} role="region" aria-label="全年每日新增字数表">
         <table className={styles.heatmap}>
           <caption className={styles.visuallyHidden}>{year} 年每日新增字数，颜色不扣除删除量</caption>
-          <thead><tr><th scope="col">月份</th>{Array.from({ length: 31 }, (_, index) => <th scope="col" key={index}>{index + 1}</th>)}</tr></thead>
+          <thead className={styles.visuallyHidden}><tr><th scope="col">月份</th>{Array.from({ length: 31 }, (_, index) => <th scope="col" key={index}>{index + 1}</th>)}</tr></thead>
           <tbody>{months.map((item) => <tr key={item} data-current={item === month}>
             <th scope="row">{Number(item.slice(5))} 月</th>{Array.from({ length: 31 }, (_, index) => {
               const date = `${item}-${String(index + 1).padStart(2, '0')}`, day = data.days.get(date)
@@ -116,13 +118,15 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
     </>}
   </section>
     <div className={styles.annualAnalytics}>
-      <section className={styles.annualTrend} aria-label="全年月度净增趋势"><h4><StudioIcon name="chart" size={20} />月度趋势<span>{year} 年 · 净增字数</span></h4>
+      <section className={styles.annualTrend} aria-label="全年月度净增趋势"><h4><StudioIcon name="chart" size={24} />月度趋势<span>{year} 年 · 净增字数</span></h4>
         {!data ? <div className={styles.trendEmpty}><StudioIcon name="chart" size={28} /><p>{reading ? '正在汇集全年记录…' : '尚未读取全年记录'}</p></div> : <>
           <svg className={styles.monthlyTrend} viewBox="0 0 620 188" role="img" aria-label={`${year} 年各月净增字数，包含删除后的净变化${stale ? '，统计已过期' : ''}`}>
-            {[0, 1, 2, 3, 4].map((step) => { const value = minimumNet + (maximumNet - minimumNet) * step / 4, y = trendY(value); return <g key={step}><line x1="44" y1={y} x2="608" y2={y} /><text x="36" y={y + 4} textAnchor="end">{Math.round(value).toLocaleString()}</text></g> })}
-            <path className={styles.trendArea} d={`M44,${trendY(0)} L${trendPoints} L594,${trendY(0)} Z`} />
+            <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1"><stop offset="0" className={styles.trendFillTop} /><stop offset="1" className={styles.trendFillBottom} /></linearGradient></defs>
+            {months.map((item, index) => <line key={item} x1={64 + index * 48} y1="16" x2={64 + index * 48} y2="152" />)}
+            {[0, 1, 2, 3, 4].map((step) => { const value = minimumNet + (maximumNet - minimumNet) * step / 4, y = trendY(value); return <g key={step}><line x1="64" y1={y} x2="592" y2={y} /><text x="56" y={y + 4} textAnchor="end"><title>{Math.round(value).toLocaleString()} 字</title>{trendAxisNumber.format(Math.round(value))}</text></g> })}
+            <path className={styles.trendArea} fill={`url(#${gradient})`} d={`M64,${trendY(0)} L${trendPoints} L592,${trendY(0)} Z`} />
             <polyline className={styles.trendLine} points={trendPoints} />
-            {monthlyNet.map((net, index) => <g key={months[index]}><circle cx={44 + index * 50} cy={trendY(net)} r="3" data-negative={net < 0}><title>{months[index]}：净增 {net.toLocaleString()} 字</title></circle><text x={44 + index * 50} y="178" textAnchor="middle">{index + 1} 月</text></g>)}
+            {monthlyNet.map((net, index) => <g key={months[index]}><circle cx={64 + index * 48} cy={trendY(net)} r="3" data-negative={net < 0}><title>{months[index]}：净增 {net.toLocaleString()} 字</title></circle><text x={64 + index * 48} y="178" textAnchor="middle">{index + 1} 月</text></g>)}
           </svg>
           <p className={styles.muted}>当前作品 · 已保存版本 · 作品版本 {data.revision}{stale ? '，统计已过期' : ''}</p>
         </>}

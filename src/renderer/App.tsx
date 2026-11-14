@@ -122,7 +122,7 @@ const SURFACE_TITLES: Record<string, { title: string; subtitle: string }> = {
   story: { title: '故事事件与伏笔追踪', subtitle: '记录发生了什么、谁参与其中、埋下了哪些回响' },
   notes: { title: '素材与随手记', subtitle: '随时接住一闪而过的灵感、台词与片段' },
   inspiration: { title: '拆书导入与技能库', subtitle: '把读过的好书变成可调用的创作方法与素材' },
-  calendar: { title: '创作日历', subtitle: '记录每日码字节奏与心流时刻，让写作成为日常' },
+  calendar: { title: '创作数据', subtitle: '已保存版本的写作记录与创作日程' },
   media: { title: '封面与人物立绘', subtitle: '为你的故事与角色留存视觉印象' },
   reader: { title: '沉浸阅读预览', subtitle: '以读者视角通读工作稿或作者定稿' },
   memory: { title: '长篇记忆与混合检索', subtitle: '管理本地索引、向量召回与原文出处证据' },
@@ -1327,7 +1327,7 @@ export function App({ api }: Props) {
   const activeCanvasKey = isCanvasView && modal ? modal.kind : studioView
   const worldMapVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'world'
   const matrixVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'matrix'
-  const compactBookCanvas = worldMapVisible || matrixVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export' || modal?.kind === 'history')
+  const compactBookCanvas = worldMapVisible || matrixVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export' || modal?.kind === 'history' || modal?.kind === 'calendar')
   const headerInfo = worldMapVisible ? { title: '世界星域地图', subtitle: '世界地点与已登记航道' }
     : matrixVisible ? { title: '章节出场矩阵', subtitle: '实体与章节的已登记出场' }
     : modal?.kind === 'media' && modal.scenePlaceId ? { title: '地点场景图', subtitle: '地点关联与图片版本' }
@@ -1481,7 +1481,7 @@ export function App({ api }: Props) {
             {book ? book.book.title : headerInfo.subtitle}
           </span>
         </div>}
-        {book && !matrixVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && modal?.kind !== 'history' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
+        {book && !matrixVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && modal?.kind !== 'history' && modal?.kind !== 'calendar' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
         <div className={styles.topActions}>
           {compactBookCanvas && book && <label className={styles.canvasTools} title="更多作品工具"><StudioIcon name="more" size={20} />
             <select aria-label="更多作品工具" value="" disabled={busy || bookRecoveryLocked} onChange={(event) => {
