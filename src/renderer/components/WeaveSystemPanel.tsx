@@ -204,7 +204,9 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
             <span className={styles.completion} data-done={weaveTaskComplete(task)} aria-label={task.claimed ? '奖励已领取' : weaveTaskComplete(task) ? '已完成' : '未完成'}>{weaveTaskComplete(task) && <StudioIcon name="check" size={20} />}</span>
             <small>{task.claimed ? '已领取' : `+${task.reward.experience} 经验`}</small></summary>
             {taskSteps(task)}<div className={styles.actions}><button className={styles.button} type="button" disabled={blocked || task.claimed || !weaveTaskComplete(task) || fields.cooldownUntil > fields.storyMinute} onClick={() => { setSelectedReward(task.id); setConfirmation({ kind: 'claim', taskId: task.id }) }}>领取</button>
-              {task.chapterId && <button className={styles.button} type="button" disabled={blocked || !book.chapters.some((chapter) => chapter.id === task.chapterId)} onClick={() => onChapter(task.chapterId!)}>前往</button>}</div>
+              {task.chapterId && <button className={styles.button} type="button" disabled={blocked || !book.chapters.some((chapter) => chapter.id === task.chapterId)} onClick={() => onChapter(task.chapterId!)}>前往</button>}
+              {!task.claimed && fields.cooldownUntil > fields.storyMinute && <small className={styles.note}>每日奖励冷却：{duration(fields.cooldownUntil - fields.storyMinute)}（剧情时间）</small>}
+            </div>
           </details></li>)}</ul></section>}
         {(rewardTask || offers.length > 0) && <aside className={styles.right}>
           {rewardTask && <section className={styles.rewards} data-claimed={rewardTask.claimed}><h3><StudioIcon name="gift" size={25} />奖励与词条</h3>
@@ -217,7 +219,9 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
             {claimReason && <small className={styles.note}>{claimReason}</small>}
           </section>}
           {offers.length > 0 && <section className={styles.shop}><h3><StudioIcon name="spark" size={25} />积分商店</h3><div className={styles.offerList} role="group" aria-label="选择兑换商品">{offers.map((item, index) => <button className={styles.offer} key={item.id} type="button" aria-pressed={item.id === offer?.id} disabled={blocked} onClick={() => setSelectedOffer(item.id)} title={`${item.name}${item.description ? `：${item.description}` : ''}`}>
-            <StudioIcon name={(['compass', 'notes', 'crystal'] as const)[index % 3]} size={42} /><strong>{item.name}</strong><span>× {item.price}</span><small>{item.stock === null ? '不限库存' : `剩余 ${item.stock}`}</small></button>)}</div>
+            <StudioIcon name={(['compass', 'notes', 'crystal'] as const)[index % 3]} size={42} /><strong>{item.name}</strong><span>× {item.price}</span><small>{item.stock === null ? '不限库存' : `剩余 ${item.stock}`}</small>
+            {item.availableAt > fields.storyMinute && <small>冷却：{duration(item.availableAt - fields.storyMinute)}（剧情时间）</small>}
+          </button>)}</div>
             {offer && <small className={styles.note}>{offer.description} · 每次 {offer.quantity} 件 · 已兑换 {offer.purchased} 次</small>}
             <button className={styles.button} type="button" disabled={blocked || Boolean(redeemReason)} title={redeemReason ?? undefined} onClick={() => { if (offer) setConfirmation({ kind: 'redeem', offerId: offer.id }) }}><StudioIcon name="cart" size={23} />兑换</button>
             {redeemReason && <small className={styles.note}>{redeemReason}</small>}
