@@ -32,7 +32,24 @@
 .table tbody :is(th,td) { height: 44px; padding-block: var(--space-1); }
 .chapterTitle { border: 0; padding: 0; color: inherit; background: transparent; text-align: left; font-size: var(--text-sm); }
 .chapterTitle:hover { color: var(--color-accent); }
-.proseCell { max-width: 260px; }
+/* 固定列宽和单行预览仅作用于章纲，活动记录表仍保留原有排版。 */
+.chapterTable { table-layout: fixed; min-width: 920px; }
+.chapterTable thead th:nth-child(1) { width: 26%; }
+.chapterTable thead th:nth-child(2) { width: 21%; }
+.chapterTable thead th:nth-child(3) { width: 10%; }
+.chapterTable thead th:nth-child(4) { width: 12%; }
+.chapterTable thead th:nth-child(5) { width: 19%; }
+.chapterTable thead th:nth-child(6) { width: 12%; }
+.chapterTable th[scope='row'] { min-width: 0; }
+.chapterTable :is(.chapterTitle,.cellText) { display: block; width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.chapterTable .cellText[data-empty='true'] { color: var(--color-warning); }
+.chapterTable .number { overflow: hidden; text-overflow: ellipsis; }
+.chapterTable .statusChip[data-state='planned'] { color: var(--color-danger); background: var(--color-danger-soft); }
+/* 选中底色盖过共享悬停规则；轮廓画在单元格内，不重复叠加半透明底色。 */
+.chapterTable tbody tr[data-selected='true']:hover { background: var(--color-accent-soft); }
+.chapterTable tbody tr[data-selected='true'] > * { box-shadow: inset 0 1px var(--color-accent), inset 0 -1px var(--color-accent); }
+.chapterTable tbody tr[data-selected='true'] > :first-child { box-shadow: inset 1px 0 var(--color-accent), inset 0 1px var(--color-accent), inset 0 -1px var(--color-accent); }
+.chapterTable tbody tr[data-selected='true'] > :last-child { box-shadow: inset -1px 0 var(--color-accent), inset 0 1px var(--color-accent), inset 0 -1px var(--color-accent); }
 .statusChip { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); min-height: var(--space-6); border-radius: var(--radius-pill); color: var(--color-muted); background: var(--bg-raised); font-size: var(--text-xs); white-space: nowrap; }
 .statusChip::before { content: ''; width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; }
 .statusChip:is([data-state='drafted'],[data-state='writing']) { color: var(--color-warning); background: var(--color-warning-soft); }
@@ -136,3 +153,4 @@
 @media(max-width:1199px) { .planningLayout { grid-template-columns: minmax(0,1fr); } .sceneAside { grid-template-columns: repeat(auto-fit,minmax(min(100%,280px),1fr)); max-height: none; overflow: visible; } .sceneAside h4,.sceneAside > p,.sceneAside > button { grid-column: 1 / -1; } }
 @media(max-width:999px) { .navigation .tabs { flex-basis: 100%; } .moreTools { min-height: var(--control-height); } }
 @media(max-width:699px) { .brief { grid-template-columns: minmax(0,1fr); } .architectConsole { border-left: 0; padding-left: 0; } }
+@media(forced-colors:active) { .chapterTable tbody tr[data-selected='true'] { outline: 1px solid Highlight; outline-offset: -1px; } }
