@@ -133,7 +133,10 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
           </tr>)}</tbody>
         </table>
       </div>
-      <div className={styles.heatLegend} aria-label="每日新增字数图例">{['0 字', '1–499', '500–1499', '1500–2999', '3000 及以上'].map((label, index) => <span key={label}><i className={styles.heatCell} data-level={index} />{label}</span>)}</div>
+      <div className={styles.heatLegend} role="img" aria-label="每日新增字数图例，从较少到更多：0 字、1–499 字、500–1499 字、1500–2999 字、3000 字及以上">
+        <span aria-hidden="true">较少</span><span className={styles.heatScale} aria-hidden="true" /><span aria-hidden="true">更多</span>
+        <span className={styles.heatThresholds} aria-hidden="true">0 字 · 1–499 字 · 500–1499 字 · 1500–2999 字 · 3000 字及以上</span>
+      </div>
       <p className={styles.muted}>{activeDays} 天有增删记录 · 颜色表示新增字数，不扣除删除量；虚线表示尚未到来的空白日期。</p>
     </>}
   </section>

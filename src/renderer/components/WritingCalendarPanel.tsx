@@ -248,6 +248,10 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
         <button type="button" className={styles.button} disabled={tool.locked} onClick={closePanel}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />返回</button></div></header>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
+    {tool.readFailure?.requestId && <div className={styles.actions}>
+      <button type="button" className={styles.button} disabled={tool.locked} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>
+      <span className={styles.muted}>原读取编号：<code>{tool.readFailure.requestId}</code></span>
+    </div>}
     {tool.pending && <div className={styles.warning}><p>保存结果尚未确认，当前输入已保留。核对原请求前暂停提交。</p>
       {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} onClick={() => void checkReceipt()}>核对原请求</button>
         : <p>缺少可查询的请求编号，请保留输入并通过主窗口恢复。</p>}
@@ -265,7 +269,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
           <div className={styles.metrics} aria-label="当前作品创作指标">
             <div><span><StudioIcon name="spark" size={24} />今日创作</span><strong>{creationMetrics?.todayAdded.toLocaleString() ?? '—'}<small>字</small><MetricChange current={creationMetrics?.todayAdded} previous={creationMetrics?.yesterdayAdded} label="较昨日" /></strong><small><time dateTime={today}>{today}</time> · 已保存新增</small></div>
             <div><span><StudioIcon name="calendar" size={24} />本周创作</span><strong>{creationMetrics?.weekAdded.toLocaleString() ?? '—'}<small>字</small><MetricChange current={creationMetrics?.weekAdded} previous={creationMetrics?.previousWeekAdded} label="较上周同期" /></strong><small>周一至今 · 已保存新增</small></div>
-            <div><span><StudioIcon name="trophy" size={24} />连续创作</span><strong>{creationMetrics?.streak.toLocaleString() ?? '—'}<small>天</small><MetricChange current={creationMetrics?.streak} previous={creationMetrics?.previousStreak} label="较昨日连续天数" days /></strong><small>{creationMetrics?.todayAdded ? '截至今日' : '今日尚未新增时，截至昨日'}</small></div>
+            <div><span><StudioIcon name="trophy" size={24} />连续创作</span><strong>{creationMetrics?.streak.toLocaleString() ?? '—'}<small>天</small><MetricChange current={creationMetrics?.streak} previous={creationMetrics?.previousStreak} label="较昨日连续天数" days /></strong><small>{creationMetrics ? creationMetrics.todayAdded ? '截至今日' : '今日尚未新增时，截至昨日' : '等待读取当前指标'}</small></div>
           </div>
           {!creationMetrics && <p className={styles.muted} role="status">{snapshot.today !== today ? '日期已变化，请刷新日历读取今日指标。' : '当前快照未提供有效创作指标，请处理输入或同步后刷新日历。'}</p>}
           <div className={styles.dashboard}>
