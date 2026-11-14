@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { DomainError, type BookSnapshot, type CompletedRequest, type Result, type StudioApi } from '../../contracts/api'
 import type { AiConnectionPage, AiContextPacket, AiRun, AiRunState } from '../../contracts/ai'
 import type { AiMemoryTaskScope, AiMemoryTaskState } from '../../contracts/ai-memory-task'
+import { AI_SUMMARY_PRESETS_SCHEMA_VERSION, isAiPresetsSnapshot, type AiPreset } from '../../contracts/ai-presets'
 import { AI_SUMMARY_NODE_PAGE, AI_SUMMARY_PLAN_PAGE, AI_SUMMARY_PROMPT_VERSION, AI_SUMMARY_TEXT_LIMIT, isAiSummaryAdoptReceiptFor, isAiSummaryReceiptFor, parseAiSummaryAdoptInput, parseAiSummaryContext, parseAiSummaryProposal, parseAiSummaryStartInput, type AiSummaryAdoptInput, type AiSummaryAdoptReceipt, type AiSummaryControlInput, type AiSummaryNodeDetail, type AiSummaryNodeSummary, type AiSummaryProposal, type AiSummaryReceipt, type AiSummarySource, type AiSummaryStartInput, type AiSummaryStatus, type AiSummaryTaskDetail, type AiSummaryTaskSummary } from '../../contracts/ai-summary'
 import type { KnowledgeStatus } from '../../contracts/knowledge'
 import { displayTime, request } from '../request'
@@ -15,6 +16,7 @@ interface Props {
   api: StudioApi
   book: BookSnapshot
   initialTaskId?: string
+  initialPreset?: AiPreset
   busy: boolean
   error?: string | null
   pendingMessage?: string | null
@@ -93,14 +95,15 @@ function SummaryPreview({ context }: { context: AiContextPacket }) {
 
 export function AiSummaryPanel(props: Props) { return <AiSummarySession key={props.book.book.id} {...props} /> }
 
-function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onNavigate, onForeshadow, onDirtyChange, onUpgrade, onAdoptSummary }: Props) {
+function AiSummarySession({ api, book, initialTaskId, initialPreset, busy, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onNavigate, onForeshadow, onDirtyChange, onUpgrade, onAdoptSummary }: Props) {
+  const startingPreset = initialPreset?.kind === 'summarize' && !initialPreset.archived ? initialPreset : undefined
   const [status, setStatus] = useState<AiSummaryStatus | null>(null)
   const [connections, setConnections] = useState<AiConnectionPage | null>(null)
   const [task, setTask] = useState<AiSummaryTaskDetail | null>(null)
   const [node, setNode] = useState<AiSummaryNodeDetail | null>(null)
   const [sourceNode, setSourceNode] = useState<AiSummaryNodeDetail | null>(null)
-  const [form, setForm] = useState<SummaryForm>({ scope: 'book', fanIn: 4, connectionId: '', instruction: initialInstruction })
-  const [formDirty, setFormDirty] = useState(false)
+  const [form, setForm] = useState<SummaryForm>({ scope: 'book', fanIn: 4, connectionId: startingPreset?.connectionId ?? '', instruction: startingPreset?.instruction ?? initialInstruction })
+  const [formDirty, setFormDirty] = useState(Boolean(startingPreset))
   const [acceptedText, setAcceptedText] = useState('')
   const [reviewDirty, setReviewDirty] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -124,11 +127,12 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   const ticket = useRef(0)
   const lock = useRef(false)
   const statusRef = useRef<AiSummaryStatus | null>(null)
+  const connectionsRef = useRef<AiConnectionPage | null>(null)
   const taskRef = useRef<AiSummaryTaskDetail | null>(null)
   const nodeRef = useRef<AiSummaryNodeDetail | null>(null)
   const pendingRef = useRef<PendingWrite | null>(null)
   const requestedRef = useRef<NodeRead | null>(null)
-  const formDirtyRef = useRef(false)
+  const formDirtyRef = useRef(Boolean(startingPreset))
   const reviewDirtyRef = useRef(false)
   const callback = useRef(onDirtyChange)
   const taskControls = useRef<HTMLDetailsElement>(null)
@@ -173,10 +177,60 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   function acceptStatus(value: AiSummaryStatus): boolean { if (!acceptableStatus(value)) return false; statusRef.current = value; setStatus(value); return true }
   function acceptConnections(value: AiConnectionPage): boolean {
     if (value.bookId !== book.book.id) return false
+    connectionsRef.current = value
     setConnections(value)
     // 首次可使用首个连接；已有选择失效时保留原 ID，必须由作者明确改选。
     if (!formDirtyRef.current) setForm((previous) => ({ ...previous, connectionId: previous.connectionId || value.connections[0]?.id || '' }))
     return true
+  }
+  async function loadDefaultPreset() {
+    const current = statusRef.current
+    if (!current || !ready || formLocked || lock.current) return
+    const at = begin('读取摘要默认预设')
+    if (at === null) return
+    try {
+      const result = await request(() => api.getAiPresets({ bookId: book.book.id }))
+      if (!active(at)) return
+      if (!result.ok) {
+        setMessage(result.error.message)
+        if (result.error.code === 'REQUEST_TIMEOUT' || result.error.code === 'SERVICE_UNAVAILABLE') hold({
+          requestId: result.error.requestId, label: '读取摘要默认预设', receive: (response) => {
+            if (response.command !== 'ai.presets.get') return false
+            if (response.result.ok) {
+              if (!isAiPresetsSnapshot(response.result.data, book.book.id)) return false
+              setMessage('原预设读取已确认，当前输入保留。请重新明确载入摘要默认预设。')
+            } else {
+              if (response.result.error.code === 'REQUEST_TIMEOUT' || response.result.error.code === 'SERVICE_UNAVAILABLE') return false
+              setMessage(response.result.error.message)
+            }
+            return true
+          },
+        })
+        return
+      }
+      const snapshot = result.data
+      if (!isAiPresetsSnapshot(snapshot, book.book.id) || snapshot.bookRevision !== current.bookRevision) {
+        setMessage('预设与汇总状态的作品版本不符，当前输入已保留。请刷新状态后重新载入。'); return
+      }
+      if (snapshot.archived || snapshot.requiresUpgrade || !snapshot.supportsSummary) {
+        setMessage(snapshot.archived ? '归档作品不能载入新的任务要求。' : '请先在本页备份并启用摘要默认路由，再到模型路由中心配置摘要预设。'); return
+      }
+      const preset = snapshot.presets.find((item) => item.kind === 'summarize' && item.defaultForTask && !item.archived)
+      if (!preset) { setMessage('本书尚未设置摘要默认预设，请在模型路由中心配置摘要这一行。'); return }
+      const apply = () => {
+        if (statusRef.current?.bookRevision !== snapshot.bookRevision) {
+          setMessage('作品版本已变化，当前输入已保留。请刷新后重新载入摘要预设。'); return
+        }
+        if (preset.connectionId && !connectionsRef.current?.connections.some((item) => item.id === preset.connectionId)) {
+          setMessage('摘要默认预设绑定的连接不可用，请先明确改选连接或编辑预设。'); return
+        }
+        // 只填入新任务表单；已存任务、节点候选和固定发送预览保持其原连接与要求。
+        setForm((previous) => ({ ...previous, instruction: preset.instruction, connectionId: preset.connectionId ?? previous.connectionId }))
+        markFormDirty(true); setMessage(`已载入“${preset.title}”。请核对范围、连接与要求，创建任务后仍需逐节点确认发送。`)
+      }
+      if (formDirtyRef.current || form.instruction.trim()) setDiscard({ label: `载入“${preset.title}”，替换当前汇总要求${preset.connectionId ? '和连接选择' : ''}？范围、分组及已保存任务保持。`, proceed: apply })
+      else apply()
+    } finally { finish(at) }
   }
   function resetReview(value: AiRun | null) {
     const proposal = readProposal(value).proposal
@@ -238,6 +292,9 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   useEffect(() => { callback.current(dirty) }, [dirty])
   useEffect(() => { setRecoveryConfirmed(false) }, [pending, pendingMessage, form, acceptedText, edited])
   useEffect(() => { if (discard) discardNotice.current?.focus() }, [discard])
+  useEffect(() => {
+    if (ready && startingPreset) revealTaskControls()
+  }, [ready])
 
   async function write<T>(label: string, send: () => Promise<Result<T>>, accept: (value: T) => boolean, receive: (response: CompletedRequest) => boolean, allowArchived = false): Promise<boolean> {
     const at = begin(label, allowArchived)
@@ -506,14 +563,14 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
     finally { finish(at) }
   }
   async function upgrade() {
-    if (!upgradeConfirmed || !status?.requiresUpgrade || generating) return
+    if (!upgradeConfirmed || !status || status.schemaVersion >= AI_SUMMARY_PRESETS_SCHEMA_VERSION || generating) return
     const at = begin('备份并启用分层汇总')
     if (at === null) return
     try {
       await onUpgrade((value) => {
         if (!active(at)) return
-        if (value.bookId !== book.book.id || value.schemaVersion < 11) {
-          setMessage('升级回执尚未确认 v11 可用，请保留本页并核对。'); hold({ label: '核对分层汇总升级', receive: () => false }); return
+        if (value.bookId !== book.book.id || value.schemaVersion < AI_SUMMARY_PRESETS_SCHEMA_VERSION) {
+          setMessage(`升级回执尚未确认 v${AI_SUMMARY_PRESETS_SCHEMA_VERSION} 可用，请保留本页并核对。`); hold({ label: '核对分层汇总升级', receive: () => false }); return
         }
         setBackupPath(value.backupPath ?? null); setUpgradeConfirmed(false); setRefreshRequested(true)
       })
@@ -541,7 +598,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
     </section>}
     {loading && <p className={styles.note} role="status">正在只读核对汇总任务、连接与节点…</p>}
     {!loading && (!status || !connections) && <button type="button" className={shared.button} disabled={blocked} onClick={() => setRefreshRequested(true)}>重新读取状态</button>}
-    {status?.requiresUpgrade && <section className={layout.upgrade}><h3>为本书启用分层汇总</h3><p>当前作品格式 v{status.schemaVersion}。先建立独立数据库备份，再升级到当前作品格式，保存汇总任务、分层节点与不可变尝试。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意为本书创建数据库备份并升级</label><button type="button" className={shared.primaryButton} disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
+    {status && status.schemaVersion < AI_SUMMARY_PRESETS_SCHEMA_VERSION && <section className={layout.upgrade}><h3>{status.requiresUpgrade ? '为本书启用分层汇总' : '启用摘要默认路由'}</h3><p>当前作品格式 v{status.schemaVersion}。先建立独立数据库备份，再升级到 v{AI_SUMMARY_PRESETS_SCHEMA_VERSION}，启用与规划、续写等任务共用的摘要预设。已有汇总任务与预设历史保留。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意为本书创建数据库备份并升级</label><button type="button" className={shared.primaryButton} disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
     {backupPath && <p className={layout.backupPath}>升级前数据库副本：{backupPath}</p>}
     {ready && <>
       <SummaryOverview api={api} book={book} status={status} disabled={blocked || generating} onNavigate={(chapterId) => leave(() => onNavigate(chapterId))}
@@ -557,7 +614,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
           <p className={styles.note}>连接与本次会话的密钥在“AI 创作协作”管理。当前范围含 {selectedChapters.toLocaleString()} 章；全书已有 {status.availableChapterSummaries.toLocaleString()}／{status.totalChapters.toLocaleString()} 章具备当前稿、当前标题的已采用摘要，创建时逐章核对所选范围。</p>
           <label>每层汇总要求<textarea aria-label="每层汇总要求" value={form.instruction} rows={4} maxLength={6000} required disabled={formLocked} onChange={(event) => { setForm({ ...form, instruction: event.target.value }); markFormDirty(true) }} /></label>
           <p className={styles.note}>来源超预算会拒绝准备，请选择较小分组或调整连接预算。一次最多规划 {AI_SUMMARY_PLAN_PAGE} 个节点，所有发送均需逐节点确认。</p>
-          <div className={styles.actions}><button type="submit" className={shared.primaryButton} disabled={formLocked || Boolean(status.activeTask) || !formConnection || !form.instruction.trim() || selectedChapters === 0}>创建本地汇总任务</button><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setRefreshRequested(true)}>刷新状态</button></div>
+          <div className={styles.actions}><button type="submit" className={shared.primaryButton} disabled={formLocked || Boolean(status.activeTask) || !formConnection || !form.instruction.trim() || selectedChapters === 0}>创建本地汇总任务</button><button type="button" className={shared.button} disabled={formLocked} onClick={() => void loadDefaultPreset()}>载入摘要默认要求与模型</button><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setRefreshRequested(true)}>刷新状态</button></div>
         </form>
       </section>
       {status.activeTask && task?.id !== status.activeTask.id && <section className={styles.run}><h3>当前活动任务 · {status.activeTask.scopeTitle}</h3><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => openTask(status.activeTask!.id)}>返回活动任务</button></section>}

@@ -21,7 +21,7 @@ interface Props {
   onBookChange: (book: BookSnapshot) => void
   onApply: (preset: AiPreset) => void
   onConfigureBook: () => void
-  onSummary: () => void
+  onSummary: (preset?: AiPreset) => void
   onRecover: () => void
   registerLeaveGuard: RegisterPanelLeaveGuard
 }

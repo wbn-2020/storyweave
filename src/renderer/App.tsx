@@ -44,7 +44,7 @@ import { TaskCenter, type StudioNotice, type TaskAiTarget } from './components/T
 import { isTaskImageRun, isTaskVectorRun, taskStopOperation, type TaskStopResult, type TaskStopTarget } from './task-center'
 import { CharacterComparison } from './components/CharacterComparison'
 import { WeaveSystemPanel } from './components/WeaveSystemPanel'
-import type { AiPreset } from '../contracts/ai-presets'
+import type { AiComposerPreset, AiPreset } from '../contracts/ai-presets'
 import { AiMemoryTasksPanel } from './components/AiMemoryTasksPanel'
 import { AiSummaryPanel } from './components/AiSummaryPanel'
 import { BookRecoveryPanel } from './components/BookRecoveryPanel'
@@ -86,12 +86,12 @@ type Modal =
   | { kind: 'knowledge'; initialKind?: KnowledgeKind; initialId?: string }
   | { kind: 'abilities' }
   | { kind: 'weave' }
-  | { kind: 'ai'; initialInstruction?: string; initialPreset?: AiPreset; initialTask?: AiTaskKind; initialRunId?: string; rewrite?: { firstBlockId: string; lastBlockId: string }; useLivingContext?: boolean; purpose?: 'review' | 'study'; resources?: CreativeResourceRef[] }
+  | { kind: 'ai'; initialInstruction?: string; initialPreset?: AiComposerPreset; initialTask?: AiTaskKind; initialRunId?: string; rewrite?: { firstBlockId: string; lastBlockId: string }; useLivingContext?: boolean; purpose?: 'review' | 'study'; resources?: CreativeResourceRef[] }
   | { kind: 'models' }
   | { kind: 'newBook' } | { kind: 'kickstart'; bookId?: string; genre?: string } | { kind: 'newChapter'; volumeId: string | null }
   | { kind: 'volume'; volumeId?: string } | { kind: 'bookDetails'; book: BookSummary }
   | { kind: 'chapterDetails' } | { kind: 'history' } | { kind: 'finalize' } | { kind: 'preferences' } | { kind: 'notes'; initialId?: string } | { kind: 'workbench'; tab?: 'review'; issueId?: string } | { kind: 'inspiration' } | { kind: 'calendar' } | { kind: 'media'; scenePlaceId?: string; mapOffset?: number; initialRunId?: string }
-  | { kind: 'import' } | { kind: 'export' } | { kind: 'orphans' } | { kind: 'recovery' } | { kind: 'bookRecovery' } | { kind: 'draftImport' } | { kind: 'story'; initialKind?: StoryKind; initialId?: string; initialCreate?: boolean } | { kind: 'timeline' } | { kind: 'galaxy'; view?: 'galaxy' | 'relationships' | 'world' | 'matrix' | 'radar'; initialPlaceId?: string; initialMapOffset?: number } | { kind: 'reader' } | { kind: 'memory'; initialTaskId?: string; initialVectorRunId?: string } | { kind: 'aiMemoryTasks' | 'aiSummary'; initialTaskId?: string } | null
+  | { kind: 'import' } | { kind: 'export' } | { kind: 'orphans' } | { kind: 'recovery' } | { kind: 'bookRecovery' } | { kind: 'draftImport' } | { kind: 'story'; initialKind?: StoryKind; initialId?: string; initialCreate?: boolean } | { kind: 'timeline' } | { kind: 'galaxy'; view?: 'galaxy' | 'relationships' | 'world' | 'matrix' | 'radar'; initialPlaceId?: string; initialMapOffset?: number } | { kind: 'reader' } | { kind: 'memory'; initialTaskId?: string; initialVectorRunId?: string } | { kind: 'aiMemoryTasks'; initialTaskId?: string } | { kind: 'aiSummary'; initialTaskId?: string; initialPreset?: AiPreset } | null
 interface DraftReceipt { bookId: string; chapterId: string; editSequence: number; loadEpoch: number; filePath: string }
 interface AiWritingReceipt { root: string | null; previous: ChapterSnapshot; adoptedRevisionId: string; undone: boolean }
 
@@ -822,6 +822,8 @@ export function App({ api }: Props) {
 
   function openBookAi(initialPreset?: AiPreset, target?: TaskAiTarget) {
     if (!api || !book) return
+    if (initialPreset?.kind === 'summarize') { showDialog({ kind: 'aiSummary', initialPreset }); return }
+    const composerPreset: AiComposerPreset | undefined = initialPreset ? { ...initialPreset, kind: initialPreset.kind } : undefined
     void changeView(async () => {
       if (target || !session.getCurrent().chapter || session.getCurrent().chapter?.bookId !== book.book.id) {
         const first = target ? book.chapters.find((item) => item.id === target.chapterId) : book.chapters[0]
@@ -833,7 +835,7 @@ export function App({ api }: Props) {
         // 任务切章也先经过 changeView 保存门禁，再核对固定章节身份。
         if (session.getCurrent().chapter?.id !== first.id || session.getCurrent().chapter?.revisionId !== result.data.revisionId) session.load(result.data)
       }
-      setSurface('write'); setAiWideMode(true); setWriteAsideMode('ai'); setCompanionOpen(false); setModal({ kind: 'ai', initialPreset, initialRunId: target?.runId })
+      setSurface('write'); setAiWideMode(true); setWriteAsideMode('ai'); setCompanionOpen(false); setModal({ kind: 'ai', initialPreset: composerPreset, initialRunId: target?.runId })
     })
   }
 
@@ -1564,7 +1566,7 @@ export function App({ api }: Props) {
           {modal?.kind === 'preferences' && <DisplayPreferencesPanel preferences={display.preferences} warning={display.warning} busy={busy} onChange={display.update} onReset={display.reset} onRetrySave={display.retrySave} onClose={closeModal}
             focused={focused} onFocusChange={chapter ? setFocused : undefined} saveStatus={chapter ? saveLabel(session.session) : '未打开章节'}
             workspacePath={workspace.rootPath} onChooseWorkspace={() => void openWorkspace()} onBackup={() => showDialog({ kind: 'bookRecovery' })} onRecovery={() => openRecovery()} onModels={() => workspace.rootPath ? showDialog({ kind: 'models' }) : void openWorkspace()} />}
-          {modal?.kind === 'models' && api && <ModelConnectionsPanel key={`${workspace.rootPath}:${book?.book.id ?? ''}`} api={api} book={book} disabled={busy} onClose={closeModal} onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard} onBookChange={applyBook} onApply={(preset) => openBookAi(preset)} onConfigureBook={() => openBookAi()} onSummary={() => showDialog({ kind: 'aiSummary' })} onRecover={() => openRecovery(true)} />}
+          {modal?.kind === 'models' && api && <ModelConnectionsPanel key={`${workspace.rootPath}:${book?.book.id ?? ''}`} api={api} book={book} disabled={busy} onClose={closeModal} onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard} onBookChange={applyBook} onApply={(preset) => openBookAi(preset)} onConfigureBook={() => openBookAi()} onSummary={(preset) => showDialog({ kind: 'aiSummary', initialPreset: preset })} onRecover={() => openRecovery(true)} />}
           {modal?.kind === 'abilities' && api && book && <CharacterComparison key={`${workspace.rootPath}:${book.book.id}`} api={api} book={book} disabled={busy} onClose={closeModal}
             onOpen={(initialId) => showDialog({ kind: 'knowledge', initialKind: 'person', initialId })} onPlan={() => showDialog({ kind: 'workbench' })}
             onBookChange={applyBook} onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard}
@@ -1607,7 +1609,7 @@ export function App({ api }: Props) {
           {modal?.kind === 'reader' && api && book && <BookReaderPanel key={book.book.id} api={api} book={book} initialChapterId={chapter?.id} busy={busy} error={modalError} displayPreferences={display.preferences} preferencesWarning={display.warning} onPreferencesChange={display.update} onRetryPreferencesSave={display.retrySave} onClose={closeModal} />}
           {modal?.kind === 'memory' && api && book && <MemoryPanel key={`${workspace.rootPath}:${book.book.id}:${modal.initialTaskId ?? ''}:${modal.initialVectorRunId ?? ''}`} api={api} book={book} initialTaskId={modal.initialTaskId} initialVectorRunId={modal.initialVectorRunId} busy={busy} error={modalError} onClose={closeModal} onDirtyChange={(value) => { memoryWorking.current = value }} onUpgrade={upgradeKnowledge} onStart={startMemory} onStep={stepMemory} onControl={controlMemory} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} />}
           {modal?.kind === 'aiMemoryTasks' && api && book && <AiMemoryTasksPanel key={`${book.book.id}:${modal.initialTaskId ?? ''}`} api={api} book={book} initialTaskId={modal.initialTaskId} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onUpgrade={upgradeKnowledge} onAdoptMemory={adoptAiMemory} />}
-          {modal?.kind === 'aiSummary' && api && book && <AiSummaryPanel key={`${book.book.id}:${modal.initialTaskId ?? ''}`} api={api} book={book} initialTaskId={modal.initialTaskId} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onNavigate={(chapterId) => void openChapter(chapterId)} onForeshadow={() => showDialog({ kind: 'galaxy', view: 'radar' })} onDirtyChange={(value) => { aiDirty.current = value }} onUpgrade={upgradeKnowledge} onAdoptSummary={adoptAiSummary} />}
+          {modal?.kind === 'aiSummary' && api && book && <AiSummaryPanel key={`${book.book.id}:${modal.initialTaskId ?? ''}:${modal.initialPreset?.id ?? ''}:${modal.initialPreset?.revision ?? ''}`} api={api} book={book} initialTaskId={modal.initialTaskId} initialPreset={modal.initialPreset} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onNavigate={(chapterId) => void openChapter(chapterId)} onForeshadow={() => showDialog({ kind: 'galaxy', view: 'radar' })} onDirtyChange={(value) => { aiDirty.current = value }} onUpgrade={upgradeKnowledge} onAdoptSummary={adoptAiSummary} />}
           {modal?.kind === 'ai' && api && book && chapter && <div className={styles.wideAiContainer}>
             <div className={styles.wideAiBanner}>
               <span>{chapter.title}</span>
@@ -1615,7 +1617,7 @@ export function App({ api }: Props) {
                 setSurface('write'); setFocused(false); setAiWideMode(false); setWriteAsideMode('ai'); setCompanionOpen(false)
               })}>切回侧栏伴随模式</button>
             </div>
-            <AiPanel key={`${book.book.id}:${aiPreset?.id ?? ''}:${modal?.kind === 'ai' ? `${modal.purpose ?? ''}:${modal.initialRunId ?? ''}` : ''}:${aiTask ?? ''}:${aiInstruction ?? ''}:${aiResourceKey}:${aiRewrite?.firstBlockId ?? ''}:${aiRewrite?.lastBlockId ?? ''}`} initialRunId={modal?.kind === 'ai' ? modal.initialRunId : undefined} initialTask={aiTask} initialPreset={aiPreset} initialRewrite={aiRewrite} initialResources={aiResources} initialPurpose={modal?.kind === 'ai' ? modal.purpose : undefined} initialInstruction={aiInstruction} initialLivingContext={aiLivingContext} api={api} book={book} chapter={chapter} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onBookChange={applyBook} onUpgrade={upgradeKnowledge} onAdopt={adoptAi} onAdoptMemory={adoptAiMemory} onUseStudy={useStudyMaterials} onOpenReviewChecklist={openReviewChecklist} />
+            <AiPanel key={`${book.book.id}:${aiPreset?.id ?? ''}:${modal?.kind === 'ai' ? `${modal.purpose ?? ''}:${modal.initialRunId ?? ''}` : ''}:${aiTask ?? ''}:${aiInstruction ?? ''}:${aiResourceKey}:${aiRewrite?.firstBlockId ?? ''}:${aiRewrite?.lastBlockId ?? ''}`} initialRunId={modal?.kind === 'ai' ? modal.initialRunId : undefined} initialTask={aiTask} initialPreset={aiPreset} initialRewrite={aiRewrite} initialResources={aiResources} initialPurpose={modal?.kind === 'ai' ? modal.purpose : undefined} initialInstruction={aiInstruction} initialLivingContext={aiLivingContext} api={api} book={book} chapter={chapter} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onBookChange={applyBook} onUpgrade={upgradeKnowledge} onAdopt={adoptAi} onAdoptMemory={adoptAiMemory} onUseStudy={useStudyMaterials} onOpenReviewChecklist={openReviewChecklist} onSummary={(preset) => showDialog({ kind: 'aiSummary', initialPreset: preset })} />
           </div>}
         </div>
       </DialogDisplayContext.Provider>}
@@ -1673,7 +1675,7 @@ export function App({ api }: Props) {
             <aside ref={inspectorDrawer} tabIndex={-1} className={`${styles.companionAside} ${styles.aiCopilotAside}`} data-explicit={modal?.kind === 'ai'} aria-label="AI 创作副驾驶">
               {inspectorTabs}
               <DialogDisplayContext.Provider value="drawer">
-                <AiPanel key={`${book.book.id}:${aiPreset?.id ?? ''}:${modal?.kind === 'ai' ? `${modal.purpose ?? ''}:${modal.initialRunId ?? ''}` : ''}:${aiTask ?? ''}:${aiInstruction ?? ''}:${aiResourceKey}:${aiRewrite?.firstBlockId ?? ''}:${aiRewrite?.lastBlockId ?? ''}`} initialRunId={modal?.kind === 'ai' ? modal.initialRunId : undefined} initialTask={aiTask} initialPreset={aiPreset} initialRewrite={aiRewrite} initialResources={aiResources} initialPurpose={modal?.kind === 'ai' ? modal.purpose : undefined} initialInstruction={aiInstruction} initialLivingContext={aiLivingContext} api={api} book={book} chapter={chapter} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onBookChange={applyBook} onUpgrade={upgradeKnowledge} onAdopt={adoptAi} onAdoptMemory={adoptAiMemory} onRegisterClose={registerAiDrawerClose} onUseStudy={useStudyMaterials} onOpenReviewChecklist={openReviewChecklist} />
+                <AiPanel key={`${book.book.id}:${aiPreset?.id ?? ''}:${modal?.kind === 'ai' ? `${modal.purpose ?? ''}:${modal.initialRunId ?? ''}` : ''}:${aiTask ?? ''}:${aiInstruction ?? ''}:${aiResourceKey}:${aiRewrite?.firstBlockId ?? ''}:${aiRewrite?.lastBlockId ?? ''}`} initialRunId={modal?.kind === 'ai' ? modal.initialRunId : undefined} initialTask={aiTask} initialPreset={aiPreset} initialRewrite={aiRewrite} initialResources={aiResources} initialPurpose={modal?.kind === 'ai' ? modal.purpose : undefined} initialInstruction={aiInstruction} initialLivingContext={aiLivingContext} api={api} book={book} chapter={chapter} busy={busy} error={modalError} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()} onRecover={() => openRecovery(true)} onClose={closeModal} onDirtyChange={(value) => { aiDirty.current = value }} onBookChange={applyBook} onUpgrade={upgradeKnowledge} onAdopt={adoptAi} onAdoptMemory={adoptAiMemory} onRegisterClose={registerAiDrawerClose} onUseStudy={useStudyMaterials} onOpenReviewChecklist={openReviewChecklist} onSummary={(preset) => showDialog({ kind: 'aiSummary', initialPreset: preset })} />
               </DialogDisplayContext.Provider>
             </aside>
           ) : companionOpen && api ? (

@@ -19,7 +19,7 @@ import { StudyResults } from './StudyResults'
 import { ReviewResults } from './ReviewResults'
 import { isReviewPromptVersion } from '../../contracts/review'
 import { AiPresetsPanel } from './AiPresetsPanel'
-import { aiPresetComposerTask, isAiPresetsSnapshot, type AiPreset, type AiPresetKind, type AiPresetsSnapshot } from '../../contracts/ai-presets'
+import { aiPresetComposerTask, isAiPresetsSnapshot, type AiComposerPreset, type AiPreset, type AiPresetKind, type AiPresetsSnapshot } from '../../contracts/ai-presets'
 import { MAX_CREATIVE_RESOURCES, creativeRef, parseCreativeResources, type CreativeResourceRef, type CreativeSelection } from '../../contracts/creative-resources'
 import { ForeshadowDueNotice } from './StoryControlPanel'
 import { LIVING_SCHEMA_VERSION, parseLivingWritingContext } from '../../contracts/living'
@@ -29,7 +29,7 @@ import styles from './StellarAi.module.css'
 
 interface Props {
   initialRunId?: string
-  initialPreset?: AiPreset
+  initialPreset?: AiComposerPreset
   initialInstruction?: string
   initialRewrite?: { firstBlockId: string; lastBlockId: string }
   initialPurpose?: 'review' | 'study'
@@ -55,6 +55,7 @@ interface Props {
   onRegisterClose?: (close: (() => void) | null) => void
   onUseStudy?: (chapterId: string, refs: CreativeResourceRef[]) => void
   onOpenReviewChecklist?: (issueId?: string) => void
+  onSummary?: (preset?: AiPreset) => void
 }
 
 interface PendingWrite {
@@ -210,7 +211,7 @@ export function AiPanel(props: Props) {
   return <AiPanelSession key={`${props.book.book.id}:${props.chapter.id}`} {...props} />
 }
 
-function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset, initialInstruction, initialRewrite, initialPurpose, initialTask, initialLivingContext, initialResources, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onBookChange, onUpgrade, onAdopt, onAdoptMemory, onRegisterReview, onRegisterClose, onUseStudy, onOpenReviewChecklist }: Props) {
+function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset, initialInstruction, initialRewrite, initialPurpose, initialTask, initialLivingContext, initialResources, error, pendingMessage, checkingReceipt, onCheckReceipt, onRecover, onClose, onDirtyChange, onBookChange, onUpgrade, onAdopt, onAdoptMemory, onRegisterReview, onRegisterClose, onUseStudy, onOpenReviewChecklist, onSummary }: Props) {
   const compact = useContext(DialogDisplayContext) === 'drawer'
   const composerDetails = useRef<HTMLDetailsElement>(null)
   const connectionDetails = useRef<HTMLDetailsElement>(null)
@@ -1000,10 +1001,11 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   }
   function applyPreset(preset: AiPreset) {
     if (blocked || generating || archived || lock.current) return
+    if (preset.kind === 'summarize') { onSummary?.(preset); return }
+    const task = aiPresetComposerTask(preset.kind)
     const connection = preset.connectionId ? connections?.connections.find((item) => item.id === preset.connectionId) : undefined
     if (preset.connectionId && !connection) { setMessage('预设绑定的连接已不可用，请刷新连接后再应用。'); return }
     const apply = () => {
-      const task = aiPresetComposerTask(preset.kind)
       presetConnectionPending.current = null
       invalidateRecommendations(); setKind(task.kind); setPurpose(task.purpose); setInstruction(preset.instruction)
       if (connection) { setConfig(connectionConfig(connection)); setConfigDirty(false); configDirtyRef.current = false; setApiKey('') }
@@ -1116,7 +1118,7 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
       <details className={styles.connection}><summary>任务预设与累计用量</summary><AiPresetsPanel api={api} bookId={book.book.id} bookRevision={knowledge.bookRevision}
         disabled={busy || loading || reading || studyDirty || reviewDirty || generating || archived || Boolean(operation || pending || pendingMessage)} onDirtyChange={setPresetsDirty}
         connections={connections.connections} initialTitle={`${taskName(kind, purpose)}预设`} initialKind={purpose ?? (memoryTask ? 'continue' : kind as 'plan' | 'continue' | 'rewrite')}
-        initialInstruction={instruction} initialConnectionId={selectedConnection?.id ?? null} onApply={applyPreset} onChanged={syncPresetBook}
+        initialInstruction={instruction} initialConnectionId={selectedConnection?.id ?? null} onApply={applyPreset} onChanged={syncPresetBook} onSummary={onSummary}
         onUnknown={(failure) => setMessage(failure.message)} onRecover={recoverTool} /></details>
       <details ref={connectionDetails} className={styles.connection} open={!compact && !selectedConnection || configDirty}><summary>模型连接 · {selectedConnection?.name ?? '请先配置'}</summary><form className={layout.editorForm} onSubmit={(event) => void saveConnection(event)}>
         <div className={styles.connectionChoice}><label>已保存连接<select value={selectedConnection?.id ?? ''} disabled={blocked || generating || configDirty} onChange={(event) => resetConfig(event.target.value)}><option value="" disabled>选择连接</option>{connections?.connections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><button className={shared.button} type="button" disabled={blocked || generating || configDirty || archived} onClick={() => { setConfig(freshConnection()); setConfigDirty(true); configDirtyRef.current = true; setApiKey('') }}>新建连接</button></div>

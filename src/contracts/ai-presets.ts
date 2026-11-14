@@ -1,7 +1,8 @@
 import { DomainError, isRecord, requiredId, requiredInteger, requiredText, type Result } from './api'
 
 export const AI_PRESETS_SCHEMA_VERSION = 14
-export const AI_PRESET_KINDS = ['plan', 'continue', 'rewrite', 'review', 'study'] as const
+export const AI_SUMMARY_PRESETS_SCHEMA_VERSION = 25
+export const AI_PRESET_KINDS = ['plan', 'continue', 'rewrite', 'review', 'study', 'summarize'] as const
 export const AI_PRESETS_COMMANDS = { get: 'ai.presets.get', save: 'ai.presets.save' } as const
 export const MAX_AI_PRESETS = 200
 export const MAX_AI_PRESET_INSTRUCTION = 6_000
@@ -21,6 +22,7 @@ export interface AiPresetFields {
   archived: boolean
 }
 export interface AiPreset extends AiPresetFields { id: string; revision: number; updatedAt: string }
+export type AiComposerPreset = AiPreset & { kind: Exclude<AiPresetKind, 'summarize'> }
 export interface AiPresetUsage {
   /** 已进入生成流程的本地运行数；不代表供应商确认的计费次数。 */
   runCount: number
@@ -35,6 +37,8 @@ export interface AiPresetsSnapshot {
   bookId: string
   bookRevision: number
   requiresUpgrade: boolean
+  /** 旧书仍可使用原五类预设，摘要预设须显式备份升级后启用。 */
+  supportsSummary: boolean
   archived: boolean
   presets: AiPreset[]
   usage: AiPresetUsage
@@ -89,7 +93,8 @@ export function parseSaveAiPresetInput(value: unknown): SaveAiPresetInput {
 export function isAiPresetsSnapshot(value: unknown, bookId: string): value is AiPresetsSnapshot {
   try {
     if (!isRecord(value) || value.bookId !== bookId || requiredId(value.bookId).toLowerCase() !== value.bookId ||
-      typeof value.requiresUpgrade !== 'boolean' || typeof value.archived !== 'boolean' || !Array.isArray(value.presets) ||
+      typeof value.requiresUpgrade !== 'boolean' || typeof value.supportsSummary !== 'boolean' || typeof value.archived !== 'boolean' || !Array.isArray(value.presets) ||
+      (value.requiresUpgrade && value.supportsSummary) ||
       value.presets.length > MAX_AI_PRESETS || (value.requiresUpgrade && value.presets.length > 0)) return false
     const revision = requiredInteger(value.bookRevision, '作品版本')
     const ids = new Set<string>(), defaults = new Set<AiPresetKind>()
@@ -99,6 +104,7 @@ export function isAiPresetsSnapshot(value: unknown, bookId: string): value is Ai
         raw.updatedAt.length !== 24 || new Date(raw.updatedAt).toISOString() !== raw.updatedAt) return false
       const fields = aiPresetFields(raw as unknown as AiPreset)
       if (JSON.stringify(parseAiPresetFields(fields)) !== JSON.stringify(fields)) return false
+      if (fields.kind === 'summarize' && !value.supportsSummary) return false
       if (fields.defaultForTask && defaults.has(fields.kind)) return false
       if (fields.defaultForTask) defaults.add(fields.kind)
       ids.add(raw.id)
@@ -121,6 +127,6 @@ export function isAiPresetSaveReceipt(value: unknown, input: SaveAiPresetInput):
 }
 
 /** 审稿和拆书沿用已有 plan 存储类型，composer 仍由用户确认后发送。 */
-export function aiPresetComposerTask(kind: AiPresetKind): { kind: 'plan' | 'continue' | 'rewrite'; purpose?: 'review' | 'study' } {
+export function aiPresetComposerTask(kind: AiComposerPreset['kind']): { kind: 'plan' | 'continue' | 'rewrite'; purpose?: 'review' | 'study' } {
   return kind === 'review' || kind === 'study' ? { kind: 'plan', purpose: kind } : { kind }
 }

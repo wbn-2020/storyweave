@@ -30,7 +30,8 @@ import { INSPIRATION_APPLICATION_ID, INSPIRATION_SCHEMA, INSPIRATION_THUMBNAIL_S
 import { INSPIRATION_THUMBNAIL_SCHEMA_VERSION, parseUpgradeInspirationsInput, type UpgradeInspirationsInput, type UpgradeInspirationsReceipt } from '../../contracts/inspiration-thumbnail'
 import { CHARACTER_PROFILE_SCHEMA } from '../knowledge/schema'
 import { CALENDAR_SCHEMA } from '../workbench/calendar-schema'
-import { AI_PRESETS_SCHEMA } from '../ai/preset-schema'
+import { AI_PRESETS_V14_SCHEMA, AI_PRESETS_V25_UPGRADE } from '../ai/preset-schema'
+import { validateAiPresetsDatabase } from '../ai/preset-repository'
 import { MEDIA_SCHEMA, SCENE_MEDIA_SCHEMA } from '../workbench/media-schema'
 import { LIVING_SCHEMA } from '../workbench/living-schema'
 import { FORGE_SCHEMA } from '../workbench/forge-schema'
@@ -989,7 +990,7 @@ export class StudioRepository {
         if (previousVersion < 14) {
           db.exec(CHARACTER_PROFILE_SCHEMA)
           db.exec(CALENDAR_SCHEMA)
-          db.exec(AI_PRESETS_SCHEMA)
+          db.exec(AI_PRESETS_V14_SCHEMA)
           db.exec(MEDIA_SCHEMA)
         }
         if (previousVersion < 15) db.exec(GENERATION_BOOK_UPGRADE)
@@ -1002,8 +1003,13 @@ export class StudioRepository {
         if (previousVersion < 22) db.exec(NOTE_MATERIAL_SCHEMA)
         if (previousVersion < 23) db.exec(NOTE_THUMBNAIL_SCHEMA)
         if (previousVersion < 24) db.exec(FORESHADOW_THUMBNAIL_SCHEMA)
+        if (previousVersion < 25) {
+          validateAiPresetsDatabase(db, bookId)
+          db.exec(AI_PRESETS_V25_UPGRADE)
+        }
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
+        validateAiPresetsDatabase(db, bookId)
         this.recordMutation(db, 'book.metadata', new Date().toISOString())
         const book = this.readBookMetadata(db, bookId)
         return { ...status, bookRevision: book.revision, updatedAt: book.updatedAt,

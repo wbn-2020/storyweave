@@ -3,14 +3,14 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { DomainError, requiredId, requiredInteger } from '../../contracts/api'
 import {
-  AI_PRESETS_SCHEMA_VERSION, MAX_AI_PRESETS, MAX_AI_PRESET_FIELDS_BYTES, MAX_AI_PRESETS_BYTES,
+  AI_PRESETS_SCHEMA_VERSION, AI_SUMMARY_PRESETS_SCHEMA_VERSION, MAX_AI_PRESETS, MAX_AI_PRESET_FIELDS_BYTES, MAX_AI_PRESETS_BYTES,
   MAX_AI_PRESET_HISTORY, MAX_AI_PRESET_HISTORY_BYTES, aiPresetFields, isAiPresetsSnapshot, isAiPresetSaveReceipt,
   parseAiPresetFields, parseGetAiPresetsInput, parseSaveAiPresetInput,
   type AiPreset, type AiPresetFields, type AiPresetsSnapshot, type AiPresetUsage, type GetAiPresetsInput, type SaveAiPresetInput,
 } from '../../contracts/ai-presets'
 import { BOOK_SCHEMA_VERSION } from '../storage/schema'
 import type { StudioRepository } from '../storage/studio-repository'
-import { AI_PRESETS_SCHEMA } from './preset-schema'
+import { AI_PRESETS_SCHEMA, AI_PRESETS_V14_SCHEMA } from './preset-schema'
 
 interface BookState { id: string; revision: number; archived_at: string | null }
 interface PresetRow { id: string; revision: number; kind: string; default_for_task: number; archived: number; fields_json: string; updated_at: string }
@@ -76,7 +76,7 @@ function checkBudget(db: Database.Database, history = false): number {
   return current.count
 }
 const PRESET_COLUMNS = `CASE WHEN length(CAST(id AS BLOB)) = 36 THEN id END AS id, revision,
-  CASE WHEN length(CAST(kind AS BLOB)) <= 8 THEN kind END AS kind, default_for_task, archived,
+  CASE WHEN length(CAST(kind AS BLOB)) <= 9 THEN kind END AS kind, default_for_task, archived,
   CASE WHEN length(CAST(fields_json AS BLOB)) <= ${MAX_AI_PRESET_FIELDS_BYTES} THEN fields_json END AS fields_json,
   CASE WHEN length(CAST(updated_at AS BLOB)) = 24 THEN updated_at END AS updated_at`
 
@@ -106,7 +106,8 @@ function readUsage(db: Database.Database, bookId: string, version: number): AiPr
 function readSnapshot(db: Database.Database, bookId: string): AiPresetsSnapshot {
   const current = bookState(db, bookId), version = schemaVersion(db)
   const snapshot: AiPresetsSnapshot = { bookId, bookRevision: current.revision, archived: current.archived_at !== null,
-    requiresUpgrade: version < AI_PRESETS_SCHEMA_VERSION, presets: [], usage: readUsage(db, bookId, version) }
+    requiresUpgrade: version < AI_PRESETS_SCHEMA_VERSION, supportsSummary: version >= AI_SUMMARY_PRESETS_SCHEMA_VERSION,
+    presets: [], usage: readUsage(db, bookId, version) }
   if (!snapshot.requiresUpgrade) {
     checkBudget(db)
     snapshot.presets = (db.prepare(`SELECT ${PRESET_COLUMNS} FROM ai_presets ORDER BY archived, kind, default_for_task DESC, updated_at DESC, id LIMIT ?`).all(MAX_AI_PRESETS + 1) as PresetRow[])
@@ -125,11 +126,13 @@ function checkLatest(db: Database.Database, row: PresetRow): void {
 /** 供恢复预览的只读连接调用；同时检查当前值、完整历史、连接归属及历史保护结构。 */
 export function validateAiPresetsDatabase(db: Database.Database, bookId: string): void {
   perform(() => {
-    if (schemaVersion(db) < AI_PRESETS_SCHEMA_VERSION) return
+    const version = schemaVersion(db)
+    if (version < AI_PRESETS_SCHEMA_VERSION) return
     const id = requiredId(bookId).toLowerCase(), current = bookState(db, id)
-    const definitions = AI_PRESETS_SCHEMA.match(/CREATE TABLE[\s\S]+?\) STRICT;|CREATE UNIQUE INDEX[^;]+;|CREATE TRIGGER[\s\S]+?END;/g) ?? []
+    const schema = version >= AI_SUMMARY_PRESETS_SCHEMA_VERSION ? AI_PRESETS_SCHEMA : AI_PRESETS_V14_SCHEMA
+    const definitions = schema.match(/CREATE TABLE[\s\S]+?\) STRICT;|CREATE UNIQUE INDEX[^;]+;|CREATE TRIGGER[\s\S]+?END;/g) ?? []
     if (definitions.length !== 5) return fail('预设结构校验定义不完整。')
-    const normalize = (sql: string) => sql.trim().replace(/;$/, '').replace(/\s+/g, ' ')
+    const normalize = (sql: string) => sql.trim().replace(/;$/, '').replace(/"(ai_presets|ai_preset_history)"/g, '$1').replace(/\s+/g, ' ')
     for (const definition of definitions) {
       const name = /CREATE (?:TABLE|UNIQUE INDEX|TRIGGER) (\w+)/.exec(definition)?.[1]
       const actual = db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name) as { sql: string } | undefined
@@ -155,6 +158,7 @@ export function validateAiPresetsDatabase(db: Database.Database, bookId: string)
         row.book_revision <= (previous?.bookRevision ?? 0) || row.book_revision > current.revision ||
         row.revision !== (previous?.revision ?? 0) + 1 || row.revision > owner.revision || !validTimestamp(row.created_at)) return fail('预设历史的身份、连续版本或作品版本不一致。')
       const fields = storedFields(row.fields_json)
+      if (version < AI_SUMMARY_PRESETS_SCHEMA_VERSION && fields.kind === 'summarize') return fail('旧格式预设历史不能包含摘要任务。')
       checkConnection(db, id, fields.connectionId)
       if (row.revision === owner.revision && (row.fields_json !== JSON.stringify(aiPresetFields(owner)) || row.created_at !== owner.updatedAt)) return fail('预设当前值与最新历史不一致。')
       // 同一保存可同时撤下旧默认、写入新默认；只在事务版本的边界核对唯一性。
@@ -180,7 +184,9 @@ export class AiPresetRepository {
     return perform(() => {
       const data = parseSaveAiPresetInput(input), db = this.studio.getMemoryDatabase(data.bookId)
       const snapshot = db.transaction(() => {
-        if (schemaVersion(db) < AI_PRESETS_SCHEMA_VERSION) return fail('请先备份并升级作品，再保存任务预设。', 'FORBIDDEN')
+        const version = schemaVersion(db)
+        if (version < AI_PRESETS_SCHEMA_VERSION) return fail('请先备份并升级作品，再保存任务预设。', 'FORBIDDEN')
+        if (data.fields.kind === 'summarize' && version < AI_SUMMARY_PRESETS_SCHEMA_VERSION) return fail('请先备份并升级作品，再保存摘要预设；原五类预设仍可使用。', 'FORBIDDEN')
         const current = bookState(db, data.bookId)
         if (current.archived_at !== null) return fail('作品已归档，任务预设仅供查看。', 'FORBIDDEN')
         if (current.revision !== data.expectedBookRevision) return fail('作品已有新版本，当前输入已保留，请读取最新内容并比较。', 'REVISION_CONFLICT')

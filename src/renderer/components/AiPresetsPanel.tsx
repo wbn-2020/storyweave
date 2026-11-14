@@ -27,11 +27,11 @@ export interface AiPresetsPanelProps {
   initialInstruction?: string
   initialConnectionId?: string | null
   layout?: 'presets' | 'routing'
-  onSummary?: () => void
+  onSummary?: (preset?: AiPreset) => void
   routingNotice?: ReactNode
 }
 
-const labels: Record<AiPresetKind, string> = { plan: '规划', continue: '续写', rewrite: '改写', review: '审稿', study: '拆书' }
+const labels: Record<AiPresetKind, string> = { plan: '规划', continue: '续写', rewrite: '改写', review: '审稿', study: '拆书', summarize: '摘要' }
 
 export function AiPresetsPanel(props: AiPresetsPanelProps) {
   return <PresetsContent key={props.bookId} {...props} />
@@ -55,10 +55,10 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const needsRead = useRef(true)
   const snapshotRef = useRef(snapshot)
   const revisionRef = useRef(bookRevision)
-  const callbacks = useRef({ onChanged, onApply })
+  const callbacks = useRef({ onChanged, onApply, onSummary })
   const formRef = useRef<HTMLFormElement>(null)
   revisionRef.current = bookRevision
-  callbacks.current = { onChanged, onApply }
+  callbacks.current = { onChanged, onApply, onSummary }
   const tool = useToolSession({ api, disabled, onDirtyChange, onUnknown, isProtected: () => syncRef.current })
   const externalChange = Boolean(snapshot && bookRevision > snapshot.bookRevision)
   const blocked = tool.locked || syncState !== 'idle' || !snapshot || snapshot.requiresUpgrade || snapshot.archived || externalChange
@@ -66,7 +66,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const latest = conflict?.presets.find((item) => item.id === draft?.id)
   const oldDefault = draft && snapshot?.presets.find((item) => item.defaultForTask && item.kind === draft.fields.kind && item.id !== draft.id)
   const replacingDefault = Boolean(draft?.fields.defaultForTask && oldDefault)
-  const routeIcons: Record<AiPresetKind, StudioIconName> = { plan: 'layers', continue: 'pen', rewrite: 'refresh', review: 'check', study: 'read' }
+  const routeIcons: Record<AiPresetKind, StudioIconName> = { plan: 'layers', continue: 'pen', rewrite: 'refresh', review: 'check', study: 'read', summarize: 'notes' }
   const recoveryRecord = JSON.stringify({ version: 1, bookId, bookRevision: snapshot?.bookRevision ?? bookRevision,
     command: AI_PRESETS_COMMANDS.save, requestId: tool.pending?.error.requestId ?? null, input: submitted, draft,
     savedPreset: syncRef.current ? snapshot?.presets.find((item) => item.id === submitted?.id) : undefined, syncError }, null, 2)
@@ -95,6 +95,9 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   }
   function edit(item?: AiPreset, useCurrent = false, routeKind?: AiPresetKind) {
     if (blocked || !snapshot || !canSwitch()) return
+    if ((item?.kind ?? routeKind ?? (useCurrent ? initialKind : undefined)) === 'summarize' && !snapshot.supportsSummary) {
+      tool.setError('请先打开分层汇总，备份并启用摘要默认路由。原五类预设仍可使用。'); return
+    }
     if (!item && snapshot.presets.length >= MAX_AI_PRESETS) { tool.setError('本书已达到 200 条预设上限（含归档），可继续编辑已有预设。'); return }
     setDraft({ bookId, expectedBookRevision: snapshot.bookRevision, id: item?.id ?? crypto.randomUUID(), expectedRevision: item?.revision ?? 0,
       fields: item ? aiPresetFields(item) : { title: useCurrent ? initialTitle ?? '' : '', kind: routeKind ?? (useCurrent ? initialKind ?? 'continue' : 'continue'),
@@ -185,7 +188,12 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     if (item.connectionId && connections && !connections.some((connection) => connection.id === item.connectionId)) {
       tool.setError('预设绑定的连接当前不可用，请编辑预设并重新选择。'); return
     }
-    try { callbacks.current.onApply(item) }
+    try {
+      if (item.kind === 'summarize') {
+        if (!callbacks.current.onSummary) { tool.setError('当前入口不支持分层汇总，请从模型路由中心打开。'); return }
+        callbacks.current.onSummary(item)
+      } else callbacks.current.onApply(item)
+    }
     catch { tool.setError('未能填入协作要求，请检查 composer 中的当前输入。') }
   }
   function connectionName(id: string | null) {
@@ -219,12 +227,12 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
           <tbody>{AI_PRESET_KINDS.map((kind) => {
             const route = snapshot.presets.find((item) => item.kind === kind && item.defaultForTask && !item.archived)
             const missing = route?.connectionId && !connections?.some((item) => item.id === route.connectionId)
-            return <tr key={kind}><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty} aria-label={`编辑${labels[kind]}默认预设`} title={blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={() => edit(route, false, kind)}><StudioIcon name={routeIcons[kind]} size={18} /><span>{labels[kind]}</span><span className={styles.routeEditHint}><StudioIcon name="pen" size={14} /></span></button></th>
+            const needsSummaryUpgrade = kind === 'summarize' && !snapshot.supportsSummary
+            return <tr key={kind}><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || needsSummaryUpgrade} aria-label={`编辑${labels[kind]}默认预设`} title={needsSummaryUpgrade ? '请先打开分层汇总，备份并启用摘要默认路由' : blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={() => edit(route, false, kind)}><StudioIcon name={routeIcons[kind]} size={18} /><span>{labels[kind]}</span><span className={styles.routeEditHint}><StudioIcon name="pen" size={14} /></span></button></th>
               {connections?.map((connection, index) => <td key={connection.id}>{route?.connectionId === connection.id ? <span className={styles.assignment} data-tone={index % 3}><i />{connection.model}</span> : <span className={styles.noRoute}>—</span>}</td>)}
-              <td>{!route ? <span className={styles.noRoute}>未设置</span> : missing ? <span className={styles.unavailable}>绑定连接不可用</span> : route.connectionId === null ? <span className={styles.assignment}><i />发送前选择</span> : <span className={styles.noRoute}>—</span>}</td>
+              <td>{needsSummaryUpgrade ? <span className={styles.unavailable}>备份升级后启用</span> : !route ? <span className={styles.noRoute}>未设置</span> : missing ? <span className={styles.unavailable}>绑定连接不可用</span> : route.connectionId === null ? <span className={styles.assignment}><i />发送前选择</span> : <span className={styles.noRoute}>—</span>}</td>
             </tr>
           })}
-            <tr><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || !onSummary} aria-label="打开全书分层汇总" title={!onSummary ? '当前入口不可用' : '打开全书分层汇总'} onClick={onSummary}><StudioIcon name="layers" size={18} /><span>摘要</span><span className={styles.routeEditHint}><StudioIcon name="chevron" size={14} /></span></button></th><td colSpan={(connections?.length ?? 0) + 1} className={styles.summaryRoute}>在分层汇总任务中选择连接</td></tr>
           </tbody>
         </table></div>
       </section>}
@@ -250,11 +258,12 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
       {snapshot.requiresUpgrade ? <p className={styles.warning}>请通过作品工具备份并升级这部作品，再刷新本面板以保存任务预设。</p> : <>
         <div className={styles.actions}><div className={styles.actions}>
           <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty} onClick={() => edit()}>新建预设</button>
+          {onSummary && <button type="button" className={styles.button} disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => onSummary()}>打开分层汇总</button>}
           {initialInstruction?.trim() && <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={() => edit(undefined, true)}>将当前要求存为模板</button>}
         </div><label className={styles.check}><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />显示已归档</label></div>
         <ul className={styles.list}>{visible.map((item) => <li key={item.id}>
           <div className={styles.rowHeading}><div><strong>{item.title}</strong><span className={styles.tag}>{labels[item.kind]}</span>{item.defaultForTask && <span className={styles.tag}>默认</span>}{item.archived && <span className={styles.tag}>已归档</span>}</div>
-            <div className={styles.actions}><button type="button" className={styles.button} disabled={blocked || tool.dirty || item.archived} onClick={() => apply(item)}>应用到协作</button>
+            <div className={styles.actions}><button type="button" className={styles.button} disabled={blocked || tool.dirty || item.archived || item.kind === 'summarize' && !onSummary} onClick={() => apply(item)}>{item.kind === 'summarize' ? '应用到分层汇总' : '应用到协作'}</button>
               <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={() => edit(item)}>{item.archived ? '查看 / 恢复' : '编辑 / 归档'}</button></div></div>
           <p className={styles.muted}>{connectionName(item.connectionId)} · 版本 {item.revision}</p>
           <details className={styles.details}><summary>查看协作要求</summary><p className={styles.instruction}>{item.instruction}</p></details>
@@ -267,7 +276,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
       <h4>{draft.expectedRevision ? '编辑预设' : '新建预设'}</h4>
       <fieldset disabled={tool.locked || syncState !== 'idle'}>
         <div className={styles.fields}><label>名称<input required maxLength={120} value={draft.fields.title} onChange={(event) => change({ title: event.target.value })} /></label>
-          <label>任务<select value={draft.fields.kind} onChange={(event) => change({ kind: event.target.value as AiPresetKind })}>{AI_PRESET_KINDS.map((kind) => <option key={kind} value={kind}>{labels[kind]}</option>)}</select></label></div>
+          <label>任务<select value={draft.fields.kind} onChange={(event) => change({ kind: event.target.value as AiPresetKind })}>{AI_PRESET_KINDS.map((kind) => <option key={kind} value={kind} disabled={kind === 'summarize' && !snapshot?.supportsSummary}>{labels[kind]}</option>)}</select></label></div>
         <label>协作要求<textarea required rows={7} maxLength={MAX_AI_PRESET_INSTRUCTION} value={draft.fields.instruction} onChange={(event) => change({ instruction: event.target.value })} /></label>
         <p className={styles.muted}>{draft.fields.instruction.length.toLocaleString()} / {MAX_AI_PRESET_INSTRUCTION.toLocaleString()} 字符</p>
         <label>模型连接<select value={draft.fields.connectionId ?? ''} onChange={(event) => change({ connectionId: event.target.value || null })}>
