@@ -4,6 +4,28 @@
 .heading h3 { font: 600 var(--text-lg)/1.4 var(--font-ui); }
 .actions { composes: actions from './stellar/Workspace.module.css'; margin-top: var(--space-4); }
 .connection,.history,.composer,.run { min-width: 0; border-top: 1px solid var(--color-line); padding-block: var(--space-4); margin-top: var(--space-4); }
+.run[data-state] { --run-tone: var(--color-accent); --run-haze: var(--color-accent-soft); padding: var(--space-4); border: 1px solid color-mix(in srgb,var(--run-tone) 55%,var(--color-line)); border-radius: var(--radius-xl); background: var(--bg-subtle); }
+.run[data-state='succeeded'] { --run-tone: var(--color-accent-2); --run-haze: var(--stellar-ai-haze); }
+.run[data-state='failed'] { --run-tone: var(--color-danger); --run-haze: var(--color-danger-soft); }
+.run:is([data-state='cancelled'],[data-state='interrupted']) { --run-tone: var(--color-warning); --run-haze: var(--color-warning-soft); }
+.run[data-state='rejected'] { --run-tone: var(--color-muted); --run-haze: var(--bg-raised); }
+.run[data-state='adopted'] { --run-tone: var(--color-success); --run-haze: var(--color-success-soft); }
+.run[data-unconfirmed='true'] { --run-tone: var(--color-warning); --run-haze: var(--color-warning-soft); }
+.runHeader { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-line); }
+.runEmblem { display: grid; place-items: center; width: var(--space-12); height: var(--space-12); flex: 0 0 var(--space-12); border: 1px solid currentColor; border-radius: var(--radius-pill); background: var(--run-haze); color: var(--run-tone); }
+.runTitle { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.runTitle h3 { font: 600 var(--text-lg)/1.4 var(--font-ui); }
+.runTitle p { margin-top: var(--space-1); font-size: var(--text-xs); color: var(--color-muted); }
+.runState { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 100%; padding: var(--space-1) var(--space-2); border-radius: var(--radius-pill); background: var(--run-haze); color: var(--run-tone); font: 500 var(--text-xs)/1.5 var(--font-ui); overflow-wrap: anywhere; }
+.runState::before { content: ''; width: var(--space-2); height: var(--space-2); flex: 0 0 var(--space-2); border-radius: var(--radius-pill); background: currentColor; }
+.runFacts { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: var(--space-3); margin: var(--space-4) 0 0; }
+.runFacts > div { min-width: 0; }
+.runFacts dt { font-size: var(--text-xs); color: var(--color-muted); }
+.runFacts dd { margin: var(--space-1) 0 0; color: var(--color-ink-secondary); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.runFacts > div:last-child { text-align: end; }
+.runFacts > div:last-child dd { font-family: var(--font-num); }
+@container (max-width:500px) { .runFacts { grid-template-columns: minmax(0,1fr); } .runFacts > div:last-child { text-align: start; } }
+@media (forced-colors: active) { .run[data-state] { border-color: CanvasText; } .runEmblem,.runState { color: CanvasText; background: Canvas; } }
 .connection > summary,.history > summary,.messages > summary,.sources > summary,.memory > summary { cursor: pointer; min-height: var(--control-compact); padding-block: var(--space-2); font-size: var(--text-sm); color: var(--color-ink-secondary); }
 .connection > form { margin-top: var(--space-4); }
 .connectionChoice { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-3); }
