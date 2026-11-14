@@ -12,6 +12,7 @@ import styles from './StellarEditor.module.css'
 import paper from './PaperSurface.module.css'
 import type { WritingPosition } from '../writing-location'
 import { StudioIcon } from './StudioIcon'
+import { StellarTooltip } from './stellar/StellarTooltip'
 
 interface Props {
   title: string
@@ -178,6 +179,7 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
   useEffect(() => {
     const keyDown = (event: KeyboardEvent) => {
       if (!editor || editor.isDestroyed || event.defaultPrevented || disabledRef.current || composing.current || editor.view.composing || event.isComposing || event.keyCode === 229) return
+      if (event.key === 'Escape' && globalThis.document.querySelector('[data-stellar-tooltip]:popover-open')) return
       if (globalThis.document.querySelector('dialog[open]')) return
       const target = event.target
       if (target instanceof HTMLElement && !container.current?.contains(target) && target.closest('input, textarea, select, [contenteditable="true"]')) return
@@ -191,7 +193,7 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
         event.preventDefault(); setSearchOpen(false); editor.view.focus()
       }
     }
-    // Esc 先交给选区工具条，下一次才收起查找；两者均先于编辑器键位处理。
+    // Esc 依次交给提示、选区工具条和查找；较早注册的监听不能抢先收起下层。
     window.addEventListener('keydown', keyDown, true)
     return () => window.removeEventListener('keydown', keyDown, true)
   }, [editor, searchOpen])
@@ -212,6 +214,8 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
         left: Math.max(12, Math.min(bounds.width - width - 12, (start.left + end.right) / 2 - bounds.left - width / 2)), width })
     }
     const dismiss = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229 || composing.current || editor.view.composing
+        || globalThis.document.querySelector('[data-stellar-tooltip]:popover-open')) return
       if (event.key === 'Escape' && !event.defaultPrevented && !globalThis.document.querySelector('dialog[open]') && selectionTools.current) {
         event.preventDefault()
         // 捕获阶段可能早于原生 selectionchange；按眼前的 DOM 选区关闭，避免迟到同步重新展开。
@@ -275,18 +279,18 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
   return <div ref={container} className={`${styles.editor} ${paper.surface}`} data-paper-tone={displayPreferences.paperTone} style={displayPreferenceStyle(displayPreferences)}>
     <div className={styles.toolbar} role="toolbar" aria-label="正文格式">
       <div className={styles.toolGroup}>
-        <button type="button" disabled={editingDisabled} aria-pressed={active?.bold ?? false}
-          aria-label="加粗" title="加粗（Ctrl+B）" onClick={() => command(() => editor.chain().focus().toggleBold().run())}><b>B</b></button>
-        <button type="button" disabled={editingDisabled} aria-pressed={active?.italic ?? false}
-          aria-label="斜体" title="斜体（Ctrl+I）" onClick={() => command(() => editor.chain().focus().toggleItalic().run())}><i>I</i></button>
-        <button type="button" disabled={editingDisabled} aria-pressed={active?.heading ?? false}
-          aria-label="小标题" title="小标题" onClick={() => command(() => editor.chain().focus().toggleHeading({ level: 2 }).run())}>H2</button>
-        <button type="button" disabled={editingDisabled}
-          aria-label="插入分场线" title="分场线" onClick={() => command(() => editor.chain().focus().setHorizontalRule().run())}>―</button>
+        <StellarTooltip><button type="button" disabled={editingDisabled} aria-pressed={active?.bold ?? false}
+          aria-label="加粗" title="加粗（Ctrl+B）" onClick={() => command(() => editor.chain().focus().toggleBold().run())}><b>B</b></button></StellarTooltip>
+        <StellarTooltip><button type="button" disabled={editingDisabled} aria-pressed={active?.italic ?? false}
+          aria-label="斜体" title="斜体（Ctrl+I）" onClick={() => command(() => editor.chain().focus().toggleItalic().run())}><i>I</i></button></StellarTooltip>
+        <StellarTooltip><button type="button" disabled={editingDisabled} aria-pressed={active?.heading ?? false}
+          aria-label="小标题" title="小标题" onClick={() => command(() => editor.chain().focus().toggleHeading({ level: 2 }).run())}>H2</button></StellarTooltip>
+        <StellarTooltip><button type="button" disabled={editingDisabled}
+          aria-label="插入分场线" title="分场线" onClick={() => command(() => editor.chain().focus().setHorizontalRule().run())}><StudioIcon name="minus" size={20} /></button></StellarTooltip>
       </div>
       <div className={styles.toolGroup}>
-        <button type="button" disabled={disabled || compositionActive} title="查找（Ctrl+F）" aria-label="查找正文" aria-expanded={searchOpen} onClick={() => openSearch(false)}><StudioIcon name="search" size={20} /></button>
-        <button type="button" disabled={disabled || compositionActive || readOnly} title="替换（Ctrl+H）" onClick={() => openSearch(true)}>替换</button>
+        <StellarTooltip><button type="button" disabled={disabled || compositionActive} title="查找（Ctrl+F）" aria-label="查找正文" aria-expanded={searchOpen} onClick={() => openSearch(false)}><StudioIcon name="search" size={20} /></button></StellarTooltip>
+        <StellarTooltip><button type="button" disabled={disabled || compositionActive || readOnly} title="替换（Ctrl+H）" onClick={() => openSearch(true)}>替换</button></StellarTooltip>
       </div>
     </div>
     {selectionToolbar && <div ref={selectionTools} className={styles.selectionToolbar} role="toolbar" aria-label="选区 AI 改写" style={selectionToolbar}
@@ -302,10 +306,10 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
     <footer className={styles.paperFooter}>
       <div className={styles.footerInfo}>{footer ?? <span>{readOnly ? '归档作品 · 只读' : '工作稿'}</span>}</div>
       <div className={styles.toolGroup}>
-        <button type="button" disabled={editingDisabled || !active?.canUndo}
-          aria-label="撤销" title="撤销（Ctrl+Z）" onClick={() => command(() => editor.chain().focus().undo().run())}><StudioIcon name="undo" size={20} /></button>
-        <button type="button" disabled={editingDisabled || !active?.canRedo}
-          aria-label="重做" title="重做（Ctrl+Shift+Z）" onClick={() => command(() => editor.chain().focus().redo().run())}><StudioIcon name="redo" size={20} /></button>
+        <StellarTooltip><button type="button" disabled={editingDisabled || !active?.canUndo}
+          aria-label="撤销" title="撤销（Ctrl+Z）" onClick={() => command(() => editor.chain().focus().undo().run())}><StudioIcon name="undo" size={20} /></button></StellarTooltip>
+        <StellarTooltip><button type="button" disabled={editingDisabled || !active?.canRedo}
+          aria-label="重做" title="重做（Ctrl+Shift+Z）" onClick={() => command(() => editor.chain().focus().redo().run())}><StudioIcon name="redo" size={20} /></button></StellarTooltip>
       </div>
     </footer>
   </div>

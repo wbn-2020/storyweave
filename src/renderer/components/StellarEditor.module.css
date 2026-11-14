@@ -44,4 +44,6 @@
 .selectionToolbar { position: absolute; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-1); z-index: var(--z-dropdown); border: 1px solid var(--color-accent); border-radius: var(--radius-md); background: var(--bg-raised); color: var(--color-ink); box-shadow: var(--shadow-sm); }
 .selectionToolbar button { flex: 1; min-height: var(--control-compact); border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; padding: var(--space-1) var(--space-2); font-size: var(--text-xs); white-space: nowrap; }
 .selectionToolbar button:hover:not(:disabled) { color: var(--color-accent); background: var(--color-accent-soft); }
+:is(.toolGroup,.searchPanel,.selectionToolbar,.footerInfo) button:active:not(:disabled) { filter: brightness(.82); }
+@media (forced-colors: active) { :is(.toolGroup,.searchPanel,.selectionToolbar,.footerInfo) button:active:not(:disabled) { filter: none; } }
 @media (max-width: 699px) { .paperHeading { padding: var(--space-5) var(--space-4) 0; } .content { padding: var(--space-5) var(--space-4) var(--space-8); } .paperHeading h2 { font-size: 20px; } }

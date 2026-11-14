@@ -5,6 +5,8 @@ import { closeHistory } from '@tiptap/pm/history'
 import { TextSelection } from '@tiptap/pm/state'
 import { MAX_CHAPTER_LENGTH, parseManuscript } from '../../contracts/manuscript'
 import { findLiteralMatches, manuscriptLength, MAX_SEARCH_MATCHES, searchHighlightKey, type MatchResult, type SearchHighlight } from './manuscript-search'
+import { StudioIcon } from './StudioIcon'
+import { StellarTooltip } from './stellar/StellarTooltip'
 import styles from './StellarEditor.module.css'
 
 interface Props {
@@ -124,7 +126,7 @@ export function ManuscriptSearch({ editor, disabled, readOnly, composing, replac
         onCompositionStart={() => { inputComposition.current = true; setInputComposing(true) }} onCompositionEnd={() => { inputComposition.current = false; setInputComposing(false) }}
         onChange={(event) => { setQuery(event.target.value); setMessage(null) }} onKeyDown={keyDown} /></label>
       <span className={styles.searchCount} role="status">{!query ? '输入关键词' : !current ? '查找中…' : !current.matches.length ? '0 处匹配' : (current.activeIndex + 1) + ' / ' + current.matches.length.toLocaleString() + (current.truncated ? '+' : '')}</span>
-      <div className={styles.searchButtons}><button type="button" onClick={() => navigate(-1)} disabled={inactive || !current?.matches.length} title="上一个（Shift+Enter）">上一处</button><button type="button" onClick={() => navigate(1)} disabled={inactive || !current?.matches.length} title="下一个（Enter）">下一处</button><button type="button" onClick={onClose} disabled={inactive} aria-label="关闭查找（Escape）">×</button></div>
+      <div className={styles.searchButtons}><StellarTooltip><button type="button" onClick={() => navigate(-1)} disabled={inactive || !current?.matches.length} title="上一个（Shift+Enter）">上一处</button></StellarTooltip><StellarTooltip><button type="button" onClick={() => navigate(1)} disabled={inactive || !current?.matches.length} title="下一个（Enter）">下一处</button></StellarTooltip><StellarTooltip><button type="button" onClick={onClose} disabled={inactive} aria-label="关闭查找（Escape）"><StudioIcon name="close" size={20} /></button></StellarTooltip></div>
     </div>
     <div className={styles.searchOptions}><label><input type="checkbox" checked={caseSensitive} onChange={(event) => { setCaseSensitive(event.target.checked); setMessage(null) }} disabled={inactive} />区分大小写</label><button type="button" onClick={onToggleReplace} disabled={inactive} aria-expanded={replaceOpen}>{replaceOpen ? '收起替换' : '展开替换'}</button><span>仅本章 · 字面匹配 · 不跨段落或换行</span></div>
     {replaceOpen && <div className={styles.searchRow}><label className={styles.searchField} htmlFor={replacementId}><span>替换为</span><input id={replacementId} value={replacement} maxLength={5000} placeholder="留空将删除匹配文字" autoComplete="off" disabled={disabled || readOnly || composing}
