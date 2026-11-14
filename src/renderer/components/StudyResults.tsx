@@ -87,6 +87,26 @@ function readPreviewItems(run: AiRun): StudyProposalItem[] {
   return items
 }
 
+function highlightedReference(reference: CreativeResource | undefined, items: readonly StudyProposalItem[]) {
+  const text = reference?.text ?? ''
+  // 生成中和完成态共用逐字高亮；先按固定来源筛选，再合并重叠范围，不拼接或改写原文。
+  const ranges = items.filter((item) => item.sourceId === reference?.id)
+    .map((item) => ({ start: text.indexOf(item.quote), length: item.quote.length }))
+    .filter((range) => range.start >= 0).sort((left, right) => left.start - right.start)
+  const merged: { start: number; end: number }[] = []
+  for (const range of ranges) {
+    const previous = merged.at(-1), end = range.start + range.length
+    if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, end)
+    else merged.push({ start: range.start, end })
+  }
+  let offset = 0
+  const parts = merged.map((range, index) => {
+    const before = text.slice(offset, range.start); offset = range.end
+    return <span key={index}>{before}<mark>{text.slice(range.start, range.end)}</mark></span>
+  })
+  return <>{parts}{text.slice(offset)}</>
+}
+
 function StudyCardPreview({ kind, body, reference }: { kind: string; body: string; reference?: CreativeResource }) {
   if (!isStudyCardKind(kind)) return <p tabIndex={0}>{body}</p>
   try {
@@ -104,7 +124,7 @@ export function StudyResults(props: StudyResultsProps) {
   // 完成前不挂载固定候选编辑器，避免将流式检查点冻结为可入库的来源。
   if (run.state === 'succeeded') return <StudyCompletedResults {...props} expanded={expanded} onExpandedChange={setExpanded} sourceId={sourceId} onSourceChange={setSourceId} />
   const running = run.state === 'running', orphaned = running && run.active === false
-  const state = running ? orphaned ? '拆解待核对' : '拆解中'
+  const state = run.state === 'running' ? orphaned ? '拆解待核对' : '拆解中'
     : ({ prepared: '等待发送', failed: '拆解失败', cancelled: '已取消', interrupted: '已中断', rejected: '已拒绝', adopted: '已采用', succeeded: '待审阅' } as const)[run.state]
   const notice = running ? orphaned ? '任务记录尚未结束，当前桌面已无活动请求。请核对后明确标记中断。' : '正在拆解固定参考，完整条目随已保存输出出现；任务完成后再核对入库。'
     : run.state === 'rejected' ? '作者已拒绝这份提议，固定参考和原输出继续保留。'
@@ -125,7 +145,7 @@ export function StudyResults(props: StudyResultsProps) {
           <header><StudioIcon name="read" size={24} /><h3>参考片段 · 授权文本</h3><button type="button" className={ui.button} disabled={locked || !canRetry} onClick={retry}><StudioIcon name="layers" size={20} />{running ? state : '重新准备拆解'}</button></header>
           {references.length > 1 && <label>固定参考<select value={reference?.id ?? ''} onChange={(event) => setSourceId(event.target.value)}>{references.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>}
           <p className={`${ui.muted} ${styles.sourceMeta}`} title={reference?.title}>来源：{reference?.title ?? '固定来源缺失'} · v{reference?.revision ?? '未知'}</p>
-          <div className={styles.referenceText} tabIndex={0} role="region" aria-label="固定参考原文">{reference?.text ?? '这份任务没有可读取的固定参考原文。'}</div>
+          <div className={styles.referenceText} tabIndex={0} role="region" aria-label="固定参考原文">{reference ? highlightedReference(reference, items) : '这份任务没有可读取的固定参考原文。'}</div>
         </aside>
         <div className={styles.analysis}>{categories.map((category) => {
           const entries = items.filter((item) => category.kinds.includes(item.kind))
@@ -254,24 +274,6 @@ function StudyCompletedResults({ api, run, book, chapterId, disabled, error, onD
     if (!element) return
     element.open = true; element.scrollIntoView({ block: 'start', behavior: 'instant' }); element.querySelector<HTMLElement>('summary')?.focus()
   }
-  function highlightedReference() {
-    const text = reference?.text ?? ''
-    // 仅高亮逐字存在的固定引文；合并重叠范围，避免拼接或改写参考文本。
-    const ranges = sourceItems.map((item) => ({ start: text.indexOf(item.quote), length: item.quote.length }))
-      .filter((range) => range.start >= 0).sort((left, right) => left.start - right.start)
-    const merged: { start: number; end: number }[] = []
-    for (const range of ranges) {
-      const previous = merged.at(-1), end = range.start + range.length
-      if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, end)
-      else merged.push({ start: range.start, end })
-    }
-    let offset = 0
-    const parts = merged.map((range, index) => {
-      const before = text.slice(offset, range.start); offset = range.end
-      return <span key={index}>{before}<mark>{text.slice(range.start, range.end)}</mark></span>
-    })
-    return <>{parts}{text.slice(offset)}</>
-  }
   function preview(index: number) {
     const draft = drafts[index]!
     const reference = source.context.creativeResources?.items.find((item) => item.source === 'inspiration' && item.id === parsed.proposal?.items[index]?.sourceId)
@@ -307,7 +309,7 @@ function StudyCompletedResults({ api, run, book, chapterId, disabled, error, onD
         }}><StudioIcon name="layers" size={20} />拆解</button></header>
         {references.length > 1 && <label>固定参考<select value={reference?.id ?? ''} onChange={(event) => setSourceId(event.target.value)}>{references.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>}
         <p className={`${ui.muted} ${styles.sourceMeta}`} title={reference?.title}>来源：{reference?.title ?? '固定来源缺失'} · v{reference?.revision ?? '未知'}</p>
-        <div className={styles.referenceText} tabIndex={0} role="region" aria-label="固定参考原文">{highlightedReference()}</div>
+        <div className={styles.referenceText} tabIndex={0} role="region" aria-label="固定参考原文">{highlightedReference(reference, parsed.proposal?.items ?? [])}</div>
       </aside>
       <div className={styles.analysis}>{categories.map((category) => {
         const indexes = parsed.proposal!.items.flatMap((item, index) => category.kinds.includes(item.kind) ? [index] : [])

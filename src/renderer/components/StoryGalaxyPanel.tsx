@@ -581,7 +581,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         <button type="button" className={shared.button} aria-pressed={view === 'galaxy'} disabled={disabled} onClick={() => changeDisplay('galaxy')}>星海视图</button>
         <button type="button" className={shared.button} aria-pressed={view === 'relationships'} disabled={disabled} onClick={() => changeDisplay('relationships')}>关系星网</button>
         <button type="button" className={shared.button} aria-pressed={false} disabled={disabled} onClick={() => changeDisplay('world')}>世界星域</button>
-        <button type="button" className={shared.button} aria-pressed={view === 'matrix'} disabled={disabled} onClick={() => changeDisplay('matrix')}>章节出场矩阵</button>
+        <button type="button" className={shared.button} aria-pressed={false} disabled={disabled} onClick={() => changeDisplay('matrix')}>章节出场矩阵</button>
         <button type="button" className={shared.button} aria-pressed={view === 'radar'} disabled={disabled} onClick={() => changeDisplay('radar')}>伏笔雷达</button>
       </div></details>}
       {view === 'galaxy' && <div className={styles.galaxyLegend} role="group" aria-label="记忆星图类型">
