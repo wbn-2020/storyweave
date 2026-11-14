@@ -17,16 +17,20 @@ interface Props {
   onTask: (id: string) => void
   onForeshadow: () => void
 }
+interface SourceRead {
+  api: StudioApi; key: string; reading: boolean
+  living: LivingSnapshot | null; radar: ForeshadowRadarPage | null
+  livingUnavailable: string | null; error: string | null
+}
+interface SummaryRead {
+  api: StudioApi; key: string; reading: boolean
+  summary: AiSummaryNodeDetail | null; error: string | null
+}
 
 export function SummaryOverview({ api, book, status, disabled, onNavigate, onPrepare, onTask, onForeshadow }: Props) {
   const [scope, setScope] = useState(book.volumes[0]?.id ?? (book.chapters.length ? 'ungrouped' : 'book'))
-  const [living, setLiving] = useState<LivingSnapshot | null>(null)
-  const [radar, setRadar] = useState<ForeshadowRadarPage | null>(null)
-  const [summary, setSummary] = useState<AiSummaryNodeDetail | null>(null)
-  const [reading, setReading] = useState(true)
-  const [summaryReading, setSummaryReading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [sourceRead, setSourceRead] = useState<SourceRead | null>(null)
+  const [summaryRead, setSummaryRead] = useState<SummaryRead | null>(null)
   const [refresh, setRefresh] = useState(0)
   const root = useRef<HTMLElement>(null)
   const chapters = book.chapters.filter((chapter) => scope === 'book' || chapter.volumeId === (scope === 'ungrouped' ? null : scope))
@@ -34,6 +38,19 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
   const scopeTitle = scope === 'book' ? '全书' : scope === 'ungrouped' ? '未分卷章节' : book.volumes.find((volume) => volume.id === scope)?.title ?? '所选卷'
   const task = status.recentTasks.find((item) => scope === 'book' ? item.scope.kind === 'book'
     : item.scope.kind === 'volume' && item.scope.volumeId === (scope === 'ungrouped' ? null : scope))
+  // 渲染时先核对读取身份，避免 effect 清理前将上一范围的摘要或旧版本资料画入当前页面。
+  const sourceKey = JSON.stringify([book.book.id, book.book.revision, status.bookId, status.bookRevision, status.knowledgeRevision, refresh])
+  const summaryKey = JSON.stringify([sourceKey, scope, task?.id, task?.version, task?.state, task?.sourceCurrent, task?.totalNodes, task?.scope])
+  const currentSources = sourceRead?.api === api && sourceRead.key === sourceKey ? sourceRead : null
+  const currentSummary = summaryRead?.api === api && summaryRead.key === summaryKey ? summaryRead : null
+  const living = currentSources?.living ?? null
+  const radar = currentSources?.radar ?? null
+  const summary = currentSummary?.summary ?? null
+  const reading = !currentSources || currentSources.reading
+  const summaryReading = Boolean(task?.state === 'completed' && task.totalNodes && (!currentSummary || currentSummary.reading))
+  const error = currentSources?.error ?? null
+  const summaryError = currentSummary?.error ?? null
+  const livingUnavailable = reading ? '正在核对大纲与记忆资料…' : currentSources?.livingUnavailable ?? '大纲与记忆资料尚未取得，请刷新后重读。'
   const outline = living?.outlines.find((item) => scope === 'book' ? item.scope === 'book' : item.scope === 'volume' && item.id === scope)
   const memoryPeople = new Set(living?.memories.filter((memory) => memory.state === 'published' && chapterIds.has(memory.chapterId))
     .flatMap((memory) => memory.proposal.states.map((state) => state.entityId)) ?? [])
@@ -47,7 +64,7 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
 
   useEffect(() => {
     let active = true
-    setReading(true); setLiving(null); setRadar(null); setError(null)
+    setSourceRead({ api, key: sourceKey, reading: true, living: null, radar: null, livingUnavailable: null, error: null })
     void (async () => {
       const [outlineResult, radarResult] = await Promise.all([
         request(() => api.getLiving({ bookId: book.book.id })),
@@ -55,48 +72,55 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
       ])
       if (!active) return
       const failures: string[] = []
-      if (outlineResult.ok && outlineResult.data.bookId === book.book.id && outlineResult.data.bookRevision === status.bookRevision
-        && outlineResult.data.knowledgeRevision === status.knowledgeRevision && !outlineResult.data.requiresUpgrade) setLiving(outlineResult.data)
-      else failures.push(outlineResult.ok ? '大纲版本与汇总状态不一致，请刷新。' : outlineResult.error.message)
-      if (radarResult.ok && radarResult.data.bookId === book.book.id && radarResult.data.bookRevision === status.bookRevision
-        && radarResult.data.knowledgeRevision === status.knowledgeRevision) setRadar(radarResult.data)
+      let living: LivingSnapshot | null = null, radar: ForeshadowRadarPage | null = null, livingUnavailable: string | null = null
+      if (outlineResult.ok && outlineResult.data.bookId === book.book.id && outlineResult.data.bookRevision === status.bookRevision && outlineResult.data.bookRevision >= book.book.revision
+        && outlineResult.data.knowledgeRevision === status.knowledgeRevision) {
+        if (outlineResult.data.requiresUpgrade) livingUnavailable = '本书尚未启用演进大纲与记忆，请在大纲沙盘核对备份升级说明。'
+        else living = outlineResult.data
+      } else {
+        livingUnavailable = outlineResult.ok ? '大纲版本与汇总状态不一致，请刷新。' : `大纲与记忆资料读取失败：${outlineResult.error.message}`
+        failures.push(livingUnavailable)
+      }
+      if (radarResult.ok && radarResult.data.bookId === book.book.id && radarResult.data.bookRevision === status.bookRevision && radarResult.data.bookRevision >= book.book.revision
+        && radarResult.data.knowledgeRevision === status.knowledgeRevision) radar = radarResult.data
       else failures.push(radarResult.ok ? '伏笔版本与汇总状态不一致，请刷新。' : radarResult.error.message)
-      setError(failures.join(' ') || null); setReading(false)
+      setSourceRead({ api, key: sourceKey, reading: false, living, radar, livingUnavailable, error: failures.join(' ') || null })
     })()
     return () => { active = false }
-  }, [api, book.book.id, status.bookRevision, status.knowledgeRevision, refresh])
+  }, [api, sourceKey])
 
   useEffect(() => {
     let active = true
-    setSummary(null); setSummaryError(null)
-    if (!task || task.state !== 'completed' || !task.totalNodes) { setSummaryReading(false); return }
-    setSummaryReading(true)
+    if (!task || task.state !== 'completed' || !task.totalNodes) { setSummaryRead(null); return }
+    setSummaryRead({ api, key: summaryKey, reading: true, summary: null, error: null })
+    const finish = (summary: AiSummaryNodeDetail | null, error: string | null = null) => {
+      if (active) setSummaryRead({ api, key: summaryKey, reading: false, summary, error })
+    }
     void (async () => {
       // 最后一个序号才是覆盖整个范围的根节点，不把首个分组摘要当作整卷汇总。
       const result = await request(() => api.getAiSummaryTask({ bookId: book.book.id, taskId: task.id, afterOrdinal: task.totalNodes - 1 }))
       if (!active) return
-      if (!result.ok) { setSummaryError(result.error.message); setSummaryReading(false); return }
+      if (!result.ok) { finish(null, result.error.message); return }
       const owner = result.data
       const node = owner.nodes.find((item) => item.ordinal === owner.totalNodes && item.chapterCount === owner.totalChapters)
       if (owner.bookId !== book.book.id || owner.id !== task.id || owner.version !== task.version || owner.state !== 'completed'
         || owner.sourceCurrent !== task.sourceCurrent || JSON.stringify(owner.scope) !== JSON.stringify(task.scope) || !node || node.state !== 'approved') {
-        setSummaryError('汇总根节点或范围版本已变化，请刷新状态后重读。'); setSummaryReading(false); return
+        finish(null, '汇总根节点或范围版本已变化，请刷新状态后重读。'); return
       }
       const detail = await request(() => api.getAiSummaryNode({ bookId: book.book.id, taskId: owner.id, nodeId: node.id }))
       if (!active) return
-      if (!detail.ok) setSummaryError(detail.error.message)
+      if (!detail.ok) finish(null, detail.error.message)
       else {
         const value = detail.data
         if (value.id !== node.id || value.taskId !== owner.id || value.ordinal !== owner.totalNodes || value.chapterCount !== owner.totalChapters
           || value.state !== 'approved' || !value.acceptedText?.trim() || value.acceptedText.length > AI_SUMMARY_TEXT_LIMIT
           || value.run?.bookId !== book.book.id || value.run.id !== value.runId || value.run.state !== 'adopted'
-          || value.run.acceptedText !== value.acceptedText || !value.sources?.length) setSummaryError('已采用摘要与固定根节点回执不一致。')
-        else setSummary(value)
+          || value.run.acceptedText !== value.acceptedText || !value.sources?.length) finish(null, '已采用摘要与固定根节点回执不一致。')
+        else finish(value)
       }
-      setSummaryReading(false)
     })()
     return () => { active = false }
-  }, [api, book.book.id, scope, task?.id, task?.version, task?.sourceCurrent, refresh])
+  }, [api, summaryKey])
 
   function selectScope(value: string) {
     if (disabled) return
@@ -125,10 +149,10 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
         {!groups.length && <p className={styles.muted}>还没有卷或章节。</p>}
       </nav>
       <article ref={root} tabIndex={-1} className={styles.summary} aria-label={`${scopeTitle}摘要`}>
-        <header className={styles.cover}><h2>{scopeTitle}</h2><p><StudioIcon name="spark" size={20} />{outline?.fields.goal || '尚未填写本范围的故事目标'}</p></header>
+        <header className={styles.cover} aria-busy={reading}><h2>{scopeTitle}</h2><p><StudioIcon name="spark" size={20} />{outline?.fields.goal || (living ? '尚未填写本范围的故事目标' : livingUnavailable)}</p></header>
         <section className={styles.summaryText} aria-busy={summaryReading}><h3><StudioIcon name="spark" size={20} />内容摘要</h3>
           {summaryReading ? <div className={styles.skeleton} role="status">正在核对已采用的范围摘要…</div> : summary ? <><span className={styles.status} data-stale={!task?.sourceCurrent}>{task?.sourceCurrent ? '已采用 · 来源当前' : '来源已变更 · 待复核'}</span><p>{summary.acceptedText}</p></>
-            : <div className={styles.empty}><p>{task && task.state !== 'completed' ? '本范围汇总尚未完成。请继续逐节点审阅。' : '最近十份任务中尚无本范围已完成的汇总。'}</p>
+            : <div className={styles.empty}><p>{summaryError ? '已采用摘要尚未取得，请刷新后重读；可打开原任务核对。' : task?.state === 'completed' ? '本范围汇总未提供可核对的根节点，请打开原任务核对。' : task ? '本范围汇总尚未完成。请继续逐节点审阅。' : '最近十份任务中尚无本范围已完成的汇总。'}</p>
               {task && <button type="button" className={styles.button} disabled={disabled} onClick={() => onTask(task.id)}>查看本范围任务</button>}
               <button type="button" className={styles.button} disabled={disabled || Boolean(book.book.archivedAt)} onClick={() => onPrepare(scope)}>准备汇总</button></div>}
           {outline && <div className={styles.plan}><h4>卷纲节拍 · 规划{outline.stale ? ' · 待复核' : ''}</h4>
@@ -136,8 +160,8 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
             <details><summary>目标、冲突与收束</summary><dl><div><dt>目标</dt><dd>{outline.fields.goal || '未填写'}</dd></div><div><dt>冲突</dt><dd>{outline.fields.conflict || '未填写'}</dd></div><div><dt>收束</dt><dd>{outline.fields.hook || '未填写'}</dd></div></dl></details>
           </div>}
         </section>
-        <section className={styles.people}><h3><StudioIcon name="user" size={20} />关键人物</h3><div>{people.map((person, index) => <span data-tone={index % 3} key={person.id}><StudioIcon name="user" size={20} />{person.name}</span>)}</div>
-          {!people.length && <p className={styles.muted}>{reading ? '正在读取人物状态…' : '当前读取的已发布记忆中尚无本范围的人物状态。'}</p>}
+        <section className={styles.people} aria-busy={reading}><h3><StudioIcon name="user" size={20} />关键人物</h3><div>{people.map((person, index) => <span data-tone={index % 3} key={person.id}><StudioIcon name="user" size={20} />{person.name}</span>)}</div>
+          {!people.length && <p className={styles.muted}>{reading ? '正在读取人物状态…' : living ? '当前读取的已发布记忆中尚无本范围的人物状态。' : livingUnavailable}</p>}
           {living && (living.memoryTotal > living.memories.length || living.entityTotal > living.entities.length) && <p className={styles.muted}>人物取自最近 {living.memories.length} 份记忆与本页 {living.entities.length} 个可用实体；其他历史记录可在记忆归档中查阅。</p>}
         </section>
         <section className={styles.foreshadows}><h3><StudioIcon name="notes" size={20} />未回收伏笔 <small>全书</small></h3>
@@ -146,16 +170,16 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
         <section className={styles.sources}><h3><StudioIcon name="workflow" size={20} />源章节链接</h3><div>{sourceChapters.slice(0, 20).map((source) => <button type="button" key={source.id} disabled={disabled || !book.chapters.some((chapter) => chapter.id === source.id)} title="打开此来源章的当前稿；固定历史原文在任务来源中核对" onClick={() => onNavigate(source.id)}>{source.title}</button>)}</div>
           {sourceChapters.length > 20 && <p className={styles.muted}>共 {sourceChapters.length} 个来源章，当前显示前 20 个。</p>}
           {summary && task && <button type="button" className={styles.button} disabled={disabled} onClick={() => onTask(task.id)}>追溯完整下层来源</button>}
-          {!summary && <p className={styles.muted}>采用范围摘要后显示其实际来源。</p>}
+          {!summary && <p className={styles.muted}>{summaryReading ? '正在核对已采用摘要的来源…' : summaryError || task?.state === 'completed' ? '摘要来源尚未取得，请打开原任务核对或刷新后重读。' : '采用范围摘要后显示其实际来源。'}</p>}
         </section>
       </article>
-      <aside className={styles.spine} aria-label="全书脉络"><h3><StudioIcon name="spark" size={24} />全书脉络</h3><ol>
+      <aside className={styles.spine} aria-label="全书脉络" aria-busy={reading}><h3><StudioIcon name="spark" size={24} />全书脉络</h3><ol>
         {groups.map((group, index) => {
           const value = living?.outlines.find((item) => item.scope === 'volume' && item.id === group.id)
-          return <li data-tone={index % 3} key={group.id}><button type="button" disabled={disabled} aria-current={scope === group.id ? 'true' : undefined} onClick={() => selectScope(group.id)}><strong>{group.title}</strong><p>{value?.fields.goal || value?.fields.summary || '本卷尚未填写规划主线'}</p><small>{value?.stale ? '规划待复核' : '卷主线 · 规划'}</small></button></li>
+          return <li data-tone={index % 3} key={group.id}><button type="button" disabled={disabled} aria-current={scope === group.id ? 'true' : undefined} onClick={() => selectScope(group.id)}><strong>{group.title}</strong><p>{value?.fields.goal || value?.fields.summary || (living ? '本卷尚未填写规划主线' : livingUnavailable)}</p><small>{!living ? reading ? '读取中' : '资料待核对' : value?.stale ? '规划待复核' : '卷主线 · 规划'}</small></button></li>
         })}
       </ol>{!groups.length && <p className={styles.muted}>建立分卷后显示全书脉络。</p>}</aside>
     </div>
-    <footer className={styles.stats}><StudioIcon name="chart" size={24} /><strong>{book.chapters.length} 章 · {totalWords.toLocaleString()} 字 · {radar ? `${radar.total} 条未回收` : '未回收数量待读取'}</strong></footer>
+    <footer className={styles.stats}><StudioIcon name="chart" size={24} /><strong>{book.chapters.length} 章 · {totalWords.toLocaleString()} 字 · {radar ? `${radar.total} 条未回收` : reading ? '未回收数量待读取' : '未回收数量待核对'}</strong></footer>
   </section>
 }
