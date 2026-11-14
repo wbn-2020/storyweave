@@ -3,7 +3,7 @@ import type { AppError, BookSnapshot, ChapterSummary, RevisionSnapshot, StudioAp
 import type { InlineNode } from '../../contracts/manuscript'
 import { DISPLAY_FONT_SIZES, DISPLAY_LINE_HEIGHTS, PAPER_TONE_LABELS, displayPreferenceStyle, type DisplayPreferences } from '../display-preferences'
 import { displayTime, request } from '../request'
-import { Dialog } from './Dialog'
+import { StudioIcon } from './StudioIcon'
 import { paginateReaderDocument, type ReaderBlock, type ReaderPage } from './reader-pages'
 import shared from '../StellarShared.module.css'
 import paperStyles from './PaperSurface.module.css'
@@ -98,6 +98,9 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
   const directoryList = useRef<HTMLDivElement>(null)
   const currentChapterButton = useRef<HTMLButtonElement>(null)
   const statusButton = useRef<HTMLButtonElement>(null)
+  const directoryTrigger = useRef<HTMLButtonElement>(null)
+  const directorySearch = useRef<HTMLInputElement>(null)
+  const appearance = useRef<HTMLDetailsElement>(null)
   const titleId = useId()
   const directoryId = useId()
   const pageStatusId = useId()
@@ -202,10 +205,16 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
   }, [directoryPage, search, scope, catalog])
 
   useEffect(() => {
+    if (directoryOpen) directorySearch.current?.focus()
+  }, [directoryOpen])
+
+  useEffect(() => {
     if (directoryJump > 0) currentChapterButton.current?.focus()
   }, [directoryJump])
 
   useEffect(() => { if (pending) statusButton.current?.focus() }, [pending])
+
+  useEffect(() => { paperHeading.current?.focus({ preventScroll: true }) }, [])
 
   const chapters = useMemo(() => catalog?.chapters.filter((chapter) => Boolean(revisionFor(chapter, scope))) ?? [], [catalog, scope])
   const selectedIndex = useMemo(() => chapters.findIndex((chapter) => chapter.id === selectedId), [chapters, selectedId])
@@ -288,18 +297,33 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
     onClose()
   }
 
-  return <Dialog title="作品阅读" wide busy={busy} onClose={close} error={error}>
-    <div className={styles.panel}>
-      <div className={styles.intro}>
-        <div><p className={styles.bookTitle}>《{catalog?.title ?? book.book.title}》</p><p className={styles.help}>只读阅读 · 更新内容请刷新版本</p></div>
-        <button type="button" className={shared.button} disabled={blocked} onClick={refreshCatalog}>{loading === 'catalog' ? '读取目录…' : '刷新版本'}</button>
-      </div>
-      <div className={styles.toolbar}>
+  return <section className={styles.panel} aria-label="作品阅读" onKeyDown={(event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return
+    const target = event.target as HTMLElement
+    // 原生选择器先处理自身的退出；其余按设置、目录、阅读页的顺序收起。
+    if (target.closest('select')) return
+    const expanded = target.closest('details[open]') ?? (appearance.current?.open ? appearance.current : null)
+    if (expanded instanceof HTMLDetailsElement) {
+      event.preventDefault(); event.stopPropagation(); expanded.open = false; expanded.querySelector('summary')?.focus(); return
+    }
+    event.preventDefault(); event.stopPropagation()
+    if (directoryOpen) { setDirectoryOpen(false); directoryTrigger.current?.focus(); return }
+    close()
+  }}>
+      <header className={styles.topbar}>
+        <div className={styles.bookIdentity}>
+          <span className={styles.brand}><StudioIcon name="planet" size={28} /><strong>织章</strong></span>
+          <button type="button" className={styles.backButton} disabled={busy} onClick={close} aria-label="退出阅读" title="退出阅读"><StudioIcon name="arrow" size={20} /></button>
+          <p className={styles.bookTitle} title={catalog?.title ?? book.book.title}>《{catalog?.title ?? book.book.title}》</p>
+        </div>
         <div className={styles.scopes} role="group" aria-label="阅读版本">
           {(['working', 'finalized'] as const).map((value) => <button key={value} type="button" className={shared.button}
             aria-pressed={scope === value} disabled={blocked || !catalog} onClick={() => changeScope(value)}>{scopeLabels[value]}</button>)}
         </div>
-        <div className={styles.settings}>
+        {catalog && catalog.chapters.length > 0 && unfinalizedCount === catalog.chapters.length && <span className={styles.workingOnly}>仅工作稿</span>}
+        <details ref={appearance} className={styles.appearance}>
+          <summary aria-label="阅读排版设置" title="阅读排版设置"><span>Aa</span><StudioIcon name="down" size={20} /></summary>
+          <div className={styles.settings}>
           <label>字号<select value={displayPreferences.fontSize} disabled={busy} onChange={(event) => onPreferencesChange({ fontSize: Number(event.target.value) })}>
             {DISPLAY_FONT_SIZES.map((size) => <option key={size} value={size}>{size} px</option>)}
           </select></label>
@@ -309,25 +333,30 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
           <label>纸色<select value={displayPreferences.paperTone} disabled={busy} onChange={(event) => onPreferencesChange({ paperTone: event.target.value as DisplayPreferences['paperTone'] })}>
             {Object.entries(PAPER_TONE_LABELS).map(([tone, label]) => <option key={tone} value={tone}>{label}</option>)}
           </select></label>
-        </div>
-      </div>
+          <p className={styles.help}>只读阅读 · 更新内容请刷新版本</p>
+          {catalog && <p className={styles.scopeNote}>共 {catalog.chapters.length} 章，{unfinalizedCount} 章未定稿。{scope === 'finalized' ? '当前仅阅读作者定稿。' : '当前阅读工作稿。'}</p>}
+          <button type="button" className={shared.button} disabled={blocked} onClick={refreshCatalog}>{loading === 'catalog' ? '读取目录…' : '刷新版本'}</button>
+          <p className={styles.help}>显示偏好与写作共用，更改即时应用并自动保存，仅影响显示。</p>
+          </div>
+        </details>
+        <button type="button" className={styles.exitButton} disabled={busy} onClick={close}>退出阅读</button>
+      </header>
+      {error && <p className={styles.error} role="alert">{error}</p>}
       {preferencesWarning && <section className={styles.preferencesWarning} aria-label="显示偏好保存提示">
         <p role="alert">{preferencesWarning}</p>
         <button type="button" className={shared.button} disabled={busy} onClick={onRetryPreferencesSave}>保存当前显示偏好</button>
       </section>}
-      {catalog && <p className={styles.scopeNote}>共 {catalog.chapters.length} 章，{unfinalizedCount} 章未定稿。{scope === 'finalized' ? '当前仅阅读作者定稿。' : '当前阅读工作稿。'}</p>}
       {pending && <section className={styles.pending} aria-label="读取等待确认">
         <p role="alert">{pendingMessage}</p>
         <button ref={statusButton} type="button" className={shared.button} disabled={busy || checkingStatus} onClick={() => void queryRequest()}>{checkingStatus ? '查询中…' : '查询原请求'}</button>
         <details><summary>请求详情</summary><p>{pending.command} · {pending.requestId}</p></details>
       </section>}
       {notice && <p className={styles.notice} role="status">{notice}</p>}
-      <button type="button" className={`${shared.button} ${styles.directoryToggle}`} aria-expanded={directoryOpen} aria-controls={directoryId}
-        onClick={() => setDirectoryOpen((value) => !value)}>{directoryOpen ? '收起目录' : '展开目录'}</button>
       <div className={styles.layout}>
         <aside id={directoryId} className={styles.catalog} data-open={directoryOpen} aria-label="章节目录">
-          <div className={styles.catalogHeading}><h3>目录</h3><button type="button" className={shared.button} disabled={!selected || blocked} onClick={jumpToCurrent}>当前章节</button></div>
-          <label className={styles.search}>搜索目录<input type="search" value={search} disabled={!catalog} placeholder="章节标题或卷名"
+          <div className={styles.catalogHeading}><h3>目录</h3><button type="button" className={shared.button} disabled={!selected || blocked} onClick={jumpToCurrent}>当前章节</button>
+            <button type="button" className={styles.catalogClose} aria-label="收起目录" title="收起目录" onClick={() => { setDirectoryOpen(false); directoryTrigger.current?.focus() }}><StudioIcon name="close" size={20} /></button></div>
+          <label className={styles.search}>搜索目录<input ref={directorySearch} type="search" value={search} disabled={!catalog} placeholder="章节标题或卷名"
             onChange={(event) => { setSearch(event.target.value); setDirectoryPage(0) }} /></label>
           <div ref={directoryList} className={styles.catalogList}>
             {loading === 'catalog' && <p className={styles.help} role="status">正在读取目录…</p>}
@@ -352,25 +381,19 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
           </nav>}
         </aside>
         <section className={styles.reader} aria-label="阅读正文">
-          <nav className={styles.chapterNavigation} aria-label="章节切换">
-            <button type="button" className={shared.button} disabled={blocked || selectedIndex <= 0}
-              onClick={() => selectChapter(chapters[selectedIndex - 1])}>前一章</button>
-            <span>{selected ? `全书第 ${selected.ordinal} / ${catalog?.chapters.length} 章` : scopeLabels[scope]}</span>
-            <button type="button" className={shared.button} disabled={blocked || selectedIndex < 0 || selectedIndex + 1 >= chapters.length}
-              onClick={() => selectChapter(chapters[selectedIndex + 1])}>后一章</button>
-          </nav>
           <div ref={paper} className={`${paperStyles.surface} ${styles.paper}`} data-paper-tone={displayPreferences.paperTone} style={displayPreferenceStyle(displayPreferences)}
             role="region" aria-labelledby={titleId} aria-busy={loading !== null}>
             <div className={styles.readingWidth}>
               <header className={styles.paperHeader}>
                 {selected?.volumeTitle && <p className={styles.volume}>{selected.volumeTitle}</p>}
                 <h3 id={titleId} ref={paperHeading} tabIndex={-1} aria-describedby={loaded ? pageStatusId : undefined}>{selected?.title ?? '作品正文'}</h3>
-                {selected && <p className={styles.paperMeta}>{scopeLabels[scope]}{loaded ? ` · ${loaded.selectedRevision.characterCount.toLocaleString()} 字` : ''}</p>}
+                {selected && <p className={styles.paperMeta}>{scopeLabels[scope]}{loaded ? ` · ${loaded.selectedRevision.characterCount.toLocaleString()} 字` : ''}{book.book.archivedAt ? ' · 归档作品 · 只读' : ''}</p>}
                 {loaded && <details className={styles.version}>
                   <summary>版本详情</summary>
                   <p>作品目录版本 {catalog?.revision} · 正文版本 {loaded.selectedRevision.sequence}</p>
                   <p>{displayTime(loaded.selectedRevision.createdAt)} · {loaded.selectedRevision.id}</p>
                 </details>}
+                <div className={styles.chapterDivider} aria-hidden="true"><StudioIcon name="spark" size={20} /></div>
               </header>
               {loading && <div className={styles.paperState}>
                 <p role="status">{loading === 'catalog' ? '正在准备作品目录…' : `正在读取${scopeLabels[scope]}…`}</p>
@@ -403,7 +426,15 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
           </nav>
         </section>
       </div>
-      <div className={styles.footer}><p className={styles.help}>显示偏好与写作共用，更改即时应用并自动保存，仅影响显示。</p><button type="button" className={shared.button} disabled={busy} onClick={close}>返回编辑</button></div>
-    </div>
-  </Dialog>
+      <nav className={styles.chapterNavigation} aria-label="章节切换">
+        <button type="button" className={shared.button} disabled={blocked || selectedIndex <= 0}
+          onClick={() => selectChapter(chapters[selectedIndex - 1])}><StudioIcon name="chevron" size={20} /><span>上一章</span></button>
+        <button ref={directoryTrigger} type="button" className={shared.button} aria-expanded={directoryOpen} aria-controls={directoryId}
+          onClick={() => setDirectoryOpen((value) => !value)} title={directoryOpen ? '收起目录' : '展开目录'}><StudioIcon name="list" size={20} /><span>目录</span></button>
+        <span className={styles.chapterPosition} aria-label={selected ? `全书第 ${selected.ordinal} / ${catalog?.chapters.length} 章` : scopeLabels[scope]}>{selected ? `${selected.ordinal} / ${catalog?.chapters.length}` : scopeLabels[scope]}</span>
+        <button type="button" className={shared.button} disabled={blocked || selectedIndex < 0 || selectedIndex + 1 >= chapters.length}
+          onClick={() => selectChapter(chapters[selectedIndex + 1])}><span>下一章</span><StudioIcon name="chevron" size={20} /></button>
+        <button type="button" className={`${shared.button} ${styles.returnButton}`} disabled={busy} onClick={close}><StudioIcon name="pen" size={20} /><span>回到编辑</span></button>
+      </nav>
+  </section>
 }

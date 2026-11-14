@@ -173,6 +173,10 @@
 }
 .appShell.focusMode .writeLayout { grid-template-columns: minmax(0, 1fr); }
 .appShell.focusMode .outlineColumn,.focusMode .outlineBackdrop,.focusMode .inspectorBackdrop { display: none; }
+.appShell.readerMode { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr); }
+.readerMode > .main { grid-column: 1; grid-row: 1; }
+.readerMode > .sidebar,.readerMode > .topbar,.readerMode > .statusbar,.readerMode > .mobileTabs,.readerMode > .main > .bookNav { display: none; }
+.readerMode > .main > .canvasViewport:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
 @media (max-width: 599px) {
   .topbar { padding-inline: var(--space-2); gap: var(--space-2); }
   .breadcrumb .crumb, .crumbSlash, .topbar .localBadge, .topbar .topbarSave, .topbar .focusButton { display: none; }

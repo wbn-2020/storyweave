@@ -1448,7 +1448,7 @@ export function App({ api }: Props) {
     </div>
   </details>
 
-  return <div className={`${styles.appShell} ${sidebarCollapsed ? styles.sidebarCollapsed : ''} ${studioView === 'write' && !isCanvasView && focused && chapter ? styles.focusMode : ''}`}>
+  return <div className={`${styles.appShell} ${sidebarCollapsed ? styles.sidebarCollapsed : ''} ${modal?.kind === 'reader' && api && book ? styles.readerMode : ''} ${studioView === 'write' && !isCanvasView && focused && chapter ? styles.focusMode : ''}`}>
     {taskCenterOpen && <TaskCenter key={`${workspace.rootPath}:${book?.book.id}`} api={api} bookId={book?.book.id} notices={currentNotices} seen={seenNotices}
       onSeen={(ids) => setSeenNotices((current) => new Set([...current, ...ids].slice(-500)))} onClose={() => setTaskCenterOpen(false)}
       onStop={stopCenterTask} pendingMessage={pendingMessage} checkingReceipt={checkingReceipt} onCheckReceipt={() => void checkMutationReceipt()}
