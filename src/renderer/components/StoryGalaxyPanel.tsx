@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { DomainError, type AppError, type BookSnapshot, type StudioApi } from '../../contracts/api'
-import { AUTHOR_DECISIONS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES, type AuthorDecision, type KnowledgeItemDetail, type KnowledgeNature } from '../../contracts/knowledge'
+import { AUTHOR_DECISIONS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES, isKnowledgeStoryContextFor, type AuthorDecision, type KnowledgeItemDetail, type KnowledgeNature } from '../../contracts/knowledge'
 import { parseCreateStoryRecord, STORY_KINDS, type CreateStoryRecordInput, type RelationFields, type StoryRecordDetail } from '../../contracts/story'
 import { GALAXY_KINDS, GALAXY_PAGE_SIZE, GALAXY_ROLES, MAX_GALAXY_EDGES, galaxyKey, type GalaxyKind, type GalaxyRole, type GalaxyTarget, type StoryGalaxyInput, type StoryGalaxyPage } from '../../contracts/story-galaxy'
 import { request } from '../request'
@@ -450,7 +450,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
     setDetailJump((value) => value + 1)
     const result = await request<Detail>(async () => {
       if (node.source === 'knowledge') {
-        const response = await api.getKnowledgeItem({ bookId, id: node.id })
+        const response = await api.getKnowledgeItem({ bookId, id: node.id, includeStoryContext: true })
         return response.ok ? { ok: true, data: { source: 'knowledge', value: response.data } } : response
       }
       const response = await api.getStoryRecord({ bookId, id: node.id })
@@ -470,8 +470,9 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
       ? next.value.sources.some((source) => source.bookId !== bookId || source.itemId !== node.id)
       : next.value.sources.some((source) => source.bookId !== bookId || source.recordId !== node.id)
     if (next.source !== node.source || next.value.bookId !== bookId || next.value.id !== node.id || fields.kind !== node.kind ||
-        next.value.bookRevision !== page.bookRevision || next.value.knowledgeRevision !== page.knowledgeRevision || wrongSources) {
-      invalidateSnapshot('详情身份、类型、来源归属或双版本与本页不符。'); return
+        next.value.bookRevision !== page.bookRevision || next.value.knowledgeRevision !== page.knowledgeRevision || wrongSources ||
+        (next.source === 'knowledge' && !isKnowledgeStoryContextFor(next.value.storyContext, node.id))) {
+      invalidateSnapshot('详情身份、类型、来源归属、登场登记或双版本与本页不符。'); return
     }
     setDetail(next)
   }
@@ -541,6 +542,11 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   const nodes = page ? (center ? [center, ...page.nodes.filter((node) => !sameTarget(node, center))] : page.nodes) : []
   const adjacent = selected ? page?.edges.filter((edge) => sameTarget(edge.from, selected) || sameTarget(edge.to, selected)) ?? [] : []
   const detailFields = detail?.source === 'knowledge' ? detail.value : detail?.value.fields
+  const storyContext = detail?.source === 'knowledge' ? detail.value.storyContext : undefined
+  const firstAppearance = storyContext?.state === 'ready' ? storyContext.firstAppearance : null
+  const lastAppearance = storyContext?.state === 'ready' ? storyContext.lastAppearance : null
+  const appearanceEmpty = storyContext?.state === 'ready' ? '暂无有效登场登记'
+    : storyContext?.state === 'requires_upgrade' ? '需先备份并启用故事记录' : '登场信息尚未读取'
   const detailBook = page && page.bookRevision !== book.book.revision ? { ...book, chapters: [], volumes: [] } : book
   const filtered = Boolean(filters.search || filters.kind || filters.nature || filters.authorDecision)
   const filterDisabled = disabled || listing.scope === 'focus'
@@ -730,8 +736,13 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
           {!detail && !reading && !readError && <p className={styles.help}>从图或本页完整列表选择对象，查看说明、状态与登记来源。</p>}
           {detail && detailFields && <>
             {view === 'galaxy' && <dl className={styles.galaxyFacts}><dt>类型</dt><dd>{kindLabels[detailFields.kind]}</dd>
-              <dt>首次登记</dt><dd>{firstRegistered ? `第 ${firstRegistered.chapter.position + 1} 章 · ${firstRegistered.chapter.title}` : '未登记正文出处'}</dd>
-              <dt>最近登记</dt><dd>{lastRegistered ? `第 ${lastRegistered.chapter.position + 1} 章 · ${lastRegistered.chapter.title}` : '未登记正文出处'}</dd></dl>}
+              {detail.source === 'knowledge' ? <>
+                <dt>首次登场</dt><dd title="当前稿中最早的有效登场登记；不包含提及、旧稿或缺席冲突。">{firstAppearance ? `第 ${firstAppearance.chapterPosition + 1} 章 · ${firstAppearance.chapterTitle}` : appearanceEmpty}</dd>
+                <dt>最近登场</dt><dd title="当前稿中最晚的有效登场登记；不包含提及、旧稿或缺席冲突。">{lastAppearance ? `第 ${lastAppearance.chapterPosition + 1} 章 · ${lastAppearance.chapterTitle}` : appearanceEmpty}</dd>
+              </> : <>
+                <dt>首次登记</dt><dd>{firstRegistered ? `第 ${firstRegistered.chapter.position + 1} 章 · ${firstRegistered.chapter.title}` : '未登记正文出处'}</dd>
+                <dt>最近登记</dt><dd>{lastRegistered ? `第 ${lastRegistered.chapter.position + 1} 章 · ${lastRegistered.chapter.title}` : '未登记正文出处'}</dd>
+              </>}</dl>}
             <div className={styles.detailActions}><span>{kindLabels[detailFields.kind]}</span><button type="button" className={shared.button} disabled={disabled || sameTarget(selected, page?.focus)} onClick={focusSelected}>{sameTarget(selected, page?.focus) ? '当前聚焦对象' : '聚焦直接关联'}</button></div>
             {detailFields.authorDecision === 'rejected' && <p className={styles.rejected}>作者已否决此记录，保留登记内容供回查。</p>}
             {detailFields.nature === 'future_plan' && <p className={styles.caution}>未来计划尚不表示已经发生。</p>}

@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { DomainError, requiredId, requiredInteger, requiredText } from '../../contracts/api'
 import {
   KNOWLEDGE_RELATED_LIMIT, isKnowledgeStoryContextFor,
-  type KnowledgeRelatedItem, type KnowledgeStoryContext,
+  type KnowledgeAppearance, type KnowledgeRelatedItem, type KnowledgeStoryContext,
 } from '../../contracts/knowledge'
 import { parseStoryFields } from '../../contracts/story'
 import { APPEARANCE_ASSERTIONS_CTE } from '../story/appearance-projection'
@@ -15,16 +15,28 @@ function failure(): DomainError {
 export function readKnowledgeStoryContext(db: Database.Database, bookId: string, itemId: string): KnowledgeStoryContext {
   if ((db.pragma('user_version', { simple: true }) as number) < 4) return { state: 'requires_upgrade' }
   try {
-    const first = db.prepare(`WITH entities AS (SELECT @itemId AS id),
+    const appearances = db.prepare(`WITH entities AS (SELECT @itemId AS id),
       chapters_page AS (SELECT id FROM chapters), ${APPEARANCE_ASSERTIONS_CTE},
       registered AS (SELECT chapter_id,
         MIN(CASE WHEN current = 1 AND role = 'participant' THEN record_id END) AS event_id
         FROM assertions GROUP BY chapter_id
         HAVING SUM(CASE WHEN current = 1 AND role = 'participant' THEN 1 ELSE 0 END) > 0
-          AND SUM(CASE WHEN current = 1 AND role = 'absent' THEN 1 ELSE 0 END) = 0)
-      SELECT c.id, c.title, c.position, c.current_revision_id AS revision_id, r.event_id
-      FROM registered r JOIN chapters c ON c.id = r.chapter_id ORDER BY c.position, c.id LIMIT 1`)
-      .get({ bookId, itemId }) as { id: string; title: string; position: number; revision_id: string; event_id: string } | undefined
+          AND SUM(CASE WHEN current = 1 AND role = 'absent' THEN 1 ELSE 0 END) = 0),
+      appearances AS (SELECT c.id, c.title, c.position, c.current_revision_id AS revision_id, r.event_id
+        FROM registered r JOIN chapters c ON c.id = r.chapter_id)
+      SELECT 0 AS boundary, * FROM (SELECT * FROM appearances ORDER BY position, id LIMIT 1)
+      UNION ALL
+      SELECT 1 AS boundary, * FROM (SELECT * FROM appearances ORDER BY position DESC, id DESC LIMIT 1)
+      ORDER BY boundary`).all({ bookId, itemId }) as {
+        boundary: number; id: string; title: string; position: number; revision_id: string; event_id: string
+      }[]
+    // 最多返回首末两行；同一章节也保留两侧身份，避免把缺失的最近登场解释为空登记。
+    if (appearances.length !== 0 && (appearances.length !== 2 || appearances[0]!.boundary !== 0 || appearances[1]!.boundary !== 1)) throw failure()
+    const [first, last] = appearances.map((row): KnowledgeAppearance => ({
+      chapterId: requiredId(row.id), chapterTitle: requiredText(row.title, '登场章节', 120),
+      chapterPosition: requiredInteger(row.position, '登场章节位置', Number.MAX_SAFE_INTEGER - 1),
+      revisionId: requiredId(row.revision_id), eventId: requiredId(row.event_id),
+    }))
     // 只沿明确关系端点查询；作者的未处理、否决和隐藏标记保留，不将同章共现当作关系。
     const rows = db.prepare(`SELECT s.id, s.fields_json, a.entity_id AS from_id, b.entity_id AS to_id,
         k.id AS entity_id, k.name, k.kind
@@ -48,11 +60,8 @@ export function readKnowledgeStoryContext(db: Database.Database, bookId: string,
         ...(fields.layer === undefined ? {} : { layer: fields.layer }),
         nature: fields.nature, authorDecision: fields.authorDecision, freshness: fields.freshness, conflictState: fields.conflictState }
     })
-    const context: KnowledgeStoryContext = { state: 'ready', firstAppearance: first ? {
-      chapterId: requiredId(first.id), chapterTitle: requiredText(first.title, '登场章节', 120),
-      chapterPosition: requiredInteger(first.position, '登场章节位置', Number.MAX_SAFE_INTEGER - 1),
-      revisionId: requiredId(first.revision_id), eventId: requiredId(first.event_id),
-    } : null, relations, relationsTruncated: rows.length > KNOWLEDGE_RELATED_LIMIT }
+    const context: KnowledgeStoryContext = { state: 'ready', firstAppearance: first ?? null, lastAppearance: last ?? null,
+      relations, relationsTruncated: rows.length > KNOWLEDGE_RELATED_LIMIT }
     if (!isKnowledgeStoryContextFor(context, itemId)) throw failure()
     return context
   } catch { throw failure() }

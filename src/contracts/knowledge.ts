@@ -107,10 +107,19 @@ export interface KnowledgeRelatedItem {
   freshness: KnowledgeFreshness
   conflictState: ConflictState
 }
+export interface KnowledgeAppearance {
+  chapterId: string
+  chapterTitle: string
+  chapterPosition: number
+  revisionId: string
+  eventId: string
+}
 export type KnowledgeStoryContext = { state: 'requires_upgrade' } | {
   state: 'ready'
   /** 当前稿中最早的有效登场登记，不以知识出处或提及代替。 */
-  firstAppearance: { chapterId: string; chapterTitle: string; chapterPosition: number; revisionId: string; eventId: string } | null
+  firstAppearance: KnowledgeAppearance | null
+  /** 按同一有效登记规则取最晚章节；只有一章时与首次相同。 */
+  lastAppearance: KnowledgeAppearance | null
   /** 最近登记的关系，保留原判断；不推断其在当前剧情的有效性。 */
   relations: KnowledgeRelatedItem[]
   relationsTruncated: boolean
@@ -265,13 +274,22 @@ export function isKnowledgeStoryContextFor(value: unknown, itemId: string): valu
     requiredId(itemId)
     if (!isRecord(value)) return false
     if (value.state === 'requires_upgrade') return Object.keys(value).length === 1
-    const data = record(value, ['state', 'firstAppearance', 'relations', 'relationsTruncated'], '关联登记')
+    const data = record(value, ['state', 'firstAppearance', 'lastAppearance', 'relations', 'relationsTruncated'], '关联登记')
     if (data.state !== 'ready' || !Array.isArray(data.relations) || data.relations.length > KNOWLEDGE_RELATED_LIMIT ||
         typeof data.relationsTruncated !== 'boolean' || (data.relationsTruncated && data.relations.length !== KNOWLEDGE_RELATED_LIMIT)) return false
-    if (data.firstAppearance !== null) {
-      const first = record(data.firstAppearance, ['chapterId', 'chapterTitle', 'chapterPosition', 'revisionId', 'eventId'], '登场登记')
-      requiredId(first.chapterId); requiredId(first.revisionId); requiredId(first.eventId)
-      requiredText(first.chapterTitle, '登场章节', 120); requiredInteger(first.chapterPosition, '登场章节位置', Number.MAX_SAFE_INTEGER - 1)
+    const [first, last] = [data.firstAppearance, data.lastAppearance].map((value): KnowledgeAppearance | null => {
+      if (value === null) return null
+      const appearance = record(value, ['chapterId', 'chapterTitle', 'chapterPosition', 'revisionId', 'eventId'], '登场登记')
+      return { chapterId: requiredId(appearance.chapterId), chapterTitle: requiredText(appearance.chapterTitle, '登场章节', 120),
+        chapterPosition: requiredInteger(appearance.chapterPosition, '登场章节位置', Number.MAX_SAFE_INTEGER - 1),
+        revisionId: requiredId(appearance.revisionId), eventId: requiredId(appearance.eventId) }
+    })
+    // 首末取自同一快照；空值必须成对，同一章节的修订和代表事件不能互相矛盾。
+    if ((first === null) !== (last === null)) return false
+    if (first && last && (first.chapterPosition > last.chapterPosition ||
+        ((first.chapterId.toLowerCase() === last.chapterId.toLowerCase() || first.chapterPosition === last.chapterPosition) &&
+          JSON.stringify(first) !== JSON.stringify(last)))) {
+      return false
     }
     const ids = new Set<string>(), entities = new Map<string, string>()
     for (const entry of data.relations) {
