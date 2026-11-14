@@ -163,6 +163,7 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
   }
   async function refreshRun(id = run?.id) {
     if (!id || tool.locked) return
+    let auditionPersonId: string | null = null
     const loaded = await tool.read<ForgeRunDetail>(async () => {
       // 主进程先补存模型终态，再回读领域提案；不得绕过终态待写保护。
       const settled = await api.getAiRun({ bookId: book.book.id, runId: id })
@@ -172,11 +173,15 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
       return result
     }, (value) => {
       if (value.bookId !== book.book.id || value.run.bookId !== book.book.id || value.run.id !== id || value.run.context.purpose !== 'forge') throw new Error('Forge run identity mismatch')
+      if (id === run?.id && value.request.bookId === book.book.id && value.request.kind === 'audition'
+        && value.request.personId === personId && ['succeeded', 'adopted'].includes(value.run.state)) auditionPersonId = value.request.personId
       if (id !== run?.id) { restoreRequest(value.request); setPreviewInput(JSON.stringify(value.request)); setDirty('request', false) }
       setDetail(value); setDirty('uncertain', false)
       if (!guard.current.proposal) { setProposal(value.proposal); setSelectedKeys(keysOf(value.proposal)) }
     })
     setPollStopped(!loaded)
+    // 台词顺序由仓库的任务序号确定；完成后重读人物清单，不把当前任务直接插入最近两份。
+    if (loaded && auditionPersonId && mounted.current) await readSnapshot(auditionPersonId)
   }
   async function control(action: 'start' | 'cancel' | 'interrupt') {
     if (!run || tool.locked || proposalDirty) return

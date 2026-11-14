@@ -30,7 +30,7 @@ const fieldLabels: Record<CharacterProfileField, string> = {
 export function ForgeCharacterOverview({ api, snapshot, selectedId, disabled, detail, proposal, excluded, onPrepare, onKnowledge, onMedia, onCopy }: Props) {
   // 显式刷新即使未推进作品版本，也要重新读取失败的立绘资料。
   const portraits = useSavedPortraits(api, snapshot.bookId, snapshot.bookRevision, snapshot)
-  const [auditionResult, setAuditionResult] = useState<{ person: ForgeEntity; values: (ForgeRunDetail | null)[]; error: string | null } | null>(null)
+  const [auditionResult, setAuditionResult] = useState<{ api: StudioApi; snapshot: ForgeSnapshot; person: ForgeEntity; values: (ForgeRunDetail | null)[]; error: string | null } | null>(null)
   const person = snapshot.person?.entity.id === selectedId ? snapshot.person.entity : null
   const portrait = portraits.items.find((item) => item.personId === person?.id)
   const profile = person?.fields.characterProfile
@@ -39,11 +39,10 @@ export function ForgeCharacterOverview({ api, snapshot, selectedId, disabled, de
     ...excluded.split(/[,，\n]/u).map((item) => item.trim()).filter(Boolean)])]
   const pending = person && (person.fields.freshness !== 'current' || person.fields.conflictState === 'candidate' || person.fields.authorDecision === 'review_later')
   const auditionTasks = snapshot.auditionRuns
-  const auditionKey = auditionTasks.map((item) => item.id).join(':')
-  const currentAuditions = auditionResult?.person === person ? auditionResult : null
+  const currentAuditions = auditionResult?.api === api && auditionResult.snapshot === snapshot && auditionResult.person === person ? auditionResult : null
   const auditionError = currentAuditions?.error ?? null
 
-  // 明确刷新会返回新人物快照；即使任务编号没变，也须允许重试此前失败的片段。
+  // 任务轮询不重读历史台词；完成后父页更新快照，显式刷新也可重试失败片段。
   useEffect(() => {
     let active = true
     setAuditionResult(null)
@@ -65,10 +64,10 @@ export function ForgeCharacterOverview({ api, snapshot, selectedId, disabled, de
         if (!value.run.outputText.trim()) { error = '已完成试戏没有可显示的内容。'; values.push(null); continue }
         values.push(value)
       }
-      if (active) setAuditionResult({ person, values, error })
+      if (active) setAuditionResult({ api, snapshot, person, values, error })
     })()
     return () => { active = false }
-  }, [api, snapshot.bookId, person, auditionKey, detail?.run.id, detail?.run.version])
+  }, [api, snapshot, person])
 
   return <section className={styles.overview} aria-label="角色工坊档案总览">
     <div className={styles.columns}>
@@ -96,9 +95,9 @@ export function ForgeCharacterOverview({ api, snapshot, selectedId, disabled, de
         <button type="button" className={styles.auditionAction} disabled={disabled || !person} onClick={() => onPrepare('audition')}><StudioIcon name="spark" size={24} /><span>进入试戏舱</span><StudioIcon name="chevron" size={20} /></button>
       </aside>
     </div>
-    <div className={styles.dialogues} aria-label="人物试戏片段">{[0, 1].map((index) => {
+    <div className={styles.dialogues} aria-label="人物试戏片段" aria-busy={Boolean(person && auditionTasks.length && !currentAuditions)}>{[0, 1].map((index) => {
       const audition = currentAuditions?.values[index]
-      const placeholder = !person ? '选择人物后读取已有试戏。' : index >= auditionTasks.length ? '本人物尚无此段已完成试戏。'
+      const placeholder = !person ? '选择人物后读取已有试戏。' : index >= auditionTasks.length ? '当前资料中尚无此段已完成试戏。'
         : !currentAuditions ? '试戏片段读取中…' : '此段试戏未能读取，请刷新资料重试。'
       return <article key={index} data-tone={index}><h3><StudioIcon name="spark" size={24} />台词 · 片段{index === 0 ? '一' : '二'}</h3>{audition ? <><blockquote>{audition.run.outputText}</blockquote><small>AI 试戏 · {displayTime(audition.run.createdAt)} · 尚非正文</small><button type="button" className={styles.iconButton} disabled={disabled} title="复制试戏片段" aria-label={`复制试戏片段${index + 1}`} onClick={() => onCopy(audition.run.outputText)}><StudioIcon name="copy" size={20} /></button></>
         : <p className={styles.unknown}>{placeholder}</p>}</article>
