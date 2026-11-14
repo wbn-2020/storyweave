@@ -309,7 +309,10 @@ export function RelationshipCanvas({ api, bookId, bookRevision, nodes, edges, se
           const relation = edge.role === 'relation_from' || edge.role === 'relation_to'
           const source = nodeMap.get(galaxyKey(edge.from)), status = source?.kind === 'relation' && storyOrder !== null ? relationStatus(source) : undefined
           const x1 = a.x + NODE_WIDTH / 2, y1 = a.y + 50, x2 = b.x + NODE_WIDTH / 2, y2 = b.y + 50
-          return <g key={edge.id}><line x1={x1} y1={y1} x2={x2} y2={y2} className={active || relation ? styles.relationEdge : styles.edge} data-state={status} />
+          // 页外端点使关系回退为引用连线时，仍沿用同一关系记录的颜色与层次。
+          return <g key={edge.id} className={relation ? styles.relationReference : undefined} data-tone={relation ? relationTone(source?.relationType) : undefined}
+            data-layer={relation ? source?.relationLayer : undefined} data-conflict={relation && source?.conflictState === 'candidate'} data-state={status} data-selected={active}>
+            <line x1={x1} y1={y1} x2={x2} y2={y2} className={active || relation ? styles.relationEdge : styles.edge} data-state={status} />
             {(relation || active) && <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} className={styles.edgeLabel} textAnchor="middle">{roleLabels[edge.role]}</text>}</g>
         })}</g>
         {relations.filter((node) => completeRelations.has(galaxyKey(node))).map((node, index) => {

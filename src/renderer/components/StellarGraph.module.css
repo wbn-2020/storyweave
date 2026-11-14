@@ -115,7 +115,7 @@
 .badgePortrait > img { width: 100%; height: 100%; object-fit: cover; }
 .badgePortrait > small { display: none; }
 .badgeNameplate { fill: var(--bg-subtle); stroke: var(--color-line-strong); stroke-width: 1; }
-.namedRelation { --relation-color: var(--color-muted); color: var(--relation-color); }
+.namedRelation,.relationReference { --relation-color: var(--color-muted); color: var(--relation-color); }
 [data-tone='mentor'] { --relation-color: var(--color-warning); }
 [data-tone='enemy'] { --relation-color: var(--color-danger); }
 [data-tone='ally'] { --relation-color: var(--color-accent); }
@@ -123,12 +123,14 @@
 [data-tone='kinship'] { --relation-color: var(--color-success); }
 [data-tone='friend'] { --relation-color: var(--galaxy-person); }
 [data-tone='unknown'] { --relation-color: var(--color-muted); }
-.namedRelation[data-state='unknown'] { --relation-color: var(--color-muted); }
-.namedRelation[data-conflict='true'] { --relation-color: var(--color-danger); }
-.namedRelation > path { fill: none; stroke: var(--relation-color); stroke-width: 2; filter: drop-shadow(0 0 3px color-mix(in srgb,var(--relation-color) 40%,transparent)); }
-.namedRelation[data-layer='hidden'] > path { stroke-dasharray: 8 6; }
-.namedRelation[data-state='inactive'] { opacity: .35; }
-.namedRelation[data-selected='true'] > path { stroke-width: 3; }
+.namedRelation[data-state='unknown'],.relationReference[data-state='unknown'] { --relation-color: var(--color-muted); }
+.namedRelation[data-conflict='true'],.relationReference[data-conflict='true'] { --relation-color: var(--color-danger); }
+.namedRelation > path,.relationReference > .relationEdge { fill: none; stroke: var(--relation-color); stroke-width: 2; filter: drop-shadow(0 0 3px color-mix(in srgb,var(--relation-color) 40%,transparent)); }
+.relationReference > .relationEdge { opacity: 1; }
+.relationReference > .edgeLabel { fill: var(--relation-color); }
+.namedRelation[data-layer='hidden'] > path,.relationReference[data-layer='hidden'] > .relationEdge { stroke-dasharray: 8 6; }
+.namedRelation[data-state='inactive'],.relationReference[data-state='inactive'] { opacity: .35; }
+.namedRelation[data-selected='true'] > path,.relationReference[data-selected='true'] > .relationEdge { stroke-width: 3; }
 .namedRelation > g { cursor: pointer; }
 .namedRelation:not([data-layer='hidden']):not([data-state='unknown']):not([data-conflict='true']):not([data-selected='true']):not(:hover) > g:not(:focus-visible) { opacity: 0; }
 .namedRelation > g:focus-visible { outline: none; }
