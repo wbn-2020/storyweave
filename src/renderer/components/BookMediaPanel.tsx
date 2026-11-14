@@ -58,8 +58,6 @@ async function decodeImage(mime: BookMediaMime, dataBase64: string): Promise<voi
 function MediaPreview({ fields, onDecoded }: { fields: Pick<BookMediaFields, 'title' | 'alt' | 'mime' | 'dataBase64'>; onDecoded: (ready: boolean) => void }) {
   const [failed, setFailed] = useState(false), [loaded, setLoaded] = useState(false), [original, setOriginal] = useState(false), [attempt, setAttempt] = useState(0)
   return <figure className={styles.preview}>
-    <div className={styles.actions}><button type="button" className={styles.button} disabled={failed || !loaded} aria-pressed={original} onClick={() => setOriginal(!original)}>
-      {original ? '适应面板' : '按原图尺寸查看'}</button></div>
     {failed ? <div className={styles.warning} role="alert"><p>原图无法解码或显示。图片记录仍保留，可以重试，或选择其他有效图片追加新版本。</p>
       <button type="button" className={styles.button} onClick={() => { setFailed(false); setLoaded(false); setAttempt(attempt + 1) }}>重试显示</button></div>
       : <div className={styles.imageViewport} data-original={original} tabIndex={original ? 0 : undefined} aria-label={original ? '原图，可滚动查看' : undefined}>
@@ -68,6 +66,8 @@ function MediaPreview({ fields, onDecoded }: { fields: Pick<BookMediaFields, 'ti
           decoding="async" onLoad={() => { setLoaded(true); onDecoded(true) }} onError={() => { setFailed(true); setLoaded(false); onDecoded(false) }} />
       </div>}
     <figcaption><strong>{fields.title}</strong>{fields.alt && <p className={styles.notes}>{fields.alt}</p>}</figcaption>
+    <div className={styles.actions}><button type="button" className={styles.button} disabled={failed || !loaded} aria-pressed={original} onClick={() => setOriginal(!original)}>
+      {original ? '适应面板' : '按原图尺寸查看'}</button></div>
   </figure>
 }
 
@@ -461,12 +461,14 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
             </section>}
             <section className={styles.galleryPane} aria-label={sceneMode ? '地点场景版本' : '人物立绘'}>
               <div className={styles.galleryHeading}><h3 className={styles.paneHeading}><StudioIcon name="spark" size={20} />{sceneMode ? '地点场景版本' : '人物立绘'} <small>{items.length}</small></h3>
+                {!sceneMode && <details className={styles.filterMenu}><summary aria-label={personFilter || roleFilter !== 'all' ? '筛选人物立绘，当前已筛选' : '筛选人物立绘'} title="筛选人物立绘"><StudioIcon name="settings" size={16} /><span>{personFilter || roleFilter !== 'all' ? '已筛选' : '筛选'}</span></summary>
+                  <div className={styles.galleryFilters}><label>角色范围<select value={roleFilter} disabled={navigationBlocked} onChange={(event) => { if (canSwitch()) { setRoleFilter(event.target.value); setPortraitOffset(0) } }}>
+                    <option value="all">全部角色</option><option value="viewpoint">主视角</option><option value="person">其他人物</option><option value="review">待确认</option></select></label>
+                    <label>关联人物<select value={personFilter} disabled={navigationBlocked} onChange={(event) => { if (canSwitch()) { setPersonFilter(event.target.value); setPortraitOffset(0) } }}>
+                      <option value="">全部人物</option>{snapshot.people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>
+                </details>}
                 {!sceneMode && <button type="button" className={styles.iconButton} disabled={blocked || !!draft || budgetFull} aria-label="生成人物立绘" title={uploadReason ?? '生成人物立绘'} onClick={() => openGenerator('portrait', pendingGeneration?.runId)}><StudioIcon name="spark" size={20} /></button>}
                 <button type="button" className={styles.iconButton} disabled={blocked || !!draft || budgetFull} aria-label={sceneMode ? '添加地点场景图' : '添加人物立绘'} title={uploadReason ?? (sceneMode ? '添加地点场景图' : '添加人物立绘')} onClick={() => chooseFile(sceneMode ? 'scene' : 'portrait')}><StudioIcon name="plus" size={20} /></button></div>
-              {!sceneMode && <div className={styles.galleryFilters}><label>角色范围<select value={roleFilter} disabled={navigationBlocked} onChange={(event) => { if (canSwitch()) { setRoleFilter(event.target.value); setPortraitOffset(0) } }}>
-                <option value="all">全部角色</option><option value="viewpoint">主视角</option><option value="person">其他人物</option><option value="review">待确认</option></select></label>
-                <label>关联人物<select value={personFilter} disabled={navigationBlocked} onChange={(event) => { if (canSwitch()) { setPersonFilter(event.target.value); setPortraitOffset(0) } }}>
-                  <option value="">全部人物</option>{snapshot.people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}
               {items.length ? <ul className={styles.items}>{items.slice(portraitStart, portraitStart + 6).map((item) => {
                 const person = snapshot.people.find((entry) => entry.id === item.personId)
                 return <li key={item.id}><button type="button" className={styles.item} disabled={navigationBlocked} aria-pressed={selectedId === item.id}
@@ -474,7 +476,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
                   <SavedMediaImage api={api} bookId={bookId} metadata={item} name={item.title} className={styles.portraitImage}
                     fallback={<span className={styles.portraitFallback}><StudioIcon name={sceneMode ? 'image' : 'user'} size={40} /><small>{sceneMode ? '读取场景' : '读取立绘'}</small></span>} />
                   {!sceneMode && <span className={styles.roleTag} data-tone={person?.needsReview ? 'review' : person?.isViewpoint ? 'viewpoint' : 'person'}>{person?.needsReview ? '待确认' : person?.isViewpoint ? '主视角' : '人物'}</span>}
-                  <span className={styles.itemFooter}><strong>{sceneMode ? item.title : personName(item.personId)}</strong><small data-current={currentIds.has(item.id)}>{sceneMode ? `v${item.bookRevision} · ` : ''}{currentIds.has(item.id) ? '当前使用' : '未使用'}</small></span>
+                  <span className={styles.itemFooter}><strong title={sceneMode ? item.title : personName(item.personId)}>{sceneMode ? item.title : personName(item.personId)}</strong><small data-current={currentIds.has(item.id)}>{sceneMode ? `v${item.bookRevision} · ` : ''}{currentIds.has(item.id) ? '当前使用' : '未使用'}</small></span>
                 </button></li>
               })}</ul> : <div className={styles.galleryEmpty}><StudioIcon name="image" size={36} /><h4>{sceneMode ? '尚未添加地点场景图' : personFilter || roleFilter !== 'all' ? '没有符合筛选的立绘' : '尚未添加人物立绘'}</h4>
                 <button type="button" className={styles.primaryButton} disabled={blocked || !!draft || budgetFull} title={uploadReason} onClick={() => chooseFile(sceneMode ? 'scene' : 'portrait')}><StudioIcon name="plus" />{sceneMode ? '添加场景图' : '添加立绘'}</button>
@@ -525,11 +527,11 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
                   : <div className={styles.empty}><StudioIcon name="image" size={36} /><p role="status">{tool.busy ? '正在读取所选原图…' : '尚未取得原图'}</p><button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => void view(selected)}>重新读取原图</button></div>}
                 <h3 className={styles.detailName}>{sceneMode ? placeName : personName(selected.personId)}</h3>
                 <dl className={styles.facts}><dt>版本</dt><dd>v{selected.bookRevision} <span className={styles.muted}>{currentIds.has(selected.id) ? '当前使用' : '未使用'}</span></dd>
-                  <dt>来源</dt><dd>{selectedSource ? `模型生成 · ${selectedSource.model}` : '未登记'}</dd><dt>格式</dt><dd>{selected.mime.replace('image/', '').toUpperCase()} · {sizeLabel(selected.byteLength)}</dd>
-                  <dt>保存时间</dt><dd>{new Date(selected.createdAt).toLocaleString('zh-CN')}</dd></dl>
+                  <dt>来源</dt><dd>{selectedSource ? `模型生成 · ${selectedSource.model}` : '未登记'}</dd></dl>
                 {selectedPerson && <div className={styles.related}><h4>关联角色卡</h4><button type="button" className={styles.personLink} disabled={navigationBlocked || !onPerson} title={onPerson ? `打开${selectedPerson.name}的人物资料` : '人物资料入口不可用'}
                   onClick={() => { if (canSwitch()) onPerson?.(selectedPerson.id) }}><SavedMediaImage api={api} bookId={bookId} metadata={snapshot.items.find((item) => item.personId === selectedPerson.id)} name={selectedPerson.name} className={styles.personImage} fallback={<StudioIcon name="user" size={24} />} /><span>{selectedPerson.name}</span><StudioIcon name="chevron" /></button></div>}
-                <details><summary>资源校验信息</summary><p className={styles.identity}>素材 ID：{selected.id}{selected.personId && <><br />人物 ID：{selected.personId}</>}{selected.placeId && <><br />地点 ID：{selected.placeId}</>}<br />SHA-256：{selected.sha256}</p></details>
+                <details><summary>资源校验信息</summary><dl className={styles.facts}><dt>格式</dt><dd>{selected.mime.replace('image/', '').toUpperCase()} · {sizeLabel(selected.byteLength)}</dd>
+                  <dt>保存时间</dt><dd>{new Date(selected.createdAt).toLocaleString('zh-CN')}</dd></dl><p className={styles.identity}>素材 ID：{selected.id}{selected.personId && <><br />人物 ID：{selected.personId}</>}{selected.placeId && <><br />地点 ID：{selected.placeId}</>}<br />SHA-256：{selected.sha256}</p></details>
               </> : <div className={styles.empty}><StudioIcon name="image" size={36} /><p>{sceneMode ? '选择场景版本查看详情。' : '选择封面或立绘查看详情。'}</p></div>}
               </div>
               {!draft && !generator && selected && <div className={styles.detailActions}>

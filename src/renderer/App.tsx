@@ -1327,7 +1327,8 @@ export function App({ api }: Props) {
   const activeCanvasKey = isCanvasView && modal ? modal.kind : studioView
   const worldMapVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'world'
   const matrixVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'matrix'
-  const compactBookCanvas = worldMapVisible || matrixVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export' || modal?.kind === 'history' || modal?.kind === 'calendar')
+  const bookMediaVisible = isCanvasView && modal?.kind === 'media' && modal.scenePlaceId === undefined
+  const compactBookCanvas = worldMapVisible || matrixVisible || bookMediaVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export' || modal?.kind === 'history' || modal?.kind === 'calendar')
   const headerInfo = worldMapVisible ? { title: '世界星域地图', subtitle: '世界地点与已登记航道' }
     : matrixVisible ? { title: '章节出场矩阵', subtitle: '实体与章节的已登记出场' }
     : modal?.kind === 'media' && modal.scenePlaceId ? { title: '地点场景图', subtitle: '地点关联与图片版本' }
@@ -1481,7 +1482,7 @@ export function App({ api }: Props) {
             {book ? book.book.title : headerInfo.subtitle}
           </span>
         </div>}
-        {book && !matrixVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && modal?.kind !== 'history' && modal?.kind !== 'calendar' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
+        {book && !matrixVisible && !bookMediaVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && modal?.kind !== 'history' && modal?.kind !== 'calendar' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
         <div className={styles.topActions}>
           {compactBookCanvas && book && <label className={styles.canvasTools} title="更多作品工具"><StudioIcon name="more" size={20} />
             <select aria-label="更多作品工具" value="" disabled={busy || bookRecoveryLocked} onChange={(event) => {
