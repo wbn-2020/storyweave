@@ -9,6 +9,7 @@ import {
 } from '../../contracts/story-control'
 import type { StudioRepository } from '../storage/studio-repository'
 import { readForeshadowThumbnailMetadata, validateForeshadowThumbnailBudget } from './thumbnail-repository'
+import { APPEARANCE_ASSERTIONS_CTE } from './appearance-projection'
 
 function failure(): DomainError { return new DomainError({ code: 'STORAGE_ERROR', message: '出场矩阵或伏笔雷达读取失败，请检查作品资料。' }) }
 function perform<T>(read: () => T): T { try { return read() } catch (error) { if (error instanceof DomainError) throw error; throw failure() } }
@@ -29,32 +30,9 @@ const ENTITY_FILTER = `book_id = @bookId AND (@kind IS NULL OR kind = @kind)
   AND author_decision <> 'rejected' AND (@search = '' OR instr(name, @search) > 0
     OR EXISTS (SELECT 1 FROM json_each(aliases_json) a WHERE a.type = 'text' AND instr(a.value, @search) > 0))`
 
-// 正向登记必须有已采纳事件的正文来源；关系、知情、未来计划、实体名字的字符串命中均不当作出场。
-// 缺席来自作者整章核对，独立于来源段落；当前和历史分别计数，未命中始终留为未知。
 const APPEARANCE_CTE = `entities AS (SELECT value AS id FROM json_each(@entities)),
   chapters_page AS (SELECT value AS id FROM json_each(@chapters)),
-  events AS (SELECT s.id, s.fields_json, json_extract(s.fields_json, '$.freshness') AS freshness,
-      json_extract(s.fields_json, '$.conflictState') AS conflict_state
-    FROM story_records s WHERE s.book_id = @bookId AND s.kind = 'event'
-      AND json_extract(s.fields_json, '$.authorDecision') = 'adopted'
-      AND json_extract(s.fields_json, '$.nature') IN ('author_setting', 'narrative_claim', 'ai_derived')),
-  assertions AS (
-    SELECT DISTINCT r.entity_id, c.id AS chapter_id, e.id AS record_id, r.role AS role,
-      CASE WHEN src.revision_id = c.current_revision_id AND e.freshness = 'current' AND e.conflict_state <> 'candidate' THEN 1 ELSE 0 END AS current
-    FROM events e JOIN story_entity_refs r ON r.record_id = e.id AND r.book_id = @bookId
-    JOIN entities p ON p.id = r.entity_id
-    JOIN story_sources src ON src.record_id = e.id AND src.book_id = @bookId AND src.source_type = 'chapter_text'
-    JOIN chapters c ON c.id = src.chapter_id JOIN chapters_page cp ON cp.id = c.id
-    WHERE r.role IN ('participant', 'mentioned')
-    UNION ALL
-    SELECT a.value AS entity_id, c.id AS chapter_id, e.id AS record_id, 'absent' AS role,
-      CASE WHEN json_extract(e.fields_json, '$.appearanceCheck.revisionId') = c.current_revision_id
-        AND e.freshness = 'current' AND e.conflict_state <> 'candidate' THEN 1 ELSE 0 END AS current
-    FROM events e JOIN json_each(e.fields_json, '$.appearanceCheck.absentEntityIds') a
-    JOIN entities p ON p.id = a.value
-    JOIN chapters c ON c.id = json_extract(e.fields_json, '$.appearanceCheck.chapterId')
-    JOIN chapters_page cp ON cp.id = c.id
-  )`
+  ${APPEARANCE_ASSERTIONS_CTE}`
 
 const DUE_VALUES = ['overdue', 'due', 'upcoming', 'unplaced', 'unconfirmed', 'closed'] as const
 const RADAR_SCOPE = `(@scope = 'all' OR @scope = 'open' AND due <> 'closed' AND author_decision <> 'rejected'

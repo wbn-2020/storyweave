@@ -4,8 +4,8 @@ import { DomainError } from '../../contracts/api'
 import { CHARACTER_PROFILE_SCHEMA_VERSION } from '../../contracts/character-profile'
 import {
   AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES,
-  KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION,
-  parseKnowledgeFields, parseKnowledgeSource,
+  KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION, KNOWLEDGE_RELATED_LIMIT,
+  isKnowledgeStoryContextFor, parseKnowledgeFields, parseKnowledgeSource,
   type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeItemFields, type KnowledgeItemPage,
   type KnowledgeKind, type KnowledgeNature, type KnowledgeSource, type KnowledgeSourceInput, type KnowledgeStatus, type UpdateKnowledgeItemInput,
 } from '../../contracts/knowledge'
@@ -312,11 +312,11 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
     setActiveView('entries')
     const ticket = ++readTicket.current
     readLock.current = true; setReading(true); setMessage(null); setDetail(null); setMode('view'); resetSource()
-    const result = await request(() => api.getKnowledgeItem({ bookId: book.book.id, id }))
+    const result = await request(() => api.getKnowledgeItem({ bookId: book.book.id, id, includeStoryContext: true }))
     if (!mounted.current || ticket !== readTicket.current) return
     readLock.current = false; setReading(false)
-    if (result.ok && result.data.bookId === book.book.id && result.data.id === id) setDetail(result.data)
-    else if (result.ok) setMessage('读取条目的身份不符，请刷新后再试。')
+    if (result.ok && result.data.bookId === book.book.id && result.data.id === id && isKnowledgeStoryContextFor(result.data.storyContext, id)) setDetail(result.data)
+    else if (result.ok) setMessage('条目身份或登场、关联登记格式不符，请刷新后再试。')
     else setMessage(result.error.message)
   }
 
@@ -422,6 +422,9 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
       ...(sourceType === 'chapter_text' ? { chapterId: sourceChapter?.id ?? null, revisionId: sourceChapter?.revisionId ?? null, blockId: blockId || null } : {}) } : null,
   }, null, 2) : null
   const panelError = [message, error].filter((value, index, values) => value && value !== pendingMessage && values.indexOf(value) === index).join(' ') || null
+  const storyContext = detail?.storyContext
+  const relatedObjects = storyContext?.state === 'ready' ? [...new Map(storyContext.relations.map((relation) => [relation.entityId, relation])).values()] : []
+  const contextUnavailable = storyContext?.state === 'requires_upgrade' ? '需先备份并启用故事记录。' : '尚未读取，请重新读取当前条目。'
 
   return <Dialog title={activeView === 'adjudication' ? '知识候选与裁决' : '故事设定库'} className={styles.libraryPage} wide busy={unavailable} error={panelError} onClose={() => { if (mayLeave()) onClose() }}><div className={styles.panel} data-mode={mode}>
     <div className={styles.intro}>
@@ -666,7 +669,17 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
             <h4>身份与设定</h4>
             <p className={styles.body}>{detail.summary || '尚未填写说明。'}</p>
           </div>
-          {detail.kind === 'person' && <dl className={styles.keyFacts}><div><dt>动机</dt><dd>{detail.characterProfile?.motivation || '未填写'}</dd></div><div><dt>致命弱点</dt><dd>{detail.characterProfile?.weakness || '未填写'}</dd></div><div><dt>身世</dt><dd>{detail.characterProfile?.background || '未填写'}</dd></div></dl>}
+          <dl className={styles.keyFacts}>
+            {detail.kind === 'person' && <><div><dt>动机</dt><dd>{detail.characterProfile?.motivation || '未填写'}</dd></div><div><dt>致命弱点</dt><dd>{detail.characterProfile?.weakness || '未填写'}</dd></div><div><dt>身世</dt><dd>{detail.characterProfile?.background || '未填写'}</dd></div></>}
+            <div><dt>首次登场</dt><dd title={storyContext?.state === 'ready' && storyContext.firstAppearance ? `${storyContext.firstAppearance.chapterTitle} · 当前稿中最早的有效登场登记` : undefined}>{storyContext?.state === 'ready' ? storyContext.firstAppearance ? `第 ${storyContext.firstAppearance.chapterPosition + 1} 章` : '暂无有效登场登记' : contextUnavailable}</dd></div>
+            <div><dt>关联对象</dt><dd>{storyContext?.state === 'ready' ? relatedObjects.length ? <div className={styles.relatedObjects}>{relatedObjects.map((item) => <button key={item.entityId} className={styles.relatedObject} type="button" title={`${item.name}\n${storyContext.relations.filter((relation) => relation.entityId === item.entityId).map((relation) => `${relation.relationType} · ${natureLabels[relation.nature]} · ${decisionLabels[relation.authorDecision]} · ${freshnessLabels[relation.freshness]} · ${conflictLabels[relation.conflictState]}${relation.layer === 'hidden' ? ' · 隐藏关系' : ''}`).join('\n')}`} aria-label={`查看${item.name}的设定`} disabled={unavailable} onClick={() => void selectItem(item.entityId)}>
+              <SavedPortrait api={api} bookId={book.book.id} personId={item.entityId} metadata={item.kind === 'person' ? portraits.items.find((portrait) => portrait.personId === item.entityId) : undefined} name={item.name} className={styles.relatedPortrait} fallback={<StudioIcon name={categoryIcons[item.kind]} size={20} />} />
+            </button>)}</div> : '暂无已登记关系' : contextUnavailable}</dd></div>
+          </dl>
+          {storyContext?.state === 'ready' && storyContext.relations.length > 0 && <details className={styles.judgment}><summary>查看关联登记{storyContext.relationsTruncated ? `（仅最近 ${KNOWLEDGE_RELATED_LIMIT} 条）` : ''}</summary>
+            <p className={shared.helpText}>按已登记关系展示，不代表当前剧情中有效。</p>
+            <ul className={styles.history}>{storyContext.relations.map((relation) => <li key={relation.recordId}><strong>{relation.name} · {relation.relationType}</strong><span>{relation.title} · {{ outgoing: '本条目指向对方', incoming: '对方指向本条目', mutual: '双向关系' }[relation.direction]} · {relation.layer === 'hidden' ? '隐藏关系' : relation.layer === 'surface' ? '表面关系' : '未标注层次'}</span><span>{natureLabels[relation.nature]} · {decisionLabels[relation.authorDecision]} · {freshnessLabels[relation.freshness]} · {conflictLabels[relation.conflictState]}</span></li>)}</ul>
+          </details>}
 
           {detail.kind === 'person' && (
             <details className={styles.characterProfile} key={`profile-${detail.id}`}><summary>完整八维档案与六维能力</summary>

@@ -139,6 +139,12 @@
 .keyFacts > div { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: var(--space-3); padding-block: var(--space-3); border-bottom: 1px solid var(--color-line); }
 .keyFacts dt { color: var(--color-muted); }
 .keyFacts dd { margin: 0; white-space: pre-wrap; }
+.relatedObjects { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.relatedObject { width: var(--control-height); height: var(--control-height); flex-shrink: 0; padding: 0; border: 1px solid var(--color-line-strong); border-radius: 50%; background: var(--bg-raised); color: var(--color-ink-secondary); }
+.relatedObject:hover:not(:disabled) { border-color: var(--color-accent); }
+.relatedPortrait { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; }
+.relatedPortrait > img { width: 100%; height: 100%; object-fit: cover; }
+.judgment .history { overflow-wrap: anywhere; }
 .paging > span { align-self: center; color: var(--color-muted); font: var(--text-xs)/1.5 var(--font-num); }
 .libraryPage { position: relative; }
 .libraryPage > header { min-height: var(--control-height); margin-bottom: var(--space-4); }

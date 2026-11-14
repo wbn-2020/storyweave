@@ -14,6 +14,7 @@ import {
   type KnowledgeAdjudication, type KnowledgeAdjudicationInput,
 } from '../../contracts/knowledge'
 import type { StudioRepository } from '../storage/studio-repository'
+import { readKnowledgeStoryContext } from './story-context'
 
 interface ItemRow {
   id: string; book_id: string; kind: KnowledgeItemFields['kind']; name: string; aliases_json: string
@@ -207,7 +208,10 @@ export class KnowledgeRepository {
     return perform(() => {
       const data = parseKnowledgeItemInput(input)
       const { db } = this.studio.getKnowledgeDatabase(data.bookId)
-      return db.transaction(() => this.readDetail(db, data.bookId, data.id))()
+      return db.transaction(() => {
+        const detail = this.readDetail(db, data.bookId, data.id)
+        return data.includeStoryContext ? { ...detail, storyContext: readKnowledgeStoryContext(db, data.bookId, data.id) } : detail
+      })()
     })
   }
 

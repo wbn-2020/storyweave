@@ -92,6 +92,30 @@ export interface KnowledgeAdjudication {
   createdAt: string
 }
 
+export const KNOWLEDGE_RELATED_LIMIT = 12
+export interface KnowledgeRelatedItem {
+  recordId: string
+  entityId: string
+  name: string
+  kind: KnowledgeKind
+  title: string
+  relationType: string
+  direction: 'outgoing' | 'incoming' | 'mutual'
+  layer?: 'surface' | 'hidden'
+  nature: KnowledgeNature
+  authorDecision: AuthorDecision
+  freshness: KnowledgeFreshness
+  conflictState: ConflictState
+}
+export type KnowledgeStoryContext = { state: 'requires_upgrade' } | {
+  state: 'ready'
+  /** 当前稿中最早的有效登场登记，不以知识出处或提及代替。 */
+  firstAppearance: { chapterId: string; chapterTitle: string; chapterPosition: number; revisionId: string; eventId: string } | null
+  /** 最近登记的关系，保留原判断；不推断其在当前剧情的有效性。 */
+  relations: KnowledgeRelatedItem[]
+  relationsTruncated: boolean
+}
+
 export interface KnowledgeItemDetail extends KnowledgeItemSummary {
   bookRevision: number
   knowledgeRevision: number
@@ -100,9 +124,11 @@ export interface KnowledgeItemDetail extends KnowledgeItemSummary {
   revisions: KnowledgeRevision[]
   /** v26 起返回独立裁决记录；来源和前后修订均为不可变身份。 */
   adjudications?: KnowledgeAdjudication[]
+  /** 仅显式详情读取按需返回，与条目共用同一事务和双版本；写入回执不附带。 */
+  storyContext?: KnowledgeStoryContext
 }
 
-export interface KnowledgeItemInput { bookId: string; id: string }
+export interface KnowledgeItemInput { bookId: string; id: string; includeStoryContext?: boolean }
 export interface CreateKnowledgeItemInput {
   bookId: string
   expectedKnowledgeRevision: number
@@ -227,8 +253,43 @@ export function parseKnowledgeSource(value: unknown, bookId: string): KnowledgeS
 }
 
 export function parseKnowledgeItemInput(value: unknown): KnowledgeItemInput {
-  const data = record(value, ['bookId', 'id'], '知识条目请求')
-  return { bookId: requiredId(data.bookId).toLowerCase(), id: requiredId(data.id).toLowerCase() }
+  const data = record(value, ['bookId', 'id', 'includeStoryContext'], '知识条目请求')
+  if (data.includeStoryContext !== undefined && typeof data.includeStoryContext !== 'boolean') return invalid('关联登记读取开关必须为布尔值。')
+  return { bookId: requiredId(data.bookId).toLowerCase(), id: requiredId(data.id).toLowerCase(),
+    ...(data.includeStoryContext === undefined ? {} : { includeStoryContext: data.includeStoryContext as boolean }) }
+}
+
+/** 新增只读投影必须有界且指向其他实体；错误结构不能被界面解释成空登记。 */
+export function isKnowledgeStoryContextFor(value: unknown, itemId: string): value is KnowledgeStoryContext {
+  try {
+    requiredId(itemId)
+    if (!isRecord(value)) return false
+    if (value.state === 'requires_upgrade') return Object.keys(value).length === 1
+    const data = record(value, ['state', 'firstAppearance', 'relations', 'relationsTruncated'], '关联登记')
+    if (data.state !== 'ready' || !Array.isArray(data.relations) || data.relations.length > KNOWLEDGE_RELATED_LIMIT ||
+        typeof data.relationsTruncated !== 'boolean' || (data.relationsTruncated && data.relations.length !== KNOWLEDGE_RELATED_LIMIT)) return false
+    if (data.firstAppearance !== null) {
+      const first = record(data.firstAppearance, ['chapterId', 'chapterTitle', 'chapterPosition', 'revisionId', 'eventId'], '登场登记')
+      requiredId(first.chapterId); requiredId(first.revisionId); requiredId(first.eventId)
+      requiredText(first.chapterTitle, '登场章节', 120); requiredInteger(first.chapterPosition, '登场章节位置', Number.MAX_SAFE_INTEGER - 1)
+    }
+    const ids = new Set<string>(), entities = new Map<string, string>()
+    for (const entry of data.relations) {
+      const relation = record(entry, ['recordId', 'entityId', 'name', 'kind', 'title', 'relationType', 'direction', 'layer',
+        'nature', 'authorDecision', 'freshness', 'conflictState'], '关联记录')
+      const recordId = requiredId(relation.recordId).toLowerCase(), entityId = requiredId(relation.entityId).toLowerCase()
+      const name = requiredText(relation.name, '关联对象', 120), kind = choice(relation.kind, KNOWLEDGE_KINDS, '关联类型')
+      if (entityId === itemId.toLowerCase() || ids.has(recordId) ||
+          (entities.has(entityId) && entities.get(entityId) !== JSON.stringify([name, kind]))) return false
+      ids.add(recordId); entities.set(entityId, JSON.stringify([name, kind]))
+      requiredText(relation.title, '关系名称', 120); requiredText(relation.relationType, '关系类型', 120)
+      choice(relation.direction, ['outgoing', 'incoming', 'mutual'] as const, '关系方向')
+      if (relation.layer !== undefined) choice(relation.layer, ['surface', 'hidden'] as const, '关系层次')
+      choice(relation.nature, KNOWLEDGE_NATURES, '关系性质'); choice(relation.authorDecision, AUTHOR_DECISIONS, '关系决定')
+      choice(relation.freshness, KNOWLEDGE_FRESHNESS, '关系新鲜度'); choice(relation.conflictState, CONFLICT_STATES, '关系冲突')
+    }
+    return true
+  } catch { return false }
 }
 
 export function parseCreateKnowledgeItem(value: unknown): CreateKnowledgeItemInput {
