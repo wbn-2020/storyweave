@@ -102,6 +102,15 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const shownPage = Math.min(page, pages - 1)
   const shownChapters = filtered.slice(shownPage * PAGE_SIZE, (shownPage + 1) * PAGE_SIZE)
+  const chapterGroups: { volumeId: string | null; title: string; chapters: BookSnapshot['chapters'] }[] = []
+  // 只合并当前页连续的同卷章节，保持原目录、筛选及分页顺序；折叠不改变勾选。
+  for (const chapter of shownChapters) {
+    const previous = chapterGroups.at(-1)
+    if (previous && previous.volumeId === chapter.volumeId) previous.chapters.push(chapter)
+    else chapterGroups.push({ volumeId: chapter.volumeId,
+      title: chapter.volumeId === null ? '未分卷' : book.volumes.find((volume) => volume.id === chapter.volumeId)?.title ?? '分卷信息未载入',
+      chapters: [chapter] })
+  }
   const blocked = busy || preparing || exporting || Boolean(pendingRead)
   const currentPreview = preview?.manifest.bookId === book.book.id && preview.manifest.bookRevision === book.book.revision ? preview : null
   const docxOptions = options.docx ?? defaultDocxOptions
@@ -266,6 +275,42 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
       void request(() => api.revealBookExport({ exportId: exported.exportId })).then((result) => { if (!result.ok && mounted.current) setReadError(result.error.message) })
     }}><StudioIcon name="folder" />在文件夹中显示</button></section>}
     <div className={styles.exportWorkspace}>
+      <section className={styles.chapterList} aria-labelledby={headingId}>
+    <div className={styles.selectionBar}>
+      <div className={styles.selectionHeading}><h3 id={headingId}>选择章节</h3><p>已选 {selectedIds.length.toLocaleString()} / {book.chapters.length.toLocaleString()} 章</p></div>
+      <div className={styles.selectionActions}>
+        <button type="button" className={appStyles.button} disabled={blocked} onClick={() => { invalidate(); setSelectedIds(book.chapters.map((chapter) => chapter.id)) }}>全选</button>
+        <button type="button" className={appStyles.button} disabled={blocked || !selectedIds.length} onClick={() => { invalidate(); setSelectedIds([]) }}>清空选择</button>
+        <button type="button" className={appStyles.primaryButton} disabled={blocked || !selectedIds.length} onClick={() => void prepare()}>{preparing ? '正在核对…' : currentPreview ? '重新核对清单' : '生成导出预览'}</button>
+      </div>
+    </div>
+    <label className={styles.search}>筛选章节<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(0) }} placeholder="输入章节名称" maxLength={120} /></label>
+
+        <div className={styles.tableScroll} role="region" aria-label="逐章导出清单" tabIndex={0}>
+          {chapterGroups.map((group) => <details className={styles.chapterGroup} key={`${group.volumeId ?? 'ungrouped'}:${group.chapters[0]!.id}`} open>
+            <summary><StudioIcon name="chevron" size={16} /><strong>{group.title}</strong><small>本页 {group.chapters.length} 章</small></summary>
+            <ul className={styles.chapters}>{group.chapters.map((chapter) => {
+              const entry = currentPreview ? entries.get(chapter.id) : undefined
+              return <li key={chapter.id} data-active={chapterPreview?.chapterId === chapter.id || undefined}>
+                <div className={styles.chapterRow}><label className={styles.chapterSelection}><input type="checkbox" aria-label={`导出 ${chapter.title}`} checked={selected.has(chapter.id)} disabled={blocked} onChange={(event) => selectChapter(chapter.id, event.target.checked)} />
+                  <span className={styles.chapterTitle} title={chapter.title}>{chapter.title}</span></label><span className={styles.chapterDelivery}>{status(entry, chapter.id)}</span>
+                </div>
+                <div className={styles.chapterMetadata}><small>{entry?.volumeTitle ? `${entry.volumeTitle} · ` : ''}{statusLabels[chapter.status]}</small>
+                  {entry?.revisionSequence !== null && entry?.revisionSequence !== undefined && <small>版本 {entry.revisionSequence} · {options.scope === 'working' ? '工作稿' : '作者定稿'}</small>}
+                  <small>{entry?.characterCount?.toLocaleString() ?? '—'} 字</small>
+                  {entry?.state === 'included' && currentPreview && <button type="button" className={styles.previewButton} disabled={blocked} aria-pressed={chapterPreview?.chapterId === chapter.id} onClick={() => void readChapter(currentPreview, chapter.id)}>预览正文</button>}
+                </div>
+              </li>
+            })}</ul>
+          </details>)}
+          {!shownChapters.length && <p className={styles.empty}>{query ? '没有匹配的章节。' : '作品尚未建立章节。'}</p>}
+        </div>
+        {pages > 1 && <nav className={styles.pagination} aria-label="章节清单分页">
+          <button type="button" className={appStyles.button} disabled={shownPage === 0} onClick={() => setPage(shownPage - 1)}>上一页</button>
+          <span>{shownPage + 1} / {pages}</span>
+          <button type="button" className={appStyles.button} disabled={shownPage + 1 === pages} onClick={() => setPage(shownPage + 1)}>下一页</button>
+        </nav>}
+      </section>
     <section className={styles.configuration} aria-label="格式与排版">
     <h3>输出格式</h3>
     <fieldset className={styles.formats} disabled={blocked}><legend className={styles.srOnly}>成品格式</legend>{exportFormats.map((format) => <label className={styles.formatCard} data-selected={options.format === format.id} key={format.id}>
@@ -293,56 +338,14 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     </fieldset>}
     <label className={`${appStyles.checkLabel} ${styles.check}`}><input type="checkbox" checked={options.includeChapterTitles} disabled={blocked} onChange={(event) => updateOptions({ includeChapterTitles: event.target.checked })} />正文包含章节标题</label>
     <p className={styles.help}>{options.scope === 'finalized' ? '尚未定稿的章节会列出跳过原因；定稿后对工作稿的修改不进入本次成品。' : '预览使用已经保存的当前稿，生成预览后修改作品需要重新核对。'}{options.format === 'epub' && ' EPUB 目录保留章节名，实际分页与字体由阅读器决定。'}{options.format === 'docx' && ' DOCX 预览展示固定正文与格式，实际分页和字体以打开文档的软件为准。'}</p>
-
     </section>
-    <div className={styles.previewLayout}>
-      <section className={styles.chapterList} aria-labelledby={headingId}>
-    <div className={styles.selectionBar}>
-      <p id={headingId}>已选 {selectedIds.length.toLocaleString()} / {book.chapters.length.toLocaleString()} 章</p>
-      <div className={styles.selectionActions}>
-        <button type="button" className={appStyles.button} disabled={blocked} onClick={() => { invalidate(); setSelectedIds(book.chapters.map((chapter) => chapter.id)) }}>全选</button>
-        <button type="button" className={appStyles.button} disabled={blocked || !selectedIds.length} onClick={() => { invalidate(); setSelectedIds([]) }}>清空选择</button>
-        <button type="button" className={appStyles.primaryButton} disabled={blocked || !selectedIds.length} onClick={() => void prepare()}>{preparing ? '正在核对…' : currentPreview ? '重新核对清单' : '生成导出预览'}</button>
-      </div>
-    </div>
-    <label className={styles.search}>筛选章节<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(0) }} placeholder="输入章节名称" maxLength={120} /></label>
-
-        <div className={styles.tableScroll} role="region" aria-label="逐章导出清单" tabIndex={0}>
-          <table className={styles.table}>
-            <thead><tr><th scope="col">选择</th><th scope="col">章节与版本</th><th scope="col">字数</th><th scope="col">交付状态</th></tr></thead>
-            <tbody>{shownChapters.map((chapter) => {
-              const entry = currentPreview ? entries.get(chapter.id) : undefined
-              return <tr key={chapter.id} data-active={chapterPreview?.chapterId === chapter.id || undefined}>
-                <td><input type="checkbox" aria-label={`导出 ${chapter.title}`} checked={selected.has(chapter.id)} disabled={blocked} onChange={(event) => selectChapter(chapter.id, event.target.checked)} /></td>
-                <th scope="row"><span className={styles.chapterTitle}>{chapter.title}</span><small>{entry?.volumeTitle ? `${entry.volumeTitle} · ` : ''}{statusLabels[chapter.status]}</small>
-                  {entry?.revisionSequence !== null && entry?.revisionSequence !== undefined && <small>版本 {entry.revisionSequence} · {options.scope === 'working' ? '工作稿' : '作者定稿'}</small>}
-                  {entry?.state === 'included' && currentPreview && <button type="button" className={styles.previewButton} disabled={blocked} aria-pressed={chapterPreview?.chapterId === chapter.id} onClick={() => void readChapter(currentPreview, chapter.id)}>预览正文</button>}
-                </th>
-                <td>{entry?.characterCount?.toLocaleString() ?? '—'}</td>
-                <td>{status(entry, chapter.id)}</td>
-              </tr>
-            })}</tbody>
-          </table>
-          {!shownChapters.length && <p className={styles.empty}>{query ? '没有匹配的章节。' : '作品尚未建立章节。'}</p>}
-        </div>
-        {pages > 1 && <nav className={styles.pagination} aria-label="章节清单分页">
-          <button type="button" className={appStyles.button} disabled={shownPage === 0} onClick={() => setPage(shownPage - 1)}>上一页</button>
-          <span>{shownPage + 1} / {pages}</span>
-          <button type="button" className={appStyles.button} disabled={shownPage + 1 === pages} onClick={() => setPage(shownPage + 1)}>下一页</button>
-        </nav>}
-      </section>
-      <details className={styles.manuscript} aria-label="固定版本正文预览" aria-busy={reading}><summary>核对固定版本正文 · {chapterPreview?.title ?? '生成清单后可读'}</summary>
-        <h3>{chapterPreview ? chapterPreview.title : '正文预览'}</h3>
-        {reading ? <p className={styles.empty} role="status">正在读取固定版本…</p> : chapterPreview ? <ChapterContent chapter={chapterPreview} submissionLayout={currentPreview?.manifest.docx?.submissionLayout ?? false} /> : <p className={styles.empty}>生成清单后，选择一章查看本次交付正文。</p>}
-      </details>
-    </div>
 
     <section className={styles.summary} aria-label="本次交付核对结果" aria-live="polite">
       <h3>导出清单预览</h3>
       <div className={styles.bookIdentity}><span className={styles.cover}><BookCover book={book.book} api={api} workspaceScope={workspaceScope} /></span><div><h4>{book.book.title}</h4><p>作品版本 {currentPreview?.manifest.bookRevision ?? book.book.revision}</p><small>{options.scope === 'finalized' ? '作者定稿' : '当前工作稿'} · .{bookExportExtension(options.format)}</small></div></div>
     {currentPreview ? <>
-      <p><strong>{currentPreview.chapterCount.toLocaleString()} 章 · {currentPreview.characterCount.toLocaleString()} 字</strong><span>预计 {fileSize(currentPreview.estimatedBytes)} · 作品版本 {currentPreview.manifest.bookRevision}</span></p>
-      <dl className={styles.manifestFacts}><dt>清单生成</dt><dd>{displayTime(currentPreview.manifest.createdAt)}</dd><dt>有效至</dt><dd>{displayTime(currentPreview.expiresAt)}</dd><dt>遗漏章节</dt><dd>{currentPreview.skippedCount} 章</dd></dl>
+      <dl className={styles.outputFacts}><div><dt><StudioIcon name="read" size={20} />章节数</dt><dd>{currentPreview.chapterCount.toLocaleString()} 章</dd></div><div><dt><StudioIcon name="notes" size={20} />字符数</dt><dd>{currentPreview.characterCount.toLocaleString()} 字</dd></div><div><dt><StudioIcon name="export" size={20} />预计大小</dt><dd>{fileSize(currentPreview.estimatedBytes)}</dd></div></dl>
+      <dl className={styles.manifestFacts}><dt><StudioIcon name="clock" size={18} />清单生成</dt><dd>{displayTime(currentPreview.manifest.createdAt)}</dd><dt><StudioIcon name="clock" size={18} />有效至</dt><dd>{displayTime(currentPreview.expiresAt)}</dd><dt><StudioIcon name="info" size={18} />遗漏章节</dt><dd>{currentPreview.skippedCount} 章</dd></dl>
       {currentPreview.manifest.outputFormat === 'docx' && <>
         <p>DOCX · {currentPreview.manifest.docx?.submissionLayout ? '投稿排版' : '常规排版'} · 附文不计入章节字数</p>
         {currentPreview.manifest.docx?.preface && <details><summary>本次前言</summary><pre className={styles.notePreview}>{currentPreview.manifest.docx.preface}</pre></details>}
@@ -356,11 +359,15 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
       </details>
     </> : <p className={styles.empty}>尚未生成清单。选择章节与格式后核对本次交付版本。</p>}
     </section>
+      <details className={styles.manuscript} aria-label="固定版本正文预览" aria-busy={reading}><summary>核对固定版本正文 · {chapterPreview?.title ?? '生成清单后可读'}</summary>
+        <h3>{chapterPreview ? chapterPreview.title : '正文预览'}</h3>
+        {reading ? <p className={styles.empty} role="status">正在读取固定版本…</p> : chapterPreview ? <ChapterContent chapter={chapterPreview} submissionLayout={currentPreview?.manifest.docx?.submissionLayout ?? false} /> : <p className={styles.empty}>生成清单后，选择一章查看本次交付正文。</p>}
+      </details>
     </div>
     <p className={styles.help}>保存时新建 .{bookExportExtension(options.format)} 成品和同名 .manifest.json 版本清单。正文成品只包含选定内容；完整恢复请使用作品恢复包。单次成品上限 2 GiB。</p>
     <div className={styles.actions}>
-      <button type="button" className={appStyles.button} disabled={busy || exporting} onClick={onClose}>关闭</button>
       <button type="button" className={appStyles.primaryButton} disabled={blocked || reading || alreadyExported || !currentPreview?.canExport || (currentPreview.requiresAcknowledgement && !acknowledged)} onClick={() => void submit()}><StudioIcon name="export" size={20} />{exporting ? '正在导出…' : alreadyExported ? '本次清单已导出' : '选择位置并导出'}</button>
+      <button type="button" className={appStyles.button} disabled={busy || exporting} onClick={onClose}>关闭</button>
     </div>
   </Dialog>
 }
