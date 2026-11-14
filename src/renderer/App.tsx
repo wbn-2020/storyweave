@@ -97,7 +97,7 @@ interface AiWritingReceipt { root: string | null; previous: ChapterSnapshot; ado
 const CANVAS_MODAL_KINDS = new Set<NonNullable<Modal>['kind']>([
   'workbench', 'knowledge', 'galaxy', 'timeline', 'story', 'notes',
   'inspiration', 'calendar', 'media', 'reader', 'memory', 'aiMemoryTasks', 'aiSummary', 'kickstart',
-  'living', 'forge', 'preferences', 'models', 'abilities', 'weave', 'bookRecovery', 'export',
+  'living', 'forge', 'preferences', 'models', 'abilities', 'weave', 'bookRecovery', 'export', 'history',
 ])
 
 const SURFACE_TITLES: Record<string, { title: string; subtitle: string }> = {
@@ -111,6 +111,7 @@ const SURFACE_TITLES: Record<string, { title: string; subtitle: string }> = {
   abilities: { title: '境界与战力', subtitle: '境界阶梯、人物战力与突破推演' },
   weave: { title: '织星系统', subtitle: '本书系统设定' },
   export: { title: '导出', subtitle: '将作品导出为多种格式，便于分享与发布' },
+  history: { title: '版本历史', subtitle: '当前稿与历史稿对照' },
   kickstart: { title: '故事孵化', subtitle: '一个脑洞，几种可能，再走进第一章' },
   workbench: { title: '章节规划与审稿', subtitle: '从故事种子、场景节拍到审稿清单，连接下一章' },
   living: { title: '大纲与演进沙盘', subtitle: '总纲、卷目标与章纲可编辑，记忆和修纲都有来源' },
@@ -1326,7 +1327,7 @@ export function App({ api }: Props) {
   const activeCanvasKey = isCanvasView && modal ? modal.kind : studioView
   const worldMapVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'world'
   const matrixVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'matrix'
-  const compactBookCanvas = worldMapVisible || matrixVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export')
+  const compactBookCanvas = worldMapVisible || matrixVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export' || modal?.kind === 'history')
   const headerInfo = worldMapVisible ? { title: '世界星域地图', subtitle: '世界地点与已登记航道' }
     : matrixVisible ? { title: '章节出场矩阵', subtitle: '实体与章节的已登记出场' }
     : modal?.kind === 'media' && modal.scenePlaceId ? { title: '地点场景图', subtitle: '地点关联与图片版本' }
@@ -1480,7 +1481,7 @@ export function App({ api }: Props) {
             {book ? book.book.title : headerInfo.subtitle}
           </span>
         </div>}
-        {book && !matrixVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
+        {book && !matrixVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && modal?.kind !== 'history' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
         <div className={styles.topActions}>
           {compactBookCanvas && book && <label className={styles.canvasTools} title="更多作品工具"><StudioIcon name="more" size={20} />
             <select aria-label="更多作品工具" value="" disabled={busy || bookRecoveryLocked} onChange={(event) => {
@@ -1541,6 +1542,7 @@ export function App({ api }: Props) {
             onChapter={(id) => void openChapter(id)} onBookChange={applyBook} onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard}
             onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} />}
           {modal?.kind === 'export' && book && api && <ExportBookPanel key={`${workspace.rootPath}:${book.book.id}`} api={api} workspaceScope={workspace.rootPath ?? undefined} receipt={exportReceipt} book={book} onExport={exportBook} onClose={closeModal} busy={busy} error={modalError} registerLeaveGuard={registerPanelLeaveGuard} />}
+          {modal?.kind === 'history' && chapter && api && <RevisionHistory key={`${workspace.rootPath}:${chapter.bookId}:${chapter.id}`} api={api} chapter={chapter} archived={archived} onRestore={restoreRevision} onMerge={mergeSelectedRevision} onClose={closeModal} busy={busy} error={modalError} registerLeaveGuard={registerPanelLeaveGuard} />}
           {modal?.kind === 'forge' && book && api && <>
             <ForgePanel key={`${workspace.rootPath}:${book.book.id}:${modal.initialKind ?? 'cast'}:${modal.personId ?? ''}`} api={api} book={book} chapter={chapter} disabled={busy}
               initialKind={modal.initialKind} initialPersonId={modal.personId} onDirtyChange={(value) => { workbenchDirty.current = value }} onBookChange={applyBook}
@@ -1715,7 +1717,6 @@ export function App({ api }: Props) {
     {modal?.kind === 'volume' && <NameDialog title={modal.volumeId ? '修改卷名' : '新建卷'} initialValue={book?.volumes.find((item) => item.id === modal.volumeId)?.title} submitLabel="保存卷名" onSubmit={(title) => void saveVolume(title, modal.volumeId)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'bookDetails' && <BookDetailsDialog key={modal.book.id} book={modal.book} onSubmit={(fields) => void updateBookDetails(modal.book, fields)} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmClose={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
     {modal?.kind === 'chapterDetails' && chapter && book && <ChapterDetailsDialog key={chapter.id} chapter={chapter} volumes={book.volumes} onSubmit={(fields) => void updateChapterDetails(fields)} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmClose={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
-    {modal?.kind === 'history' && chapter && api && <RevisionHistory api={api} chapter={chapter} archived={archived} onRestore={restoreRevision} onMerge={mergeSelectedRevision} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'finalize' && chapter && <ConfirmDialog title="作者定稿" label="确认当前稿为定稿" onSubmit={() => void finalizeChapter()} onClose={closeModal} busy={busy} error={modalError}>当前正文会先保存，再成为本章新的作者定稿。后续编辑会生成工作稿，导出时仍可单独选择这次定稿。</ConfirmDialog>}
     {modal?.kind === 'import' && api && <TextImportDialog api={api} onCommit={(token, title) => void commitImport(token, title)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'orphans' && api && <OrphanBooksDialog api={api} onRegister={(id) => void registerBook(id)} onClose={closeModal} busy={busy} error={modalError} />}

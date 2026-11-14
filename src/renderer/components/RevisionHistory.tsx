@@ -5,6 +5,7 @@ import { documentToText, parseManuscript, type ManuscriptBlock } from '../../con
 import { applyParagraphChanges, compareParagraphs, paragraphText, type ParagraphChange } from '../../contracts/paragraph-diff'
 import type { RevisionMergeInput } from '../../contracts/revision-merge'
 import { displayTime, request } from '../request'
+import type { RegisterPanelLeaveGuard } from '../hooks/usePanelLeave'
 import { Dialog } from './Dialog'
 import { StudioIcon } from './StudioIcon'
 import styles from '../StellarShared.module.css'
@@ -16,13 +17,14 @@ export interface RevisionHistoryProps {
   archived: boolean
   busy: boolean
   error?: string | null
+  registerLeaveGuard?: RegisterPanelLeaveGuard
   onClose: () => void
   onRestore: (revisionId: string) => void | Promise<void>
   onMerge?: (input: RevisionMergeInput) => void | Promise<void>
 }
 const reasons = { created: '建立章节', saved: '保存正文', restored: '恢复版本', imported: '导入正文' }
 
-export function RevisionHistory({ api, chapter, archived, busy, error, onClose, onRestore, onMerge }: RevisionHistoryProps) {
+export function RevisionHistory({ api, chapter, archived, busy, error, onClose, onRestore, onMerge, registerLeaveGuard }: RevisionHistoryProps) {
   const [items, setItems] = useState<RevisionSummary[]>([])
   const [cursor, setCursor] = useState<number | null>(null)
   const basisKey = `${chapter.bookId}:${chapter.id}:${chapter.revisionId}:${chapter.bookRevision}`
@@ -41,6 +43,8 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
   const previewRequest = useRef(0)
   const mounted = useRef(true)
   const submitLock = useRef(false)
+  const parentBusy = useRef(busy)
+  parentBusy.current = busy
   const currentBasis = useRef(basisKey)
   currentBasis.current = basisKey
   const blocked = busy || submitting
@@ -70,6 +74,27 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
     void loadPage()
     return () => { mounted.current = false; pageRequest.current += 1; previewRequest.current += 1 }
   }, [basisKey])
+
+  useEffect(() => {
+    registerLeaveGuard?.(async () => {
+      // 恢复自身也经过父层导航预检，实际写入由预检后的父层锁保护。
+      if (parentBusy.current) { setReadError('正在恢复或核对回执，请先完成当前操作。'); return false }
+      return true
+    })
+    return () => registerLeaveGuard?.(null)
+  }, [registerLeaveGuard])
+
+  useEffect(() => {
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat ||
+          parentBusy.current || submitLock.current || document.querySelector('dialog[open]') || event.target instanceof HTMLSelectElement) return
+      event.preventDefault()
+      if (confirmRestore || confirmMerge) { setConfirmRestore(false); setConfirmMerge(false); return }
+      onClose()
+    }
+    window.addEventListener('keydown', closeWithEscape)
+    return () => window.removeEventListener('keydown', closeWithEscape)
+  }, [onClose, confirmRestore, confirmMerge])
 
   async function loadPage(beforeSequence?: number) {
     const ticket = ++pageRequest.current
@@ -128,15 +153,19 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
     finally { submitLock.current = false; if (mounted.current) { setSubmitting(false); setConfirmRestore(false) } }
   }
 
-  return <Dialog title={`${chapter.title} · 版本历史`} wide busy={blocked} error={error ?? readError} onClose={onClose} className={diffStyles.dialog}>
-    <p className={styles.helpText}>恢复会生成新的工作稿版本，已有历史和作者定稿保留。</p>
+  return <Dialog title={<><StudioIcon name="history" size={28} />版本历史</>} wide busy={blocked} error={error ?? readError} onClose={onClose} className={diffStyles.dialog}>
+    <p className={diffStyles.context}>《{chapter.title}》 · 恢复会生成新的工作稿版本，已有历史和作者定稿保留。</p>
     <div className={`${styles.previewLayout} ${diffStyles.layout}`}>
-      <div className={`${styles.previewList} ${diffStyles.timeline}`}>{chapter.finalizedRevisionId && <button type="button" className={styles.button} disabled={blocked} onClick={() => void selectRevision(chapter.finalizedRevisionId!)}>与作者定稿比较</button>}<ol>{items.map((item) => <li key={item.id} data-current={item.id === chapter.revisionId} data-selected={preview?.id === item.id} data-reason={item.reason}><button type="button" className={preview?.id === item.id ? styles.selectedPreview : ''} aria-pressed={preview?.id === item.id} onClick={() => void selectRevision(item.id)} disabled={blocked}>
-        <strong>版本 {item.sequence} · {reasons[item.reason]}</strong><span>{displayTime(item.createdAt)} · {item.characterCount.toLocaleString()} 字</span>
-        <small>{[item.id === chapter.revisionId ? '当前稿' : '', item.id === chapter.finalizedRevisionId ? '作者定稿' : ''].filter(Boolean).join(' · ')}</small>
+      <div className={`${styles.previewList} ${diffStyles.timeline}`} role="region" aria-label="章节修订时间线" tabIndex={0}>{chapter.finalizedRevisionId && <button type="button" className={styles.button} disabled={blocked} onClick={() => void selectRevision(chapter.finalizedRevisionId!)}>与作者定稿比较</button>}<ol>{items.map((item) => <li key={item.id} data-current={item.id === chapter.revisionId} data-selected={preview?.id === item.id} data-reason={item.reason} data-finalized={item.id === chapter.finalizedRevisionId}><button type="button" className={preview?.id === item.id ? styles.selectedPreview : ''} aria-pressed={preview?.id === item.id} aria-current={item.id === chapter.revisionId ? 'true' : undefined} onClick={() => void selectRevision(item.id)} disabled={blocked}>
+        <span className={diffStyles.revisionHeading}><strong>修订 {item.sequence}</strong><span className={diffStyles.revisionBadges}>
+          {item.id === chapter.revisionId && <span data-state="current">当前</span>}
+          {item.id === chapter.finalizedRevisionId && <span data-state="finalized">定稿</span>}
+          <span data-reason={item.reason}>{reasons[item.reason]}</span>
+        </span></span>
+        <time dateTime={item.createdAt} title={item.createdAt}>{displayTime(item.createdAt)}</time><span className={diffStyles.revisionCount}>{item.characterCount.toLocaleString()} 字</span>
       </button></li>)}</ol>
       {loading ? <p className={styles.helpText} role="status">读取历史中…</p> : cursor !== null ? <button className={styles.textButton} type="button" onClick={() => void loadPage(cursor)} disabled={blocked}>加载更早版本</button> : items.length > 0 ? <p className={styles.helpText}>已到最早版本</p> : <button className={styles.textButton} type="button" onClick={() => void loadPage()} disabled={blocked}>重新读取历史</button>}</div>
-      <section className={`${styles.previewPane} ${diffStyles.comparison}`} aria-label="版本正文对照">{previewLoading ? <p role="status">正在读取正文…</p> : preview ? <>
+      <section className={`${styles.previewPane} ${diffStyles.comparison}`} aria-label="版本正文对照" aria-busy={previewLoading} tabIndex={0}>{previewLoading ? <p role="status">正在读取正文…</p> : preview ? <>
         {comparison.error ? <p role="alert">{comparison.error}</p> : <>
           <div className={diffStyles.actions}><span role="status">{comparison.changes.length} 处段落差异 · 已选 {selectedBlocks.length} 处</span>
             <button type="button" disabled={blocked || archived || !onMerge || !comparison.changes.length} onClick={() => { setSelectedBlocks(comparison.changes.map((change) => change.blockId)); setConfirmMerge(false); setConfirmRestore(false) }}>选择全部差异</button>
@@ -154,22 +183,22 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
         {merged.error && <p role="alert">{merged.error}</p>}
         {merged.document && <details className={diffStyles.originals} open={confirmMerge}><summary>预览采用后的正文</summary><pre>{documentToText(merged.document) || '（空白章节）'}</pre></details>}
       </> : <p>选择左侧历史或作者定稿，与当前稿比较。</p>}</section>
-      <aside className={diffStyles.summary} aria-label="差异摘要"><h3><StudioIcon name="chart" size={20} />差异摘要</h3>
+      <aside className={diffStyles.summary} aria-label="差异摘要" tabIndex={0}><h3><StudioIcon name="chart" size={24} />差异摘要</h3>
         {preview && !comparison.error ? <><dl>
           <dt data-kind="added">新增</dt><dd>{comparison.changes.filter((item) => item.kind === 'added').length} 段</dd>
           <dt data-kind="removed">删除</dt><dd>{comparison.changes.filter((item) => item.kind === 'removed').length} 段</dd>
-          <dt data-kind="changed">内容／格式</dt><dd>{comparison.changes.filter((item) => item.current && item.source && item.contentChanged).length} 段</dd>
+          <dt data-kind="changed">修改</dt><dd>{comparison.changes.filter((item) => item.current && item.source && item.contentChanged).length} 段</dd>
           <dt data-kind="moved">移动</dt><dd>{comparison.changes.filter((item) => item.moved).length} 段</dd>
-        </dl><p className={diffStyles.hint}>按当前稿恢复到所选来源稿计算；同一段落可能同时修改与移动。</p><strong>已选 {selectedBlocks.length} 处</strong></> : <p className={diffStyles.hint}>选择一个历史版本查看差异。</p>}
-        <p className={diffStyles.hint}>局部恢复和整版恢复都会新增修订，原有历史完整保留。</p>
+        </dl><p className={diffStyles.hint}>按当前稿恢复到所选来源稿计算；修改含内容与格式，同一段落可能同时修改与移动。</p><strong>已选 {selectedBlocks.length} 处</strong></> : <p className={diffStyles.hint}>选择一个历史版本查看差异。</p>}
         <div className={diffStyles.restoreActions}>
           {onMerge && <button type="button" className={styles.primaryButton} title={archived ? '归档作品只读' : !selectedBlocks.length ? '先勾选需要恢复的差异' : '核对预览后新增工作稿修订'} disabled={blocked || archived || !merged.document || Boolean(comparison.error)} onClick={() => void mergeSelected()}><StudioIcon name="layers" size={18} />{submitting ? '正在恢复…' : confirmMerge ? '确认局部恢复' : `局部恢复（${selectedBlocks.length}）`}</button>}
           <button type="button" className={diffStyles.restoreVersion} title={archived ? '归档作品只读' : !preview ? '先选择历史版本' : preview.id === chapter.revisionId ? '所选版本已经是当前稿' : '核对所选历史稿后新增修订'} disabled={blocked || archived || !preview || preview.id === chapter.revisionId || previewLoading} onClick={() => void restoreSelected()}><StudioIcon name="history" size={18} />{confirmRestore ? '确认整版恢复' : '恢复为新修订'}</button>
         </div>
+        {confirmRestore && preview && <p className={diffStyles.confirm} role="status">将把版本 {preview.sequence} 的正文恢复为新的当前稿。当前窗口的修改会先保存。</p>}
+        {confirmMerge && <p className={diffStyles.confirm} role="status">将采用所选 {selectedBlocks.length} 处段落差异并新增工作稿版本；原稿、历史与作者定稿保留。请核对中间预览。</p>}
+        <p className={diffStyles.preserve}><StudioIcon name="info" size={20} />局部恢复和整版恢复都会新增修订，原有历史完整保留。</p>
       </aside>
     </div>
-    {confirmRestore && preview && <p className={styles.formError}>将把版本 {preview.sequence} 的正文恢复为新的当前稿。当前窗口的修改会先保存。</p>}
-    {confirmMerge && <p className={diffStyles.confirm} role="status">将采用所选 {selectedBlocks.length} 处段落差异并新增工作稿版本；原稿、历史与作者定稿保留。请核对上方预览。</p>}
     <div className={styles.formActions}><button type="button" className={styles.button} onClick={onClose} disabled={blocked}>关闭</button>
       {(confirmRestore || confirmMerge) && <button type="button" className={styles.button} onClick={() => { setConfirmRestore(false); setConfirmMerge(false) }} disabled={blocked}>取消恢复</button>}
     </div>
