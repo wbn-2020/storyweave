@@ -94,6 +94,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
   const [syncRequired, setSyncRequired] = useState(false)
   const [recoveryPreserved, setRecoveryPreserved] = useState(false)
   const [generationPage, setGenerationPage] = useState<ImageGenerationPage | null>(null), [generationWarning, setGenerationWarning] = useState<string | null>(null)
+  const [readingGenerations, setReadingGenerations] = useState(false)
+  const generationRead = useRef<Promise<ImageGenerationPage | undefined> | null>(null)
+  const mounted = useRef(true), lifetime = useRef(0)
   const [generator, setGenerator] = useState<{ kind: 'cover' | 'portrait'; runId?: string } | null>(null)
   const initialGeneration = useRef(sceneMode ? undefined : initialRunId)
   const [generationState, setGenerationState] = useState({ dirty: false, locked: false, running: false })
@@ -149,8 +152,11 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     const scoped = value.items.filter((item) => sceneMode ? item.kind === 'scene' && item.placeId === scenePlaceId : item.kind !== 'scene')
     setSelectedId((previous) => scoped.some((item) => item.id === previous) ? previous : scoped.find((item) => item.kind !== 'cover')?.id ?? (sceneMode ? null : value.activeCoverId))
   }
+  useEffect(() => {
+    mounted.current = true; setReadingGenerations(false)
+    return () => { mounted.current = false; lifetime.current += 1; generationRead.current = null; needsRead.current = true }
+  }, [])
   useEffect(() => { if (!disabled && needsRead.current) { needsRead.current = false; void reload() } }, [disabled])
-  useEffect(() => () => { needsRead.current = true }, [])
   useEffect(() => { setRecoveryPreserved(false) }, [tool.pending, draft])
   useEffect(() => { if (draft) { editorRef.current?.scrollIntoView({ block: 'nearest' }); editorRef.current?.focus({ preventScroll: true }) } }, [draft?.id])
   useEffect(() => {
@@ -161,7 +167,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
   }, [selected, draft, generator, tool.locked])
 
   async function reload() {
+    if (!mounted.current) return
     if (tool.hasChanges() || tool.hasPending() || generationRef.current.dirty || generationRef.current.locked) { tool.setError('请先保存、放弃当前输入或核对原请求，再刷新图片资料。'); return }
+    const epoch = lifetime.current
     await tool.read(async () => {
       const catalog = await api.getBook({ bookId })
       if (!catalog.ok) return catalog
@@ -187,9 +195,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
       syncRef.current = false; setSyncRequired(false); setConflict(null)
       setPeople(null)
     })
-    if (!sceneMode) {
+    if (!sceneMode && mounted.current && epoch === lifetime.current) {
       const page = await refreshGenerations()
-      if (initialGeneration.current) {
+      if (mounted.current && epoch === lifetime.current && initialGeneration.current) {
         const runId = initialGeneration.current
         initialGeneration.current = undefined
         // 先结束媒体首读再打开原任务，避免生成编辑器的忙锁阻断作品版本同步。
@@ -198,13 +206,24 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
       }
     }
   }
-  async function refreshGenerations() {
-    const result = await request(() => api.listImageGenerations({ bookId }))
-    if (!result.ok || !isImageGenerationPage(result.data, bookId)) {
-      setGenerationWarning(result.ok ? '图片任务列表格式不符，请重新核对。' : result.error.message); return
-    }
-    setGenerationPage(result.data); setGenerationWarning(result.data.warning)
-    return result.data
+  function refreshGenerations(): Promise<ImageGenerationPage | undefined> {
+    if (!mounted.current) return Promise.resolve(undefined)
+    // 主进程串行核对图片资料；复用同次读取，避免重试入口互相触发“服务忙”。
+    if (generationRead.current) return generationRead.current
+    const epoch = lifetime.current
+    setReadingGenerations(true)
+    generationRead.current = request(() => api.listImageGenerations({ bookId })).then((result) => {
+      if (!mounted.current || epoch !== lifetime.current) return
+      if (!result.ok || !isImageGenerationPage(result.data, bookId)) {
+        setGenerationWarning(result.ok ? '图片任务列表格式不符，请重新核对。' : result.error.message); return
+      }
+      setGenerationPage(result.data); setGenerationWarning(result.data.warning)
+      return result.data
+    }).finally(() => {
+      if (!mounted.current || epoch !== lifetime.current) return
+      generationRead.current = null; setReadingGenerations(false)
+    })
+    return generationRead.current
   }
   function generationChanged(value: typeof generationState) {
     generationRef.current = value; setGenerationState(value)
@@ -421,7 +440,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
     {!sceneMode && generationWarning && <div className={styles.warning} role="alert"><p>{generationWarning}</p>
-      <button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => void refreshGenerations()}>重新核对图片任务</button></div>}
+      <button type="button" className={styles.button} disabled={navigationBlocked || readingGenerations} aria-busy={readingGenerations} onClick={() => void refreshGenerations()}>{readingGenerations ? '正在核对图片任务…' : '重新核对图片任务'}</button></div>}
     {!sceneMode && pendingGeneration && !generator && <div className={styles.notice}><p>本书有一份待处理的{pendingGeneration.kind === 'cover' ? '封面' : '立绘'}生成任务：{pendingGeneration.title}。</p>
       <button type="button" className={styles.button} disabled={navigationBlocked || !!draft} onClick={() => openGenerator(pendingGeneration.kind, pendingGeneration.runId)}>恢复原任务</button></div>}
     {tool.readFailure?.requestId && <div className={styles.warning}><p>图片资料读取尚待核对，当前输入仍保留。</p>
