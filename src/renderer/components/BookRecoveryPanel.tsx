@@ -270,6 +270,9 @@ export function BookRecoveryPanel(props: Props) {
     path: currentPreview.packagePath, createdAt: currentPreview.createdAt, bytes: currentPreview.totalBytes, state: 'verified', targetState: currentPreview.targetState })
   const capacity = draftInventory?.capacity
   const capacityRatio = capacity ? capacity.bytes / Math.max(1, capacity.maxBytes) : 0
+  // 文件数和字节数任一触限都会暂停检查点；进度条仍只表示真实字节占用。
+  const capacityNearLimit = capacity && (capacity.files >= capacity.maxFiles * .8 || capacityRatio >= .8)
+  const capacityFull = capacity && (capacity.files >= capacity.maxFiles || capacity.bytes >= capacity.maxBytes)
   const previewState = pending ? '等待回执' : operation ? `${operation}…`
     : currentValidationFailure ? '校验未完成'
       : currentPreview ? targetStateLabels[currentPreview.targetState]
@@ -281,8 +284,9 @@ export function BookRecoveryPanel(props: Props) {
     <p className={recovery.subtitle}>管理您的书库备份，随时恢复重要数据</p>
     <div className={recovery.overview}>
       <section className={recovery.location} aria-label="当前书库位置"><span className={recovery.overviewMark} aria-hidden="true"><StudioIcon name="folder" size={28} /></span><div><h3>当前书库位置</h3><strong>{targetRoot ?? '尚未选择作品库'}</strong></div><dl><div><dt>书籍数</dt><dd>{props.bookCount.toLocaleString()}</dd></div><div><dt>最近备份</dt><dd>{exported?.targetRoot === targetRoot ? new Date(exported.receipt.createdAt).toLocaleString('zh-CN') : '本次会话暂无'}</dd></div></dl></section>
-      <section className={recovery.capacity} aria-label="检查点容量"><span className={recovery.overviewMark} aria-hidden="true"><StudioIcon name="layers" size={28} /></span><div className={recovery.capacityContent}><header><h3>检查点容量</h3>{capacity && capacityRatio >= .8 && <span className={recovery.capacityWarning}><StudioIcon name="warning" size={18} />接近上限</span>}<button type="button" className={recovery.iconButton} disabled={inventoryReading || blocked || !props.draftScope} title="刷新检查点容量" aria-label="刷新检查点容量" onClick={() => setInventoryAttempt((value) => value + 1)}><StudioIcon name="refresh" size={20} /></button></header>
+      <section className={recovery.capacity} aria-label="检查点容量"><span className={recovery.overviewMark} aria-hidden="true"><StudioIcon name="layers" size={28} /></span><div className={recovery.capacityContent}><header><h3>检查点容量</h3>{capacityNearLimit && <span className={recovery.capacityWarning}><StudioIcon name="warning" size={18} />{capacityFull ? '已达上限' : '接近上限'}</span>}<button type="button" className={recovery.iconButton} disabled={inventoryReading || blocked || !props.draftScope} title="刷新检查点容量" aria-label="刷新检查点容量" onClick={() => setInventoryAttempt((value) => value + 1)}><StudioIcon name="refresh" size={20} /></button></header>
         {capacity ? <><dl><div><dt>当前代文件数</dt><dd>{capacity.files.toLocaleString()}<small> / {capacity.maxFiles.toLocaleString()}</small></dd></div><div><dt>容量使用</dt><dd>{Math.round(capacityRatio * 100)}%<progress value={Math.min(1, capacityRatio)} max={1} aria-label="检查点容量使用比例" /></dd></div></dl><p>{formatBytes(capacity.bytes)} / {formatBytes(capacity.maxBytes)} · {draftInventory?.generations.length.toLocaleString()} 代</p></> : <p role={inventoryError ? 'alert' : 'status'}>{inventoryError ?? (inventoryReading ? '正在读取检查点容量…' : '选择作品库后查看')}</p>}
+        {draftInventory?.warnings.map((warning, index) => <p className={recovery.capacityNotice} role="alert" key={`${index}:${warning}`}>{warning}</p>)}
         </div>
       </section>
     </div>
