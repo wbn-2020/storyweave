@@ -16,7 +16,8 @@ import {
 import { countCharacters, documentToText, emptyDocument, parseManuscript, type ManuscriptDocument } from '../../contracts/manuscript'
 import { MAX_DRAFT_FILE_BYTES, parseDraftFile } from '../../contracts/draft'
 import { MAX_KNOWLEDGE_SOURCES, parseKnowledgeSource, parseKnowledgeStatusInput, parseUpgradeKnowledgeInput, type KnowledgeSourceInput, type KnowledgeStatus, type SourceValidity, type UpgradeKnowledgeInput } from '../../contracts/knowledge'
-import { KNOWLEDGE_SCHEMA } from '../knowledge/schema'
+import { KNOWLEDGE_SCHEMA, KNOWLEDGE_ADJUDICATION_SCHEMA } from '../knowledge/schema'
+import { validateKnowledgeAdjudicationsDatabase } from '../knowledge/knowledge-repository'
 import { STORY_SCHEMA } from '../story/schema'
 import { FORESHADOW_THUMBNAIL_SCHEMA } from '../story/thumbnail-schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
@@ -912,6 +913,7 @@ export class StudioRepository {
           LEFT JOIN story_entity_refs e ON e.record_id = r.id
           LEFT JOIN story_event_refs a ON a.record_id = r.id LIMIT 0`).all()
       }
+      if (schemaVersion >= 26) db.prepare('SELECT id, source_a_id, source_b_id, previous_revision_id, revision_id FROM knowledge_adjudications LIMIT 0').all()
       const book = this.readBookMetadata(db, bookId)
       return { bookId, bookRevision: book.revision, updatedAt: book.updatedAt,
         schemaVersion, knowledgeRevision: row.knowledge_revision, requiresUpgrade: schemaVersion === 2 }
@@ -1007,9 +1009,11 @@ export class StudioRepository {
           validateAiPresetsDatabase(db, bookId)
           db.exec(AI_PRESETS_V25_UPGRADE)
         }
+        if (previousVersion < 26) db.exec(KNOWLEDGE_ADJUDICATION_SCHEMA)
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
         validateAiPresetsDatabase(db, bookId)
+        validateKnowledgeAdjudicationsDatabase(db, bookId)
         this.recordMutation(db, 'book.metadata', new Date().toISOString())
         const book = this.readBookMetadata(db, bookId)
         return { ...status, bookRevision: book.revision, updatedAt: book.updatedAt,

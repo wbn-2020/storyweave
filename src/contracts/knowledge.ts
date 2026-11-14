@@ -64,12 +64,42 @@ export interface KnowledgeRevision {
   createdAt: string
 }
 
+export const KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION = 26
+export const KNOWLEDGE_RESOLUTIONS = ['keep_a', 'keep_b', 'intentional'] as const
+export type KnowledgeResolution = typeof KNOWLEDGE_RESOLUTIONS[number]
+
+export interface KnowledgeAdjudicationInput {
+  id: string
+  expectedBookRevision: number
+  expectedItemRevisionId: string
+  sourceAId: string
+  sourceBId: string
+  resolution: KnowledgeResolution
+  note: string
+}
+
+export interface KnowledgeAdjudication {
+  id: string
+  itemId: string
+  sourceAId: string
+  sourceBId: string
+  previousRevisionId: string
+  revisionId: string
+  bookRevision: number
+  knowledgeRevision: number
+  resolution: KnowledgeResolution
+  note: string
+  createdAt: string
+}
+
 export interface KnowledgeItemDetail extends KnowledgeItemSummary {
   bookRevision: number
   knowledgeRevision: number
   sources: KnowledgeSource[]
   /** 最近的修改记录；完整历史保留在知识库内。 */
   revisions: KnowledgeRevision[]
+  /** v26 起返回独立裁决记录；来源和前后修订均为不可变身份。 */
+  adjudications?: KnowledgeAdjudication[]
 }
 
 export interface KnowledgeItemInput { bookId: string; id: string }
@@ -79,7 +109,10 @@ export interface CreateKnowledgeItemInput {
   fields: KnowledgeItemFields
   source?: KnowledgeSourceInput
 }
-export interface UpdateKnowledgeItemInput extends CreateKnowledgeItemInput { id: string }
+export interface UpdateKnowledgeItemInput extends CreateKnowledgeItemInput {
+  id: string
+  adjudication?: KnowledgeAdjudicationInput
+}
 export interface ListKnowledgeItemsInput {
   bookId: string
   kind?: KnowledgeKind
@@ -125,6 +158,7 @@ export interface UpgradeKnowledgeInput {
 export const MAX_KNOWLEDGE_ITEMS = 100_000
 export const MAX_KNOWLEDGE_SOURCES = 200
 export const MAX_KNOWLEDGE_HISTORY_PAGE = 50
+export const MAX_KNOWLEDGE_ADJUDICATIONS = 200
 
 function invalid(message: string): never {
   throw new DomainError({ code: 'INVALID_INPUT', message })
@@ -208,10 +242,59 @@ export function parseCreateKnowledgeItem(value: unknown): CreateKnowledgeItemInp
 }
 
 export function parseUpdateKnowledgeItem(value: unknown): UpdateKnowledgeItemInput {
-  const data = record(value, ['bookId', 'id', 'expectedKnowledgeRevision', 'fields', 'source'], '更新知识条目请求')
-  const { id, ...input } = data
+  const data = record(value, ['bookId', 'id', 'expectedKnowledgeRevision', 'fields', 'source', 'adjudication'], '更新知识条目请求')
+  const { id, adjudication, ...input } = data
+  if (adjudication !== undefined && data.source !== undefined) return invalid('裁决只能使用已登记的固定来源，请先保存新增来源再进行裁决。')
   // 更新只追加显式来源，不能以整条覆盖悄悄删除已记录的正文出处。
-  return { ...parseCreateKnowledgeItem(input), id: requiredId(id).toLowerCase() }
+  return { ...parseCreateKnowledgeItem(input), id: requiredId(id).toLowerCase(),
+    ...(adjudication === undefined ? {} : { adjudication: parseKnowledgeAdjudication(adjudication) }) }
+}
+
+export function parseKnowledgeAdjudication(value: unknown): KnowledgeAdjudicationInput {
+  const data = record(value, ['id', 'expectedBookRevision', 'expectedItemRevisionId', 'sourceAId', 'sourceBId', 'resolution', 'note'], '知识裁决')
+  const sourceAId = requiredId(data.sourceAId).toLowerCase(), sourceBId = requiredId(data.sourceBId).toLowerCase()
+  if (sourceAId === sourceBId) return invalid('证据 A 与 B 必须是两条不同的已登记来源。')
+  const resolution = choice(data.resolution, KNOWLEDGE_RESOLUTIONS, '裁决决定')
+  const note = optionalText(data.note, '裁决说明', 2000)
+  if (note.includes('\0') || (resolution === 'intentional' && !note.trim())) return invalid('有意安排须填写说明，裁决说明不能包含空字符。')
+  return { id: requiredId(data.id).toLowerCase(), expectedBookRevision: requiredInteger(data.expectedBookRevision, '作品版本'),
+    expectedItemRevisionId: requiredId(data.expectedItemRevisionId).toLowerCase(), sourceAId, sourceBId, resolution, note }
+}
+
+/** 明确保留一侧时只替换说明并记录采纳；知识性质、档案和两侧原出处始终保留。 */
+export function knowledgeAdjudicationFields(previous: KnowledgeItemFields, a: Pick<KnowledgeSource, 'quote'>,
+  b: Pick<KnowledgeSource, 'quote'>, resolution: KnowledgeResolution): KnowledgeItemFields {
+  const { kind, name, aliases, summary, nature, authorDecision, freshness, characterProfile } = previous
+  return parseKnowledgeFields({ kind, name, aliases, summary, nature, authorDecision, freshness, conflictState: 'explained',
+    ...(characterProfile === undefined ? {} : { characterProfile }),
+    ...(resolution === 'intentional' ? {} : { summary: resolution === 'keep_a' ? a.quote : b.quote, authorDecision: 'adopted' }) })
+}
+
+/** 成功信封也必须对应同一裁决、两侧来源及固定修订，才能推进界面版本。 */
+export function isKnowledgeAdjudicationReceiptFor(input: UpdateKnowledgeItemInput, value: KnowledgeItemDetail): boolean {
+  try {
+    const expected = input.adjudication
+    if (!expected || !value || value.bookId !== input.bookId || value.id !== input.id ||
+        value.bookRevision !== expected.expectedBookRevision + 1 || value.knowledgeRevision !== input.expectedKnowledgeRevision + 1) return false
+    const saved = value.adjudications?.find((entry) => entry.id === expected.id), revision = value.revisions[0], previous = value.revisions[1]
+    const a = value.sources.find((entry) => entry.id === expected.sourceAId), b = value.sources.find((entry) => entry.id === expected.sourceBId)
+    if (!saved || !revision || !previous || !a || !b || saved.itemId !== input.id || a.itemId !== input.id || b.itemId !== input.id ||
+        a.bookId !== input.bookId || b.bookId !== input.bookId || a.validity !== 'valid' || b.validity !== 'valid' ||
+        saved.sourceAId !== expected.sourceAId || saved.sourceBId !== expected.sourceBId ||
+        saved.previousRevisionId !== expected.expectedItemRevisionId || saved.revisionId !== revision.id ||
+        saved.resolution !== expected.resolution || saved.note !== expected.note || saved.bookRevision !== value.bookRevision ||
+        saved.knowledgeRevision !== value.knowledgeRevision || revision.itemId !== input.id || revision.reason !== 'updated' ||
+        revision.knowledgeRevision !== value.knowledgeRevision || previous.id !== expected.expectedItemRevisionId || previous.itemId !== input.id ||
+        !Number.isSafeInteger(previous.knowledgeRevision) || previous.knowledgeRevision < 1 || previous.knowledgeRevision > input.expectedKnowledgeRevision ||
+        saved.createdAt !== revision.createdAt || saved.createdAt !== value.updatedAt) return false
+    requiredId(revision.id)
+    const { kind, name, aliases, summary, nature, authorDecision, freshness, conflictState, characterProfile } = value
+    const fields = parseKnowledgeFields({ kind, name, aliases, summary, nature, authorDecision, freshness, conflictState,
+      ...(characterProfile === undefined ? {} : { characterProfile }) })
+    return JSON.stringify(fields) === JSON.stringify(parseKnowledgeFields(input.fields)) &&
+      JSON.stringify(fields) === JSON.stringify(parseKnowledgeFields(revision.fields)) &&
+      JSON.stringify(fields) === JSON.stringify(knowledgeAdjudicationFields(parseKnowledgeFields(previous.fields), a, b, expected.resolution))
+  } catch { return false }
 }
 
 export function parseListKnowledgeItems(value: unknown): ListKnowledgeItemsInput {

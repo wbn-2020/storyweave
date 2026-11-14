@@ -1,4 +1,4 @@
-import { KNOWLEDGE_SCHEMA, CHARACTER_PROFILE_SCHEMA } from '../knowledge/schema'
+import { KNOWLEDGE_SCHEMA, CHARACTER_PROFILE_SCHEMA, KNOWLEDGE_ADJUDICATION_SCHEMA } from '../knowledge/schema'
 import { STORY_SCHEMA } from '../story/schema'
 import { FORESHADOW_THUMBNAIL_SCHEMA } from '../story/thumbnail-schema'
 import { MEMORY_SCHEMA } from '../memory/schema'
@@ -18,7 +18,7 @@ import { WEAVE_SCHEMA } from '../workbench/weave-schema'
 import { REALM_SCHEMA } from '../workbench/realm-schema'
 
 export const STUDIO_SCHEMA_VERSION = 3
-export const BOOK_SCHEMA_VERSION = 25
+export const BOOK_SCHEMA_VERSION = 26
 export const STUDIO_APPLICATION_ID = 0x53545753
 export const BOOK_APPLICATION_ID = 0x53545742
 
@@ -156,4 +156,5 @@ export const BOOK_V21_SCHEMA = `${BOOK_V20_SCHEMA}${SCENE_MEDIA_SCHEMA}`
 export const BOOK_V22_SCHEMA = `${BOOK_V21_SCHEMA}${NOTE_MATERIAL_SCHEMA}`
 export const BOOK_V23_SCHEMA = `${BOOK_V22_SCHEMA}${NOTE_THUMBNAIL_SCHEMA}`
 export const BOOK_V24_SCHEMA = `${BOOK_V23_SCHEMA}${FORESHADOW_THUMBNAIL_SCHEMA}`
-export const BOOK_SCHEMA = `${BOOK_V24_SCHEMA}${AI_PRESETS_V25_UPGRADE}`
+export const BOOK_V25_SCHEMA = `${BOOK_V24_SCHEMA}${AI_PRESETS_V25_UPGRADE}`
+export const BOOK_SCHEMA = `${BOOK_V25_SCHEMA}${KNOWLEDGE_ADJUDICATION_SCHEMA}`

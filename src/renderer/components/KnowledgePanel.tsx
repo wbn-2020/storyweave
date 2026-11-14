@@ -4,6 +4,7 @@ import { DomainError } from '../../contracts/api'
 import { CHARACTER_PROFILE_SCHEMA_VERSION } from '../../contracts/character-profile'
 import {
   AUTHOR_DECISIONS, CONFLICT_STATES, KNOWLEDGE_FRESHNESS, KNOWLEDGE_KINDS, KNOWLEDGE_NATURES,
+  KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION,
   parseKnowledgeFields, parseKnowledgeSource,
   type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeItemFields, type KnowledgeItemPage,
   type KnowledgeKind, type KnowledgeNature, type KnowledgeSource, type KnowledgeSourceInput, type KnowledgeStatus, type UpdateKnowledgeItemInput,
@@ -16,6 +17,7 @@ import shared from '../StellarShared.module.css'
 import styles from './StellarKnowledge.module.css'
 import { StudioIcon } from './StudioIcon'
 import { SavedPortrait, useSavedPortraits } from './SavedPortrait'
+import { KnowledgeAdjudicationPanel } from './KnowledgeAdjudicationPanel'
 
 interface Props {
   initialKind?: KnowledgeKind
@@ -196,7 +198,8 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   const [statusRefresh, setStatusRefresh] = useState(0)
   const [upgradeConfirmed, setUpgradeConfirmed] = useState(false)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
-  const [activeView, setActiveView] = useState<'entries' | 'worldModels' | 'namer'>('entries')
+  const [activeView, setActiveView] = useState<'entries' | 'worldModels' | 'namer' | 'adjudication'>('entries')
+  const [adjudicationDraft, setAdjudicationDraft] = useState<string | null>(null)
   const [namerGenre, setNamerGenre] = useState<'xianxia' | 'scifi' | 'urban'>('xianxia')
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<{ search: string; kind: KnowledgeKind | ''; nature: KnowledgeNature | ''; reviewOnly: boolean }>({ search: '', kind: initialKind ?? '', nature: '', reviewOnly: false })
@@ -233,6 +236,7 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   const knowledgeReady = status !== null && !status.requiresUpgrade
   const characterProfileReady = status !== null && status.schemaVersion >= CHARACTER_PROFILE_SCHEMA_VERSION
   const abilitiesReady = status !== null && status.schemaVersion >= 17
+  const adjudicationReady = status !== null && status.schemaVersion >= KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION
   const initialSelection = useRef(initialId)
   useEffect(() => {
     if (!knowledgeReady || unavailable || !initialSelection.current) return
@@ -282,14 +286,14 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   }, [api, book.book.id, filters, offset, refresh, knowledgeReady])
 
   async function upgrade() {
-    if (!upgradeConfirmed || !status || (!status.requiresUpgrade && abilitiesReady) || mode !== 'view' ||
+    if (!upgradeConfirmed || !status || (!status.requiresUpgrade && abilitiesReady && adjudicationReady) || mode !== 'view' ||
         dirtyRef.current || archived || busy || pendingMessage || writeLock.current || readLock.current) return
     writeLock.current = true; setWriting(true); setMessage(null)
     try {
       await onUpgrade((saved) => {
         if (!mounted.current) return
-        if (saved.bookId !== book.book.id || saved.requiresUpgrade || saved.schemaVersion < CHARACTER_PROFILE_SCHEMA_VERSION) { setMessage('启用回执尚未确认人物档案可用，请保留窗口并核对结果。'); return }
-        setStatus(saved); setUpgradeConfirmed(false); setRefresh((value) => value + 1)
+        if (saved.bookId !== book.book.id || saved.requiresUpgrade || saved.schemaVersion < KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION) { setMessage('启用回执尚未确认知识裁决可用，请保留窗口并核对结果。'); return }
+        setStatus(saved); setDetail(null); resetSource(); setUpgradeConfirmed(false); setRefresh((value) => value + 1)
       })
     } catch { if (mounted.current) setMessage('启用结果尚未确认，请保留窗口并核对回执。') }
     finally { writeLock.current = false; if (mounted.current) setWriting(false) }
@@ -409,7 +413,7 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   function filterKind(value: string) { if (mayLeave()) { setFilters({ ...filters, kind: value as KnowledgeKind | '' }); setOffset(0); setActiveView('entries') } }
   function filterNature(value: string) { if (mayLeave()) { setFilters({ ...filters, nature: value as KnowledgeNature | '' }); setOffset(0) } }
   const sourceBlock = sourceChapter?.document.content.find((block) => block.attrs.id === blockId)
-  const draftJson = pendingMessage && mode !== 'view' ? JSON.stringify({
+  const draftJson = pendingMessage && activeView === 'adjudication' ? adjudicationDraft : pendingMessage && mode !== 'view' ? JSON.stringify({
     format: 'storyweave-knowledge-draft', version: 1, bookId: book.book.id,
     operation: mode === 'edit' ? 'knowledge.update' : 'knowledge.create',
     ...(mode === 'edit' && detail ? { itemId: detail.id } : {}), expectedKnowledgeRevision: expectedRevision,
@@ -419,7 +423,7 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   }, null, 2) : null
   const panelError = [message, error].filter((value, index, values) => value && value !== pendingMessage && values.indexOf(value) === index).join(' ') || null
 
-  return <Dialog title="故事设定库" className={styles.libraryPage} wide busy={unavailable} error={panelError} onClose={() => { if (mayLeave()) onClose() }}><div className={styles.panel} data-mode={mode}>
+  return <Dialog title={activeView === 'adjudication' ? '知识候选与裁决' : '故事设定库'} className={styles.libraryPage} wide busy={unavailable} error={panelError} onClose={() => { if (mayLeave()) onClose() }}><div className={styles.panel} data-mode={mode}>
     <div className={styles.intro}>
       <div>
         <p>{book.book.title}</p>
@@ -436,7 +440,7 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
       <h3>操作结果尚未确认</h3>
       <p role="status">{pendingMessage}</p>
       <button className={shared.button} type="button" disabled={checkingReceipt} onClick={onCheckReceipt}>{checkingReceipt ? '正在核对…' : '核对回执'}</button>
-      {draftJson && <><label>条目草稿副本（只读，可全选复制）<textarea className={styles.draftCopy} readOnly value={draftJson} rows={9} spellCheck={false} onFocus={(event) => event.currentTarget.select()} /></label><p>请将以上内容复制到安全位置。此副本保留条目与新增来源；恢复页不会自动导入或重新提交它。</p></>}
+      {draftJson && <><label>条目与裁决草稿副本（只读，可全选复制）<textarea className={styles.draftCopy} readOnly value={draftJson} rows={9} spellCheck={false} onFocus={(event) => event.currentTarget.select()} /></label><p>请将以上内容复制到安全位置。此副本保留当前条目或裁决及固定来源；恢复页不会自动导入或重新提交它。</p></>}
       <label className={`${shared.checkLabel} ${styles.upgradeCheck}`}><input type="checkbox" checked={recoveryConfirmed} disabled={checkingReceipt} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />{draftJson ? '我已复制保留条目草稿，了解原操作可能已写入。' : '我了解知识库启用操作可能已成功，需要在恢复后核对结果。'}</label>
       <button className={shared.button} type="button" disabled={!recoveryConfirmed || checkingReceipt} onClick={() => { if (pendingMessage && recoveryConfirmed && !checkingReceipt) onRecover() }}>进入草稿与恢复</button>
     </section>}
@@ -446,17 +450,31 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
     {!statusLoading && !status && <button className={shared.button} type="button" disabled={unavailable} onClick={() => { setMessage(null); setStatusRefresh((value) => value + 1) }}>重新检查知识库</button>}
     {status?.requiresUpgrade && <section className={styles.upgrade} aria-label="启用本书知识库">
       <h3>为这本书启用角色卡与设定库</h3>
-      <p>当前作品使用旧版数据结构。启用时会先保存本书数据库的独立备份，再升级数据结构，以存储角色档案、世界观规则、来源与修改记录。</p>
+      <p>当前作品使用旧版数据结构。启用时会先保存本书数据库的独立备份，再升级至 v26，以存储角色档案、世界观规则、来源、修改与独立裁决记录。升级后须使用支持 v26 的程序。</p>
       <label className={`${shared.checkLabel} ${styles.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我了解升级会修改本书数据库，并同意先备份后启用。</label>
       <button className={shared.primaryButton} type="button" disabled={unavailable || archived || !upgradeConfirmed} onClick={() => void upgrade()}>{writing || busy ? '正在备份并启用…' : '备份并启用知识库'}</button>
     </section>}
     {status?.backupPath && <p className={styles.backupPath}>升级前备份：{status.backupPath}</p>}
     {knowledgeReady && !abilitiesReady && <details className={styles.upgrade}>
       <summary>可选：启用角色档案与六维能力数值</summary>
-      <p>升级至 v17 后可保存八维文字档案、作者明确设定的六维能力，以及工坊任务与采用回执。</p>
+      <p>升级至当前 v26 后可保存八维文字档案、作者明确设定的六维能力、工坊采用回执及独立知识裁决。先保留独立备份，升级后须使用支持 v26 的程序。</p>
       <label className={`${shared.checkLabel} ${styles.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived || mode !== 'view'} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份本书数据库，再启用人物档案。</label>
       <button className={shared.button} type="button" disabled={unavailable || archived || mode !== 'view' || !upgradeConfirmed} onClick={() => void upgrade()}>{writing || busy ? '正在备份并启用…' : '备份并启用人物档案'}</button>
     </details>}
+    {knowledgeReady && abilitiesReady && !adjudicationReady && <details className={styles.upgrade}>
+      <summary>可选：启用独立 A/B 知识裁决</summary>
+      <p>先备份本书数据库，再升级至 v26，以保存两侧固定来源、保留 A/B 或有意安排及前后修订。原条目和来源完整保留；升级后的作品须使用支持 v26 的程序。</p>
+      <label className={`${shared.checkLabel} ${styles.upgradeCheck}`}><input type="checkbox" checked={upgradeConfirmed} disabled={unavailable || archived || mode !== 'view'} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我同意先备份本书数据库，再启用知识裁决。</label>
+      <button className={shared.button} type="button" disabled={unavailable || archived || mode !== 'view' || !upgradeConfirmed} onClick={() => void upgrade()}>{writing || busy ? '正在备份并启用…' : '备份并启用知识裁决'}</button>
+    </details>}
+
+    {knowledgeReady && activeView === 'adjudication' && detail && adjudicationReady && <>
+      <KnowledgeAdjudicationPanel key={`${detail.id}:${detail.revisions[0]?.id ?? ''}`} book={book} detail={detail} disabled={unavailable}
+        onUpdate={onUpdate} onDirtyChange={setDirtyState} onDraftChange={setAdjudicationDraft} onShowSource={(source) => void showSource(source)}
+        onBack={() => { if (mayLeave()) { resetSource(); setActiveView('entries') } }}
+        onSaved={(saved) => { setDetail(saved); resetSource(); setRefresh((value) => value + 1); setMessage(null) }} />
+      {evidence && <Evidence source={evidence.source} revision={evidence.revision} onClose={() => setEvidence(null)} />}
+    </>}
 
     {/* 子视图 A：StarWriter 9种世界观流派模型预设 */}
     {knowledgeReady && activeView === 'worldModels' && (
@@ -630,6 +648,8 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
               </div>
             </div>
             <div className={styles.listActions}><button className={shared.primaryButton} type="button" disabled={unavailable || archived} onClick={() => beginEdit(false)}>编辑卡片</button>
+              <button className={shared.button} type="button" disabled={unavailable || !adjudicationReady} onClick={() => { if (mayLeave()) { resetSource(); setActiveView('adjudication') } }}><StudioIcon name="warning" size={18} />{adjudicationReady ? '冲突裁决' : '需先启用知识裁决'}</button>
+              <button className={shared.textButton} type="button" disabled={unavailable} onClick={() => void selectItem(detail.id)}>重新读取当前条目</button>
               {detail.kind === 'person' && onForge && <details className={styles.forgeActions}><summary>AI 工坊</summary><div><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'fill') }}>AI 补全空白</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'extract') }}>从正文提炼</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'audition') }}>角色试戏</button></div></details>}
             </div>
           </div>
@@ -638,7 +658,7 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
             <span>采纳状态：{decisionLabels[detail.authorDecision]}</span>
             <span>新鲜度：{freshnessLabels[detail.freshness]}</span>
             <span>一致性：{conflictLabels[detail.conflictState]}</span>
-          </div></details>
+          </div>{detail.adjudications?.[0] && <p>最近独立裁决：{{ keep_a: '保留 A', keep_b: '保留 B', intentional: '标为有意安排' }[detail.adjudications[0].resolution]} · {detail.adjudications[0].revisionId === detail.revisions[0]?.id ? '对应当前修订' : '之后已有条目修订，请查看固定历史'}</p>}</details>
           {detail.nature === 'future_plan' && <p className={styles.natureNote}>这是尚未写成的未来计划，不作为当前已发生事实。</p>}
           {detail.nature === 'ai_inference' && <p className={styles.natureNote}>这是推断记录，需要依据与作者判断，不能自动视为已成立。</p>}
 

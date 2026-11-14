@@ -70,3 +70,31 @@ export const CHARACTER_PROFILE_SCHEMA = `
     CHECK (character_profile_json IS NULL OR
       (kind = 'person' AND json_valid(character_profile_json) AND json_type(character_profile_json) = 'object'));
 `
+
+// 裁决仅追加：两侧来源和前后修订受同一条目身份外键约束，不改写既有证据。
+export const KNOWLEDGE_ADJUDICATION_SCHEMA = `
+  CREATE UNIQUE INDEX knowledge_sources_adjudication_identity ON knowledge_sources(item_id, id);
+  CREATE TABLE knowledge_adjudications (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id),
+    source_a_id TEXT NOT NULL,
+    source_b_id TEXT NOT NULL,
+    previous_revision_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL UNIQUE,
+    book_revision INTEGER NOT NULL CHECK (book_revision > 0),
+    resolution TEXT NOT NULL CHECK (resolution IN ('keep_a', 'keep_b', 'intentional')),
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (item_id, source_a_id) REFERENCES knowledge_sources(item_id, id),
+    FOREIGN KEY (item_id, source_b_id) REFERENCES knowledge_sources(item_id, id),
+    FOREIGN KEY (item_id, previous_revision_id) REFERENCES knowledge_item_revisions(item_id, id),
+    FOREIGN KEY (item_id, revision_id) REFERENCES knowledge_item_revisions(item_id, id),
+    CHECK (source_a_id <> source_b_id),
+    CHECK (previous_revision_id <> revision_id)
+  ) STRICT;
+  CREATE INDEX knowledge_adjudications_by_item ON knowledge_adjudications(item_id, book_revision DESC);
+  CREATE TRIGGER immutable_knowledge_adjudication_update BEFORE UPDATE ON knowledge_adjudications
+  BEGIN SELECT RAISE(ABORT, 'Knowledge adjudications are immutable'); END;
+  CREATE TRIGGER immutable_knowledge_adjudication_delete BEFORE DELETE ON knowledge_adjudications
+  BEGIN SELECT RAISE(ABORT, 'Knowledge adjudications are immutable'); END;
+`

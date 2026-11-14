@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { DomainError, requiredId } from '../../contracts/api'
 import {
-  KNOWLEDGE_KINDS, MAX_KNOWLEDGE_HISTORY_PAGE, MAX_KNOWLEDGE_ITEMS, MAX_KNOWLEDGE_SOURCES,
+  KNOWLEDGE_KINDS, KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION, MAX_KNOWLEDGE_ADJUDICATIONS,
+  MAX_KNOWLEDGE_HISTORY_PAGE, MAX_KNOWLEDGE_ITEMS, MAX_KNOWLEDGE_SOURCES,
+  knowledgeAdjudicationFields, parseKnowledgeAdjudication,
   parseCreateKnowledgeItem, parseKnowledgeFields, parseKnowledgeItemInput, resolveKnowledgeFields,
   parseKnowledgeSource, parseListKnowledgeItems, parseUpdateKnowledgeItem,
   type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeItemFields,
   type KnowledgeItemInput, type KnowledgeItemPage, type KnowledgeItemSummary,
   type KnowledgeRevision, type KnowledgeSource, type KnowledgeSourceInput,
   type ListKnowledgeItemsInput, type UpdateKnowledgeItemInput,
+  type KnowledgeAdjudication, type KnowledgeAdjudicationInput,
 } from '../../contracts/knowledge'
 import type { StudioRepository } from '../storage/studio-repository'
 
@@ -28,6 +31,13 @@ interface HistoryRow {
   reason: KnowledgeRevision['reason']; created_at: string
 }
 interface BookState { id: string; revision: number; knowledge_revision: number; archived_at: string | null }
+interface AdjudicationRow {
+  id: string; item_id: string; source_a_id: string; source_b_id: string
+  previous_revision_id: string; revision_id: string; book_revision: number
+  resolution: KnowledgeAdjudication['resolution']; note: string; created_at: string
+  knowledge_revision: number; previous_knowledge_revision: number; fields_json: string; previous_fields_json: string
+  source_a_quote: string; source_b_quote: string; revision_created_at: string; reason: string; intervening_revision: number
+}
 
 const ITEM_COLUMNS = `id, book_id, kind, name, aliases_json, summary, nature,
   author_decision, freshness, conflict_state, created_at, updated_at`
@@ -83,6 +93,71 @@ function readItem(db: Database.Database, bookId: string, id: string): ItemRow {
   const row = db.prepare(`SELECT ${itemColumns(db)} FROM knowledge_items WHERE book_id = ? AND id = ?`).get(bookId, id) as ItemRow | undefined
   if (!row) throw new DomainError({ code: 'NOT_FOUND', message: '当前作品中不存在这个知识条目。' })
   return row
+}
+
+function readAdjudications(db: Database.Database, state: BookState, itemId: string, revisionId: string | null = null): KnowledgeAdjudication[] {
+  if ((db.pragma('user_version', { simple: true }) as number) < KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION) return []
+  const rows = db.prepare(`SELECT a.*, r.knowledge_revision, r.fields_json, r.created_at AS revision_created_at, r.reason,
+      p.knowledge_revision AS previous_knowledge_revision, p.fields_json AS previous_fields_json,
+      sa.quote AS source_a_quote, sb.quote AS source_b_quote,
+      EXISTS (SELECT 1 FROM knowledge_item_revisions h WHERE h.item_id = a.item_id
+        AND h.knowledge_revision > p.knowledge_revision AND h.knowledge_revision < r.knowledge_revision) AS intervening_revision
+    FROM knowledge_adjudications a
+    LEFT JOIN knowledge_item_revisions r ON r.id = a.revision_id AND r.item_id = a.item_id
+    LEFT JOIN knowledge_item_revisions p ON p.id = a.previous_revision_id AND p.item_id = a.item_id
+    LEFT JOIN knowledge_sources sa ON sa.id = a.source_a_id AND sa.item_id = a.item_id AND sa.book_id = @bookId
+    LEFT JOIN knowledge_sources sb ON sb.id = a.source_b_id AND sb.item_id = a.item_id AND sb.book_id = @bookId
+    WHERE a.item_id = @itemId AND (@revisionId IS NULL OR a.revision_id = @revisionId) ORDER BY a.book_revision DESC LIMIT @limit`)
+    .all({ bookId: state.id, itemId, revisionId, limit: MAX_KNOWLEDGE_ADJUDICATIONS + 1 }) as AdjudicationRow[]
+  if (rows.length > MAX_KNOWLEDGE_ADJUDICATIONS) throw storageFailure()
+  return rows.map((row) => {
+    const parsed = parseKnowledgeAdjudication({ id: row.id, expectedBookRevision: row.book_revision - 1,
+      expectedItemRevisionId: row.previous_revision_id, sourceAId: row.source_a_id, sourceBId: row.source_b_id,
+      resolution: row.resolution, note: row.note })
+    if (parsed.id !== row.id || parsed.expectedItemRevisionId !== row.previous_revision_id ||
+        parsed.sourceAId !== row.source_a_id || parsed.sourceBId !== row.source_b_id || parsed.note !== row.note ||
+        requiredId(row.revision_id).toLowerCase() !== row.revision_id || row.item_id !== itemId ||
+        row.revision_id === row.previous_revision_id || row.book_revision > state.revision ||
+        !Number.isSafeInteger(row.knowledge_revision) || row.knowledge_revision < 1 || row.knowledge_revision > state.knowledge_revision ||
+        !Number.isSafeInteger(row.previous_knowledge_revision) || row.previous_knowledge_revision < 1 ||
+        row.previous_knowledge_revision >= row.knowledge_revision || row.reason !== 'updated' || row.intervening_revision !== 0 ||
+        row.created_at !== row.revision_created_at || new Date(row.created_at).toISOString() !== row.created_at ||
+        [row.source_a_quote, row.source_b_quote].some((quote) => typeof quote !== 'string' || !quote.trim() || quote.length > 2000)) throw storageFailure()
+    const expected = knowledgeAdjudicationFields(storedFields(JSON.parse(row.previous_fields_json)),
+      { quote: row.source_a_quote }, { quote: row.source_b_quote }, row.resolution)
+    if (JSON.stringify(storedFields(JSON.parse(row.fields_json))) !== JSON.stringify(expected)) throw storageFailure()
+    return { id: row.id, itemId, sourceAId: row.source_a_id, sourceBId: row.source_b_id,
+      previousRevisionId: row.previous_revision_id, revisionId: row.revision_id, bookRevision: row.book_revision,
+      knowledgeRevision: row.knowledge_revision, resolution: row.resolution, note: row.note, createdAt: row.created_at }
+  })
+}
+
+/** 记忆只带入该固定修订自身的裁决；历史解释不能自动套用到作者后来改过的条目。 */
+export function readKnowledgeAdjudicationContext(db: Database.Database, bookId: string, itemId: string, revisionId: string): string | null {
+  return perform(() => {
+    const [entry] = readAdjudications(db, readState(db, bookId), itemId, revisionId)
+    if (!entry) return null
+    const rows = db.prepare('SELECT id, quote FROM knowledge_sources WHERE item_id = ? AND book_id = ? AND id IN (?, ?)')
+      .all(itemId, bookId, entry.sourceAId, entry.sourceBId) as { id: string; quote: string }[]
+    const a = rows.find((row) => row.id === entry.sourceAId), b = rows.find((row) => row.id === entry.sourceBId)
+    if (!a || !b) throw storageFailure()
+    const label = { keep_a: '保留 A；B 仅留存为被裁定的原出处', keep_b: '保留 B；A 仅留存为被裁定的原出处', intentional: '作者标为有意安排；两侧须按作者说明理解' }[entry.resolution]
+    return [`作者固定冲突裁决：${label}`, `证据 A：${a.quote}`, `证据 B：${b.quote}`,
+      `裁决说明：${entry.note || '未另附说明'}`, `裁决编号：${entry.id}`].join('\n')
+  })
+}
+
+/** 升级与恢复均核对裁决对应的真实前后字段；外键存在不能代替业务一致性。 */
+export function validateKnowledgeAdjudicationsDatabase(db: Database.Database, bookId: string): void {
+  perform(() => {
+    if ((db.pragma('user_version', { simple: true }) as number) < KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION) return
+    const state = readState(db, bookId)
+    const rows = db.prepare('SELECT DISTINCT item_id FROM knowledge_adjudications').iterate() as Iterable<{ item_id: string }>
+    for (const row of rows) {
+      readItem(db, bookId, row.item_id)
+      readAdjudications(db, state, row.item_id)
+    }
+  })
 }
 
 export class KnowledgeRepository {
@@ -151,13 +226,14 @@ export class KnowledgeRepository {
   updateItem(input: UpdateKnowledgeItemInput): KnowledgeItemDetail {
     return perform(() => {
       const data = parseUpdateKnowledgeItem(input)
-      return this.writeItem(data, data.id)
+      return this.writeItem(data, data.id, [], data.adjudication)
     })
   }
 
   updateItemWithSources(input: UpdateKnowledgeItemInput, expectedRevisionId: string, sources: readonly KnowledgeSourceInput[]): KnowledgeItemDetail {
     return perform(() => {
       const data = parseUpdateKnowledgeItem(input)
+      if (data.adjudication) throw new DomainError({ code: 'INVALID_INPUT', message: '独立知识裁决不能附加在 AI 来源采用中。' })
       const expected = requiredId(expectedRevisionId).toLowerCase()
       if (data.source || !sources.length || sources.length > MAX_KNOWLEDGE_SOURCES) {
         throw new DomainError({ code: 'INVALID_INPUT', message: '关联或修订须提供明确且数量受限的来源集合。' })
@@ -174,7 +250,8 @@ export class KnowledgeRepository {
     })
   }
 
-  private writeItem(data: CreateKnowledgeItemInput, existingId?: string, additionalSources: readonly KnowledgeSourceInput[] = []): KnowledgeItemDetail {
+  private writeItem(data: CreateKnowledgeItemInput, existingId?: string, additionalSources: readonly KnowledgeSourceInput[] = [],
+    adjudication?: KnowledgeAdjudicationInput): KnowledgeItemDetail {
     const { db } = this.studio.getKnowledgeDatabase(data.bookId)
     const id = existingId ?? randomUUID()
     const detail = db.transaction(() => {
@@ -188,6 +265,28 @@ export class KnowledgeRepository {
       const previousFields = previous ? itemFields(previous) : null
       // 旧客户端和 AI 修订可能只提交通用字段；省略档案须保留，显式空对象才清空。
       const fields = resolveKnowledgeFields(data.fields, previousFields ?? undefined)
+      if (adjudication) {
+        if (!existingId || !previousFields || data.source || additionalSources.length) throw storageFailure()
+        if ((db.pragma('user_version', { simple: true }) as number) < KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION) {
+          throw new DomainError({ code: 'FORBIDDEN', message: '请先备份并启用 v26 知识裁决，普通知识条目仍可继续编辑。' })
+        }
+        const current = this.readDetail(db, data.bookId, existingId)
+        if (state.revision !== adjudication.expectedBookRevision || current.revisions[0]?.id !== adjudication.expectedItemRevisionId) {
+          throw new DomainError({ code: 'REVISION_CONFLICT', message: '作品或条目已有新修订，请保留裁决草稿，重新读取两侧证据后再决定。' })
+        }
+        const a = current.sources.find((source) => source.id === adjudication.sourceAId)
+        const b = current.sources.find((source) => source.id === adjudication.sourceBId)
+        if (!a || !b || a.validity !== 'valid' || b.validity !== 'valid') {
+          throw new DomainError({ code: 'INVALID_INPUT', message: '两侧证据必须属于当前条目且出处可核对，请先补全来源。' })
+        }
+        if (JSON.stringify(fields) !== JSON.stringify(knowledgeAdjudicationFields(previousFields, a, b, adjudication.resolution))) {
+          throw new DomainError({ code: 'INVALID_INPUT', message: '裁决后的字段与固定证据或所选决定不一致，请重新预览。' })
+        }
+        if ((current.adjudications?.length ?? 0) >= MAX_KNOWLEDGE_ADJUDICATIONS ||
+            db.prepare('SELECT 1 FROM knowledge_adjudications WHERE id = ?').get(adjudication.id)) {
+          throw new DomainError({ code: 'INVALID_INPUT', message: '裁决编号已存在或条目的裁决记录已达上限，请核对原回执；本次没有重复写入。' })
+        }
+      }
       if (fields.characterProfile && fields.kind !== 'person') throw new DomainError({ code: 'INVALID_INPUT', message: '此人物仍有档案，请先明确清空档案再更改条目类型；历史档案会保留。' })
       const profileEnabled = hasCharacterProfileColumn(db)
       if (fields.characterProfile?.abilities && (db.pragma('user_version', { simple: true }) as number) < 17) {
@@ -220,7 +319,7 @@ export class KnowledgeRepository {
         // 相同出处再次提交不新增重复记录，也不会单独制造一个修改版本。
         return (!existingId || !this.hasSource(db, existingId, source)) && values.findIndex((item) => JSON.stringify(item) === JSON.stringify(source)) === index
       })
-      if (previous && JSON.stringify(previousFields) === JSON.stringify(fields) && sources.length === 0) {
+      if (previous && !adjudication && JSON.stringify(previousFields) === JSON.stringify(fields) && sources.length === 0) {
         return this.readDetail(db, data.bookId, id)
       }
       if (!previous) {
@@ -252,6 +351,12 @@ export class KnowledgeRepository {
       const bookRevision = state.revision + 1
       db.prepare(`INSERT INTO knowledge_item_revisions (id, item_id, knowledge_revision, fields_json, reason, created_at)
         VALUES (?, ?, ?, ?, ?, ?)`).run(revisionId, id, knowledgeRevision, JSON.stringify(fields), previous ? 'updated' : 'created', now)
+      if (adjudication) {
+        db.prepare(`INSERT INTO knowledge_adjudications (id, item_id, source_a_id, source_b_id, previous_revision_id,
+          revision_id, book_revision, resolution, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(adjudication.id, id, adjudication.sourceAId, adjudication.sourceBId, adjudication.expectedItemRevisionId,
+            revisionId, bookRevision, adjudication.resolution, adjudication.note, now)
+      }
       // 条目、作者决定、不可变历史和待处理事件必须与两个版本号一起提交。
       const advanced = db.prepare(`UPDATE book_meta SET revision = ?, knowledge_revision = ?, updated_at = ?
         WHERE singleton = 1 AND id = ? AND revision = ? AND knowledge_revision = ? AND archived_at IS NULL`)
@@ -315,6 +420,9 @@ export class KnowledgeRepository {
         fields: storedFields(JSON.parse(row.fields_json)), reason: row.reason, createdAt: row.created_at }
     })
     if (revisions.length === 0) throw storageFailure()
-    return { ...item, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision, sources, revisions }
+    const adjudications = (db.pragma('user_version', { simple: true }) as number) >= KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION
+      ? readAdjudications(db, state, id) : undefined
+    return { ...item, bookRevision: state.revision, knowledgeRevision: state.knowledge_revision, sources, revisions,
+      ...(adjudications === undefined ? {} : { adjudications }) }
   }
 }

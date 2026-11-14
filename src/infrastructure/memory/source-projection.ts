@@ -10,6 +10,7 @@ import {
 } from '../../contracts/memory'
 import { parseStoryFields, plannedPayoffText, type Disclosure, type StoryRecordFields, type StoryTime } from '../../contracts/story'
 import { toSearchText } from './search-text'
+import { readKnowledgeAdjudicationContext } from '../knowledge/knowledge-repository'
 
 export interface MemorySourceIdentity {
   sourceKind: MemorySourceKind
@@ -166,15 +167,18 @@ export function readMemoryProjection(db: Database.Database, bookId: string, iden
       if (!row || row.book_id !== book || row.source_id !== source.sourceId || row.revision_id !== source.revisionId) throw storageFailure()
       const fields = parseKnowledgeFields(JSON.parse(row.fields_json))
       if (fields.name !== source.title) throw storageFailure()
+      const adjudication = readKnowledgeAdjudicationContext(db, book, source.sourceId, source.revisionId)
       // 知识条目的类型允许后续修改，历史投影始终以该修订内的类型为准。
       const text = [fields.name, `知识类型：${KNOWLEDGE_LABELS[fields.kind]}`,
         ...(fields.aliases.length ? [`别名：${fields.aliases.join('、')}`] : []), fields.summary,
+        ...(adjudication ? [adjudication] : []),
         ...CHARACTER_PROFILE_FIELDS.flatMap((key) => fields.characterProfile?.[key] ? [`${CHARACTER_PROFILE_LABELS[key]}：${fields.characterProfile[key]}`] : []),
         ...CHARACTER_ABILITIES.flatMap((key) => fields.characterProfile?.abilities?.[key] === undefined ? [] : [`作者设定能力·${CHARACTER_ABILITY_LABELS[key]}：${fields.characterProfile.abilities[key]}/100`])]
         .filter((line) => line !== '').join('\n')
       // 一个合成块使 blockId=null 的偏移也能唯一回查；索引状态不回写作者的新鲜度。
       return { ...source, nature: fields.nature, authorDecision: fields.authorDecision, freshness: fields.freshness,
-        conflictState: fields.conflictState, readerDisclosure: { state: 'unknown' }, contentHash: hash(row.fields_json), entityIds: [source.sourceId],
+        conflictState: fields.conflictState, readerDisclosure: { state: 'unknown' },
+        contentHash: hash(adjudication ? `${row.fields_json}\n${adjudication}` : row.fields_json), entityIds: [source.sourceId],
         chapterDependencies: chapterDependencies(db, 'knowledge', book, source.sourceId), blocks: [{ blockId: null, text }] }
     }
 

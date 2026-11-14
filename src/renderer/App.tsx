@@ -5,7 +5,7 @@ import type {
   Result, ServiceCommand, StudioApi, WorkspaceSnapshot, CreateBookInput,
 } from '../contracts/api'
 import { parseManuscript } from '../contracts/manuscript'
-import type { CreateKnowledgeItemInput, KnowledgeItemDetail, KnowledgeKind, KnowledgeStatus, UpdateKnowledgeItemInput } from '../contracts/knowledge'
+import { isKnowledgeAdjudicationReceiptFor, type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeKind, type KnowledgeStatus, type UpdateKnowledgeItemInput } from '../contracts/knowledge'
 import type { CreateStoryRecordInput, StoryRecordDetail, UpdateStoryRecordInput, StoryKind } from '../contracts/story'
 import type { MemoryControlInput, MemoryStartInput, MemoryTaskInput, MemoryTaskReceipt } from '../contracts/memory'
 import { isAiAdoptReceiptFor, isAiMemoryAdoptReceiptFor, type AiAdoptInput, type AiAdoptReceipt, type AiMemoryAdoptInput, type AiMemoryAdoptReceipt, type AiRun, type AiTaskKind } from '../contracts/ai'
@@ -975,7 +975,12 @@ export function App({ api }: Props) {
   async function updateKnowledge(input: UpdateKnowledgeItemInput, accept: (saved: KnowledgeItemDetail) => void) {
     if (!api || bookRef.current?.book.id !== input.bookId) return
     await changeView(async () => {
-      await mutate('knowledge.update', () => api.updateKnowledgeItem(input), (saved) => acceptKnowledge(saved, accept))
+      await mutate('knowledge.update', () => api.updateKnowledgeItem(input), (saved) => {
+        const current = bookRef.current
+        if (input.adjudication && (!isKnowledgeAdjudicationReceiptFor(input, saved) ||
+            current?.book.id !== input.bookId || current.book.revision > saved.bookRevision)) return false
+        return acceptKnowledge(saved, accept)
+      })
     }, false, false, false, true)
   }
 
