@@ -128,7 +128,11 @@ export function AppearanceMatrix(props: Props) {
   const [selected, setSelected] = useState<{ entityId: string; chapterId: string } | null>(null)
   const [recordId, setRecordId] = useState<string | null>(null)
   const [gap, setGap] = useState(10)
-  const [hover, setHover] = useState<{ entityId: string; chapterId: string; recordId: string; chapterNumber: number; conflict: boolean; x: number; y: number; arrow: number; above: boolean; maxHeight: number } | null>(null)
+  type PreviewTarget = { entityId: string; chapterId: string; recordId: string; chapterNumber: number; conflict: boolean; x: number; y: number; arrow: number; above: boolean; maxHeight: number }
+  const [hovered, setHovered] = useState<PreviewTarget | null>(null)
+  const [focused, setFocused] = useState<PreviewTarget | null>(null)
+  // 键盘焦点优先；移出或失焦仅清理各自来源，避免一种输入打断另一种输入的出处预览。
+  const hover = focused ?? hovered
   const [preview, setPreview] = useState<{
     api: StudioApi; input: AppearanceMatrixInput; page: AppearanceMatrixPage; hover: NonNullable<typeof hover>
     title: string; quote: string; state: string
@@ -148,7 +152,7 @@ export function AppearanceMatrix(props: Props) {
   useEffect(() => {
     if (disabled) return
     let active = true
-    setLoading(true); setPage(null); setSelected(null); setRecordId(null); setError(null); setHover(null); previewCache.current.clear(); selectionTrigger.current = null
+    setLoading(true); setPage(null); setSelected(null); setRecordId(null); setError(null); setHovered(null); setFocused(null); previewCache.current.clear(); selectionTrigger.current = null
     void request(() => api.readAppearanceMatrix(input)).then((result) => {
       if (!active) return
       setLoading(false)
@@ -189,7 +193,7 @@ export function AppearanceMatrix(props: Props) {
     return () => { active = false; clearTimeout(timer) }
   }, [api, book.book.id, book.book.revision, disabled, hover, input, loading, page])
   useEffect(() => {
-    const close = () => setHover(null)
+    const close = () => { setHovered(null); setFocused(null) }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
     window.addEventListener('scroll', close, true); window.addEventListener('resize', close); window.addEventListener('keydown', escape)
     return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); window.removeEventListener('keydown', escape) }
@@ -214,22 +218,23 @@ export function AppearanceMatrix(props: Props) {
   const reminder = reminders.find((entity) => entity.id === selected?.entityId) ?? reminders.find((entity) => entity.count >= gap) ?? reminders[0]
   function closeEvidence() {
     if (disabled) return
-    setSelected(null); setRecordId(null); setHover(null)
+    setSelected(null); setRecordId(null); setHovered(null); setFocused(null)
     const trigger = selectionTrigger.current
     const target = trigger?.isConnected && !trigger.disabled ? trigger : matrixRoot.current?.querySelector<HTMLElement>('summary')
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     target?.focus({ preventScroll: true })
     selectionTrigger.current = null
   }
-  function showPreview(element: HTMLButtonElement, entityId: string, chapterId: string, id?: string) {
-    if (disabled || !id) { setHover(null); return }
+  function showPreview(origin: 'pointer' | 'focus', element: HTMLButtonElement, entityId: string, chapterId: string, id?: string) {
+    const setTarget = origin === 'pointer' ? setHovered : setFocused
+    if (disabled || !id) { setTarget(null); return }
     const rect = element.getBoundingClientRect(), chapter = page?.chapters.find((item) => item.id === chapterId)
-    if (!chapter) { setHover(null); return }
+    if (!chapter) { setTarget(null); return }
     // 优先位于格子上方；空间不足时换边，箭头仍指向原格，提示不越出视口。
     const width = Math.min(300, window.innerWidth - 24), center = rect.left + rect.width / 2
     const x = Math.min(Math.max(12, center - width / 2), window.innerWidth - width - 12)
     const above = rect.top >= 204 || rect.top > window.innerHeight - rect.bottom
-    setHover({ entityId, chapterId, recordId: id, chapterNumber: chapter.position + 1,
+    setTarget({ entityId, chapterId, recordId: id, chapterNumber: chapter.position + 1,
       conflict: appearanceState(cellFor(entityId, chapterId)) === 'conflict', x,
       y: above ? rect.top - 12 : rect.bottom + 12, arrow: Math.min(width - 16, Math.max(16, center - x)), above,
       maxHeight: Math.min(180, Math.max(0, above ? rect.top - 24 : window.innerHeight - rect.bottom - 24)) })
@@ -256,12 +261,12 @@ export function AppearanceMatrix(props: Props) {
           aria-controls={evidenceId} aria-expanded={selected?.entityId === entity.id && selected.chapterId === chapter.id}
           aria-describedby={hover?.entityId === entity.id && hover.chapterId === chapter.id && currentPreview ? previewId : undefined}
           title={!cell?.recordIds.length ? `${entity.name} · 第 ${chapter.position + 1} 章：没有符合条件的登记` : undefined}
-          onPointerEnter={(event) => showPreview(event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onPointerLeave={() => setHover(null)}
-          onFocus={(event) => showPreview(event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onBlur={() => setHover(null)}
+          onPointerEnter={(event) => showPreview('pointer', event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onPointerLeave={() => setHovered((value) => value?.entityId === entity.id && value.chapterId === chapter.id ? null : value)}
+          onFocus={(event) => showPreview('focus', event.currentTarget, entity.id, chapter.id, cell?.recordIds[0])} onBlur={() => setFocused((value) => value?.entityId === entity.id && value.chapterId === chapter.id ? null : value)}
           onClick={(event) => {
             if (selected?.entityId === entity.id && selected.chapterId === chapter.id) { closeEvidence(); return }
             selectionTrigger.current = event.currentTarget
-            setHover(null); setSelected({ entityId: entity.id, chapterId: chapter.id }); setRecordId(cell?.recordIds[0] ?? null)
+            setHovered(null); setFocused(null); setSelected({ entityId: entity.id, chapterId: chapter.id }); setRecordId(cell?.recordIds[0] ?? null)
           }}>{cellMarks[state]}{cell?.stale && state !== 'stale' ? <sup>↺</sup> : null}</button></td>
       })}</tr>
     })}</tbody></table></div>
