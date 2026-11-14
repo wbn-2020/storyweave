@@ -321,6 +321,9 @@ export function ForeshadowRadar(props: Props) {
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
+  const [focused, setFocused] = useState<string | null>(null)
+  // 焦点卡片的记录不能被鼠标悬停替换，保证随后按 Enter 仍打开原来聚焦的伏笔。
+  const activeId = focused ?? hovered
   const radarRoot = useRef<HTMLDivElement>(null)
   const evidence = useRef<HTMLDivElement>(null)
   const selectionTrigger = useRef<HTMLElement | SVGElement | null>(null)
@@ -334,7 +337,7 @@ export function ForeshadowRadar(props: Props) {
   useEffect(() => {
     if (disabled) return
     let active = true
-    setLoading(true); setPage(null); setSelected(null); setHovered(null); setError(null)
+    setLoading(true); setPage(null); setSelected(null); setHovered(null); setFocused(null); setError(null)
     void request(() => api.listForeshadowRadar(input)).then((result) => {
       if (!active) return
       setLoading(false)
@@ -369,8 +372,12 @@ export function ForeshadowRadar(props: Props) {
   function closeEvidence() {
     setSelected(null)
     const trigger = selectionTrigger.current
-    const target = trigger?.isConnected && !trigger.matches(':disabled,[aria-disabled="true"]')
-      ? trigger : radarRoot.current?.querySelector<HTMLElement>('summary')
+    const triggerRecordId = trigger?.getAttribute('data-record-id')
+    // 左卡按分段复用按钮；代表记录已变化时，回到原伏笔的列表入口而不是另一条记录。
+    const target = trigger?.isConnected && !trigger.matches(':disabled,[aria-disabled="true"]') &&
+      (triggerRecordId === null || triggerRecordId === selected)
+      ? trigger : Array.from(radarRoot.current?.querySelectorAll<HTMLButtonElement>('button[data-record-id]') ?? [])
+        .find((button) => button.dataset.recordId === selected && !button.disabled) ?? radarRoot.current?.querySelector<HTMLElement>('summary')
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     target?.focus({ preventScroll: true })
     selectionTrigger.current = null
@@ -440,10 +447,10 @@ export function ForeshadowRadar(props: Props) {
             {radarSegments.map((segment) => {
               const matches = page.items.filter((item) => radarSegment(item) === segment.key), first = matches[0]
               const angle = segment.angle * Math.PI / 180, x = Math.cos(angle) * 410, y = 417 + Math.sin(angle) * 410
-              return <g key={segment.key} className={styles.radarSegment} data-segment={segment.key} data-empty={!matches.length} data-highlighted={matches.some((item) => item.id === hovered || item.id === selected)} role="button"
+              return <g key={segment.key} className={styles.radarSegment} data-segment={segment.key} data-empty={!matches.length} data-highlighted={matches.some((item) => item.id === activeId || item.id === selected)} role="button"
                 aria-label={`${segment.label}，本页 ${matches.length} 条`} aria-disabled={disabled || !first} aria-controls={evidenceId} aria-expanded={matches.some((item) => item.id === selected)} tabIndex={disabled || !first ? -1 : 0}
-                onPointerEnter={() => setHovered(first?.id ?? null)} onPointerLeave={() => setHovered(null)}
-                onFocus={() => setHovered(first?.id ?? null)} onBlur={() => setHovered(null)} onClick={(event) => first && select(first.id, event.currentTarget)}
+                onPointerEnter={() => setHovered(first?.id ?? null)} onPointerLeave={() => setHovered((value) => value === first?.id ? null : value)}
+                onFocus={() => setFocused(first?.id ?? null)} onBlur={() => setFocused((value) => value === first?.id ? null : value)} onClick={(event) => first && select(first.id, event.currentTarget)}
                 onKeyDown={(event) => { if (first && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(first.id, event.currentTarget) } }}>
                 <title>{first ? `${segment.label} · 本页${matches.length}条` : `本页暂无${segment.label}记录`}</title>
                 <circle className={styles.radarSegmentHalo} cx={x} cy={y} r={14} /><circle cx={x} cy={y} r={6} />
@@ -453,12 +460,12 @@ export function ForeshadowRadar(props: Props) {
           </svg>
           <div className={styles.radarCards}>{radarSegments.map((segment, index) => {
             const matches = page.items.filter((item) => radarSegment(item) === segment.key)
-            const item = matches.find((entry) => entry.id === hovered) ?? matches.find((entry) => entry.id === selected) ?? matches[0]
+            const item = matches.find((entry) => entry.id === activeId) ?? matches.find((entry) => entry.id === selected) ?? matches[0]
             const targetChapterId = item && 'chapterId' in item.plannedPayoff ? item.plannedPayoff.chapterId : null
             const targetChapter = book.chapters.find((chapter) => chapter.id === targetChapterId)
-            return item ? <button type="button" key={segment.key} data-position={index} data-due={item.due} data-stage={item.stage} data-hovered={hovered === item.id} disabled={disabled}
+            return item ? <button type="button" key={segment.key} data-record-id={item.id} data-position={index} data-due={item.due} data-stage={item.stage} data-hovered={activeId === item.id} disabled={disabled}
               aria-label={`查看伏笔：${item.title}`} aria-pressed={selected === item.id} aria-controls={evidenceId} title={`${item.title} · ${stageLabels[item.stage]} · ${radarDueLabels[item.due]}`}
-              onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered(null)} onFocus={() => setHovered(item.id)} onBlur={() => setHovered(null)} onClick={(event) => select(item.id, event.currentTarget)}>
+              onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered((value) => value === item.id ? null : value)} onFocus={() => setFocused(item.id)} onBlur={() => setFocused((value) => value === item.id ? null : value)} onClick={(event) => select(item.id, event.currentTarget)}>
               <ForeshadowThumbnail api={api} bookId={book.book.id} recordId={item.id} metadata={item.thumbnail} name={item.title} className={styles.radarThumbnail} retryable={false} />
               <strong>{item.title}</strong><small title={plannedPayoffLabel(item.plannedPayoff, book)}>{targetChapter ? `第 ${targetChapter.position + 1} 章` : plannedPayoffLabel(item.plannedPayoff, book)}</small>
             </button> : null
@@ -468,10 +475,10 @@ export function ForeshadowRadar(props: Props) {
       </aside>
       <div className={styles.radarListPane}>
         <div className={styles.radarTableScroll}><table className={styles.radarTable}><thead><tr><th scope="col">伏笔标题</th><th scope="col">到期章节</th><th scope="col">回收位置</th><th scope="col">状态</th></tr></thead>
-          <tbody>{page.items.map((item) => <tr key={item.id} data-due={item.due} data-selected={selected === item.id} data-hovered={hovered === item.id}
-            onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered(null)}
-            onFocus={() => setHovered(item.id)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHovered(null) }}>
-            <th scope="row"><div className={styles.radarTitleLine}><button type="button" className={styles.radarTitle} data-due={item.due} data-stage={item.stage} disabled={disabled} aria-controls={evidenceId} aria-expanded={selected === item.id} title={item.title} onClick={(event) => select(item.id, event.currentTarget)}><StudioIcon name="spark" size={20} /><span>{item.title}</span></button>
+          <tbody>{page.items.map((item) => <tr key={item.id} data-due={item.due} data-selected={selected === item.id} data-hovered={activeId === item.id}
+            onPointerEnter={() => setHovered(item.id)} onPointerLeave={() => setHovered((value) => value === item.id ? null : value)}
+            onFocus={() => setFocused(item.id)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused((value) => value === item.id ? null : value) }}>
+            <th scope="row"><div className={styles.radarTitleLine}><button type="button" className={styles.radarTitle} data-record-id={item.id} data-due={item.due} data-stage={item.stage} disabled={disabled} aria-controls={evidenceId} aria-expanded={selected === item.id} title={item.title} onClick={(event) => select(item.id, event.currentTarget)}><StudioIcon name="spark" size={20} /><span>{item.title}</span></button>
               <div className={styles.radarRowActions}>
                 <button type="button" className={styles.radarIconButton} disabled={disabled} aria-label={`查看历程与原文证据：${item.title}`} aria-controls={evidenceId} aria-expanded={selected === item.id} title="查看历程与原文证据" onClick={(event) => select(item.id, event.currentTarget)}><StudioIcon name="read" size={16} /></button>
                 <button type="button" className={styles.radarIconButton} disabled={disabled} aria-label={`编辑回收计划：${item.title}`} title="编辑回收计划" onClick={() => props.onOpenRecord('foreshadow', item.id)}><StudioIcon name="pen" size={16} /></button>
