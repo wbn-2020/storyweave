@@ -426,6 +426,7 @@ function OutlineTensionChart({ outlines, disabled, onSelect }: {
 }) {
   const gradient = useId()
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const x = (index: number) => outlines.length < 2 ? 492 : 48 + index * 888 / (outlines.length - 1)
   const y = (value: number) => 208 - value * 1.68
   const segments: { node: LivingOutline; x: number; y: number }[][] = []
@@ -449,22 +450,41 @@ function OutlineTensionChart({ outlines, disabled, onSelect }: {
       }
     }
   }
-  const focused = outlines.find((item) => item.id === focusedId)
+  // 所有真实预警均保留；标签按章序就近排列，冲突时另起一行，不能挤压绘图区。
+  const warningRows: number[] = []
+  const warnings = [...bands].sort((a, b) => a.start - b.start).map((band) => {
+    const left = Math.max(48, Math.min(692, (x(band.start) + x(band.end)) / 2 - 122))
+    let row = warningRows.findIndex((right) => right + 12 <= left)
+    if (row < 0) row = warningRows.length
+    warningRows[row] = left + 244
+    const count = band.end - band.start + 1
+    return { ...band, left, row, label: `连续 ${count} 章${band.kind === 'low' ? '偏低 · 建议插入转折' : '过高 · 建议日常调剂'}` }
+  })
+  const warningOffset = Math.max(0, warningRows.length - 1) * 34
+  const focused = outlines.find((item) => item.id === hoveredId) ?? outlines.find((item) => item.id === focusedId)
+  const activeId = focused?.id
   return <figure className={styles.rhythm}>
     <figcaption><span><StudioIcon name="spark" size={20} />大纲沙盘</span><small>本卷最近 {outlines.length} 章 · 紧张度 0–100</small></figcaption>
-    {outlines.length ? <svg viewBox="0 0 960 244" role="group" aria-label="章节紧张度曲线，选择节点编辑对应章纲">
+    {outlines.length ? <div className={styles.rhythmPlot} tabIndex={0} role="region" aria-label="章节紧张度图表"><svg viewBox={`0 0 960 ${244 + warningOffset}`} role="group" aria-label="章节紧张度曲线，选择节点编辑对应章纲">
       <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1"><stop offset="0" className={styles.curveFillTop} /><stop offset="1" className={styles.curveFillBottom} /></linearGradient></defs>
+      <g transform={`translate(0 ${warningOffset})`}>
       {bands.map((band) => <g key={`${band.kind}:${band.start}`} className={styles.warningBand} data-kind={band.kind}><rect x={x(band.start)} y="40" width={Math.max(8, x(band.end) - x(band.start))} height="168" /><title>{band.kind === 'low' ? '连续四章以上紧张度低于 50' : '连续五章以上紧张度高于 85'}</title></g>)}
       {[0, 25, 50, 75, 100].map((value) => <g key={value}><path d={`M48 ${y(value)}H936`} className={styles.gridLines} /><text x="34" y={y(value) + 4} textAnchor="end">{value}</text></g>)}
       {outlines.map((item, index) => (index === 0 || index === outlines.length - 1 || (index + 1) % 5 === 0) && <g key={item.id}><path d={`M${x(index)} 40V208`} className={styles.gridLines} /><text x={x(index)} y="232" textAnchor="middle">{item.position + 1}</text></g>)}
       {segments.map((items) => <g key={items[0]!.node.id}>
         {items.length > 1 && <><polygon points={`${items[0]!.x},208 ${items.map((item) => `${item.x},${item.y}`).join(' ')} ${items.at(-1)!.x},208`} fill={`url(#${gradient})`} /><polyline points={items.map((item) => `${item.x},${item.y}`).join(' ')} className={styles.curve} /></>}
-        {items.map(({ node, x: cx, y: cy }) => <g key={node.id} className={styles.curvePoint} tabIndex={disabled ? -1 : 0} role="button" aria-disabled={disabled} aria-label={`${node.fields.title}，紧张度 ${node.fields.tension}，编辑章纲`} onMouseEnter={() => setFocusedId(node.id)} onMouseLeave={() => setFocusedId(null)} onFocus={() => setFocusedId(node.id)} onBlur={() => setFocusedId(null)} onClick={() => { if (!disabled) onSelect(node) }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(node) } }}>
-          <circle cx={cx} cy={cy} r="16" className={styles.pointTarget} /><circle cx={cx} cy={cy} r={focusedId === node.id ? 5 : 3.5} /><title>{node.fields.title}：{node.fields.tension}</title>
+        {items.map(({ node, x: cx, y: cy }) => <g key={node.id} className={styles.curvePoint} tabIndex={disabled ? -1 : 0} role="button" aria-disabled={disabled} aria-label={`${node.fields.title}，紧张度 ${node.fields.tension}，编辑章纲`} onMouseEnter={() => setHoveredId(node.id)} onMouseLeave={() => setHoveredId(null)} onFocus={() => setFocusedId(node.id)} onBlur={() => setFocusedId(null)} onClick={() => { if (!disabled) onSelect(node) }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(node) } }}>
+          <circle cx={cx} cy={cy} r="16" className={styles.pointTarget} /><circle cx={cx} cy={cy} r={activeId === node.id ? 5 : 3.5} /><title>{node.fields.title}：{node.fields.tension}</title>
         </g>)}
       </g>)}
-    </svg> : <div className={styles.empty}><p>本卷尚无章纲，建立后在这里查看节奏。</p></div>}
-    <div className={styles.rhythmLegend}>{bands.some((band) => band.kind === 'low') && <span data-kind="low">连续 4 章偏低 · 可检查转折</span>}{bands.some((band) => band.kind === 'high') && <span data-kind="high">连续 5 章偏高 · 可检查缓冲</span>}<small aria-live="polite">{focused ? `${focused.fields.title} · 紧张度 ${focused.fields.tension}` : '空值保持未评估；分值仅供作者判断'}</small></div>
+      </g>
+      {warnings.map((warning) => <g key={`${warning.kind}:${warning.start}`} className={styles.warningLabel} data-kind={warning.kind} role="img" aria-label={`第 ${outlines[warning.start]!.position + 1}–${outlines[warning.end]!.position + 1} 章，${warning.label}，紧张度${warning.kind === 'low' ? '低于 50' : '高于 85'}`}>
+        <path d={`M${warning.left + 122} ${32 + warning.row * 34}L${(x(warning.start) + x(warning.end)) / 2} ${40 + warningOffset}`} />
+        <rect x={warning.left} y={4 + warning.row * 34} width="244" height="28" rx="8" />
+        <text x={warning.left + 122} y={22 + warning.row * 34} textAnchor="middle">{warning.label}</text>
+      </g>)}
+    </svg></div> : <div className={styles.empty}><p>本卷尚无章纲，建立后在这里查看节奏。</p></div>}
+    <div className={styles.rhythmLegend}><small aria-live="polite">{focused ? `${focused.fields.title} · 紧张度 ${focused.fields.tension}` : '空值保持未评估；分值仅供作者判断'}</small></div>
   </figure>
 }
 
