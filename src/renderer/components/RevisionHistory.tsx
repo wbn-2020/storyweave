@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { ChapterSnapshot, RevisionSnapshot, RevisionSummary, StudioApi } from '../../contracts/api'
 import { DomainError } from '../../contracts/api'
 import { documentToText, parseManuscript, type ManuscriptBlock } from '../../contracts/manuscript'
@@ -23,6 +23,7 @@ export interface RevisionHistoryProps {
   onMerge?: (input: RevisionMergeInput) => void | Promise<void>
 }
 const reasons = { created: '建立章节', saved: '保存正文', restored: '恢复版本', imported: '导入正文' }
+interface ManuscriptRow { block: ManuscriptBlock; index: number }
 
 export function RevisionHistory({ api, chapter, archived, busy, error, onClose, onRestore, onMerge, registerLeaveGuard }: RevisionHistoryProps) {
   const [items, setItems] = useState<RevisionSummary[]>([])
@@ -59,14 +60,33 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
     catch (caught) { return { document: null, error: caught instanceof DomainError ? caught.message : '所选差异无法合并，请重新选择。' } }
   }, [chapter.document, preview, selectedBlocks])
   const changesById = useMemo(() => new Map(comparison.changes.map((change) => [change.blockId, change])), [comparison.changes])
-  const columns = useMemo(() => {
-    const rows = (blocks: ManuscriptBlock[]) => blocks.flatMap((block, index) => !onlyChanged || changesById.has(block.attrs.id) ? [{ block, index }] : [])
-    return { current: rows(chapter.document.content), source: rows(preview?.document.content ?? []) }
-  }, [chapter.document, preview, onlyChanged, changesById])
+  const comparisonRows = useMemo(() => {
+    if (!preview || comparison.error) return []
+    const current = chapter.document.content.map((block, index) => ({ block, index }))
+    const source = preview.document.content.map((block, index) => ({ block, index }))
+    const currentById = new Map(current.map((row) => [row.block.attrs.id, row]))
+    const rows: { current: ManuscriptRow | null; source: ManuscriptRow | null }[] = []
+    let currentIndex = 0, sourceIndex = 0
+    // 原差异算法已标出移动；只用顺序未变的共同段落作锚点，不重排任一份原稿。
+    for (const sourceRow of source) {
+      const currentRow = currentById.get(sourceRow.block.attrs.id)
+      if (!currentRow || changesById.get(sourceRow.block.attrs.id)?.moved) continue
+      while (currentIndex < currentRow.index) rows.push({ current: current[currentIndex++], source: null })
+      while (sourceIndex < sourceRow.index) rows.push({ current: null, source: source[sourceIndex++] })
+      rows.push({ current: currentRow, source: sourceRow })
+      currentIndex = currentRow.index + 1; sourceIndex = sourceRow.index + 1
+    }
+    while (currentIndex < current.length) rows.push({ current: current[currentIndex++], source: null })
+    while (sourceIndex < source.length) rows.push({ current: null, source: source[sourceIndex++] })
+    // 配对后再筛选与分页，插入或移除不会把后续共同段落挤到另一页。
+    return onlyChanged ? rows.filter((row) => row.current && changesById.has(row.current.block.attrs.id)
+      || row.source && changesById.has(row.source.block.attrs.id)) : rows
+  }, [chapter.document, preview, comparison.error, onlyChanged, changesById])
   const pageSize = 40
-  const pageCount = Math.max(1, Math.ceil(Math.max(columns.current.length, columns.source.length) / pageSize))
+  const pageCount = Math.max(1, Math.ceil(comparisonRows.length / pageSize))
   const currentPage = Math.min(differencePage, pageCount - 1)
   const rangeStart = currentPage * pageSize
+  const pageRows = comparisonRows.slice(rangeStart, rangeStart + pageSize)
 
   useEffect(() => {
     mounted.current = true
@@ -172,9 +192,9 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
             <button type="button" disabled={blocked || !selectedBlocks.length} onClick={() => { setSelectedBlocks([]); setConfirmMerge(false) }}>清空选择</button>
             <label className={diffStyles.filter}><input type="checkbox" checked={onlyChanged} disabled={blocked} onChange={(event) => { setOnlyChanged(event.target.checked); setDifferencePage(0) }} />仅看差异</label></div>
           {!comparison.changes.length && <p>段落内容、格式与顺序相同。</p>}
-          <div className={diffStyles.manuscripts}>
-            <ManuscriptColumn title="当前稿" rows={columns.current.slice(rangeStart, rangeStart + pageSize)} changes={changesById} selected={selectedBlocks} side="current" disabled={blocked || archived || !onMerge} onSelect={toggleBlock} />
-            <ManuscriptColumn title={preview.id === chapter.finalizedRevisionId ? '选中历史稿 · 作者定稿' : `选中历史稿 · 版本 ${preview.sequence}`} rows={columns.source.slice(rangeStart, rangeStart + pageSize)} changes={changesById} selected={selectedBlocks} side="source" disabled={blocked || archived || !onMerge} onSelect={toggleBlock} />
+          <div className={diffStyles.manuscripts} style={{ '--comparison-rows': Math.max(2, pageRows.length + 1) } as CSSProperties}>
+            <ManuscriptColumn title="当前稿" rows={pageRows.map((row) => row.current)} changes={changesById} selected={selectedBlocks} side="current" disabled={blocked || archived || !onMerge} onSelect={toggleBlock} />
+            <ManuscriptColumn title={preview.id === chapter.finalizedRevisionId ? '选中历史稿 · 作者定稿' : `选中历史稿 · 版本 ${preview.sequence}`} rows={pageRows.map((row) => row.source)} changes={changesById} selected={selectedBlocks} side="source" disabled={blocked || archived || !onMerge} onSelect={toggleBlock} />
           </div>
           {pageCount > 1 && <nav className={diffStyles.actions} aria-label="版本正文分页"><button type="button" disabled={blocked || currentPage === 0} onClick={() => setDifferencePage(currentPage - 1)}>上一页正文</button><span>{currentPage + 1} / {pageCount} · 每栏最多 40 块</span><button type="button" disabled={blocked || currentPage + 1 === pageCount} onClick={() => setDifferencePage(currentPage + 1)}>下一页正文</button></nav>}
           <p className={diffStyles.hint}>当前稿向所选来源稿恢复；勾选对应段落后预览。未选段落保留当前内容，移动项同时采用来源内容与相对顺序。</p>
@@ -206,17 +226,20 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
 }
 
 function ManuscriptColumn({ title, rows, changes, selected, side, disabled, onSelect }: {
-  title: string; rows: { block: ManuscriptBlock; index: number }[]; changes: ReadonlyMap<string, ParagraphChange>
+  title: string; rows: (ManuscriptRow | null)[]; changes: ReadonlyMap<string, ParagraphChange>
   selected: string[]; side: 'current' | 'source'; disabled: boolean; onSelect: (id: string) => void
 }) {
-  return <section className={diffStyles.manuscriptColumn} aria-label={title}><h3><span data-side={side} />{title}</h3><ol>{rows.map(({ block, index }) => {
+  const hasContent = rows.some((row) => row !== null)
+  return <section className={diffStyles.manuscriptColumn} aria-label={title}><h3><span data-side={side} />{title}</h3>{rows.length ? <ol>{rows.map((row, rowIndex) => {
+    if (!row) return <li key={`missing:${rowIndex}`} className={diffStyles.missingBlock} aria-hidden={hasContent || rowIndex > 0}>{!hasContent && rowIndex === 0 && <p className={diffStyles.hint}>本页无对应正文块。</p>}</li>
+    const { block, index } = row
     const change = changes.get(block.attrs.id)
     return <li key={block.attrs.id} data-kind={change?.kind} data-selected={selected.includes(block.attrs.id)} data-side={side}>
       <span className={diffStyles.lineNumber}>{index + 1}{change && <label title={change.kind === 'added' ? '恢复来源独有段落' : change.kind === 'removed' ? '移除当前独有段落' : change.moved ? '恢复来源顺序及内容' : '恢复来源内容与格式'}>
         <input type="checkbox" aria-label={`选取${side === 'current' ? '当前稿' : '历史稿'}第 ${index + 1} 块差异`} checked={selected.includes(block.attrs.id)} disabled={disabled} onChange={() => onSelect(block.attrs.id)} />
       </label>}</span><BlockPreview block={block} />
     </li>
-  })}</ol>{!rows.length && <p className={diffStyles.hint}>本页无对应正文块。</p>}</section>
+  })}</ol> : <p className={diffStyles.hint}>本页无对应正文块。</p>}</section>
 }
 
 function BlockPreview({ block }: { block: ManuscriptBlock }) {
