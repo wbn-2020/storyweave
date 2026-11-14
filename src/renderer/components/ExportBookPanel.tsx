@@ -360,7 +360,7 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
 
   function status(entry: BookExportChapterEntry | undefined, chapterId: string): ReactNode {
     if (!entry) return selected.has(chapterId) ? '待核对' : '未勾选'
-    return <><span className={styles.chapterStatus} data-state={entry.state} data-empty={entry.characterCount === 0}>{entry.state === 'included' ? entry.characterCount === 0 ? '待完善' : entry.status === 'finalized' ? '已完成' : statusLabels[entry.status] : stateLabels[entry.state]}</span>
+    return <><span className={styles.chapterStatus} data-state={entry.state} data-status={entry.status} data-empty={entry.characterCount === 0}>{entry.state === 'included' ? entry.characterCount === 0 ? '待完善' : entry.status === 'finalized' ? '已完成' : '待完善' : stateLabels[entry.state]}</span>
       {entry.reason && <small>{entry.reason}</small>}
       {entry.state === 'included' && entry.characterCount === 0 && <small className={styles.problem}>空白正文，仍会导出</small>}</>
   }

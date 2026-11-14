@@ -300,6 +300,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     <div className={styles.topbar}><div className={styles.scope} aria-label="素材范围"><button type="button" aria-pressed="true"><StudioIcon name="spark" />全局灵感</button><button type="button" disabled={tool.locked || !onBookMaterials} title={onBookMaterials ? '查看当前作品保存的笔记' : '先打开一部作品'} onClick={onBookMaterials}><StudioIcon name="read" />本书素材</button></div>
       <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={tool.locked} onClick={() => create()}><StudioIcon name="plus" size={16} />记一条灵感</button><button className={ui.button} type="button" disabled={tool.locked} onClick={() => create(undefined, 'reference')}><StudioIcon name="read" size={16} />添加参考作品</button></div></div>
     {tool.error && <p className={ui.error} role="alert">{tool.error}</p>}
+    {tool.readFailure?.requestId && <button className={ui.button} type="button" disabled={tool.locked} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>}
     {tool.notice && <p className={ui.notice} role="status">{tool.notice}</p>}
     {page?.schemaVersion === 1 && <section className={styles.upgrade} aria-label="启用全局灵感配图">
       <h4>启用全局灵感配图</h4><p>已有文字条目仍可编辑。启用图片前会独立备份整个灵感库，再追加图片结构；旧版应用无法读取新格式。</p>
@@ -311,9 +312,10 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     {copiedNote && <button className={ui.button} type="button" disabled={tool.locked || tool.dirty}
       onClick={() => { if (canSwitch()) onOpenNote(copiedNote.bookId, copiedNote.id) }}>查看保存的素材与章节关联</button>}
     {tool.pending && <div className={ui.warning}><p>保存结果尚未确认，表单与本次复制标识已保留。核对原请求前暂停写入。</p><div className={ui.actions}>{tool.pending.error.requestId && <button className={ui.button} type="button" disabled={tool.busy} onClick={() => void tool.checkReceipt().then((success) => { if (success && !copyRef.current) void load({ ...listing, offset: 0 }, true) })}>核对原请求</button>}</div><p>若服务连接已中断，请先保留当前输入，再从主窗口的草稿恢复入口重新连接并核对资料。不会自动重发本次复制。</p>{onRecover && <><label className={ui.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存当前输入与复制标识，可以离开面板恢复</label><button className={ui.button} type="button" disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}</div>}
-    {(tool.pending || tool.error) && <details className={ui.details}><summary>查看并复制当前输入留存</summary><textarea readOnly rows={10}
+    {(tool.pending || tool.error || tool.readFailure) && <details className={ui.details}><summary>查看并复制当前输入留存</summary><textarea readOnly rows={10}
       value={JSON.stringify({ draft, copy, quick, originalThumbnail: selected?.thumbnail ?? null, schemaVersion: page?.schemaVersion ?? null,
-        backupPath, pendingCommand: tool.pending?.command ?? null, requestId: tool.pending?.error.requestId ?? null }, null, 2)} aria-label="尚未确认的灵感内容与复制标识" /></details>}
+        backupPath, pendingCommand: tool.pending?.command ?? null, requestId: tool.pending?.error.requestId ?? null,
+        readRequestId: tool.readFailure?.requestId ?? null }, null, 2)} aria-label="尚未确认的灵感内容与复制标识" /></details>}
     <div className={styles.layout}><aside className={styles.filters} aria-label="素材分类">
       <h4>本页类型</h4><button type="button" aria-pressed={!kind} onClick={() => setKind('')}><StudioIcon name="grid" size={18} />全部<span>{page?.items.length ?? '—'}</span></button>
       {INSPIRATION_KINDS.map((value) => <button key={value} type="button" aria-pressed={kind === value} onClick={() => setKind(value)}><StudioIcon name={kindIcons[value]} size={18} />{kindLabels[value]}<span>{page?.items.filter((item) => item.kind === value).length ?? '—'}</span></button>)}
@@ -414,7 +416,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
         <button type="submit" className={`${ui.primaryButton} ${styles.quickSave}`} disabled={tool.locked || !quick.body.trim()}><StudioIcon name="save" size={18} />{currentBook && !currentBook.archivedAt ? '保存并关联本书' : '保存灵感'}</button>
         {quick.body && <button type="button" className={ui.button} disabled={tool.locked} onClick={() => setDiscard(true)}>放弃本次记录</button>}
         {discard && <div className={ui.warning} role="alert"><p>放弃这条尚未保存的记录？</p><div className={ui.actions}><button type="button" className={ui.button} onClick={() => { setQuick({ id: crypto.randomUUID(), body: '' }); setDiscard(false); tool.setDirty(false) }}>确认放弃记录</button><button type="button" className={ui.button} onClick={() => setDiscard(false)}>继续记录</button></div></div>}
-      </form><section className={styles.recent} aria-label="当前筛选最近记录"><h4><StudioIcon name="clock" size={20} />最近记录</h4><ul>{page?.items.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={tool.locked || tool.dirty} title={item.title} onClick={() => open(item)}><span>{item.title}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time></button></li>)}</ul>{!page?.items.length && <p className={styles.recentEmpty}>暂无记录</p>}</section></>}
+      </form><section className={styles.recent} aria-label="当前筛选最近记录"><h4><StudioIcon name="clock" size={20} />最近记录</h4><ul>{page?.items.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={tool.locked || tool.dirty} title={item.title} onClick={() => open(item)}><span>{item.title}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time></button></li>)}</ul>{!page?.items.length && <p className={styles.recentEmpty}>{page ? '暂无记录' : '尚未取得记录'}</p>}</section></>}
     </div></div>
   </section>
 }

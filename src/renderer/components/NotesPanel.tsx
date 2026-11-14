@@ -754,7 +754,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
           </form><section className={materialStyles.recent} aria-label="当前筛选最近记录"><h4><StudioIcon name="clock" size={20} />最近记录</h4>
             <ul>{page?.items.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={blocked || Boolean(quickBody)}
               title={item.title} onClick={() => void selectNote(item.id)}><span>{item.title}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time></button></li>)}</ul>
-            {!page?.items.length && <p className={materialStyles.recentEmpty}>暂无记录</p>}
+            {!page?.items.length && <p className={materialStyles.recentEmpty}>{page ? '暂无记录' : '尚未取得记录'}</p>}
           </section></>}
           {reading === 'detail' && <p className={styles.paperMeta} role="status">正在读取所选笔记的保存版本…</p>}
         </section>
