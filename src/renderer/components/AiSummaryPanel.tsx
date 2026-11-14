@@ -30,7 +30,7 @@ interface Props {
 }
 interface SummaryForm { scope: string; fanIn: 2 | 4 | 8; connectionId: string; instruction: string }
 interface PendingWrite { requestId?: string; label: string; receive: (response: CompletedRequest) => boolean; retryRead?: NodeRead }
-interface DiscardAction { label: string; proceed: () => void }
+interface DiscardAction { label: string; proceed: () => void; leaving?: boolean }
 interface NodeRead { task: AiSummaryTaskDetail; node: AiSummaryNodeSummary; runOnly?: boolean }
 const taskLabels: Record<AiMemoryTaskState, string> = { planning: '规划汇总节点', ready: '等待处理节点', paused: '已暂停', failed: '需要处理异常', completed: '范围内汇总已采用', superseded: '下层来源已变化', cancelled: '已取消' }
 const runLabels: Record<AiRunState, string> = { prepared: '等待明确发送', running: '生成中', succeeded: '待作者审阅', failed: '生成失败', cancelled: '生成已取消', interrupted: '生成已中断', rejected: '作者已拒绝', adopted: '作者已采用' }
@@ -132,6 +132,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   const reviewDirtyRef = useRef(false)
   const callback = useRef(onDirtyChange)
   const taskControls = useRef<HTMLDetailsElement>(null)
+  const discardNotice = useRef<HTMLElement>(null)
   callback.current = onDirtyChange
   const run = node?.run ?? null
   const archived = Boolean(book.book.archivedAt)
@@ -139,11 +140,16 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   const blocked = baseBlocked || Boolean(requestedNode)
   const activeView = Boolean(task && status?.activeTask?.id === task.id && !terminal(task))
   const currentView = Boolean(activeView && node && task?.currentNode?.id === node.id)
-  const generating = run?.state === 'running' || Boolean(task?.currentNode?.runState === 'running' && task.currentNode.id !== node?.id)
+  const unresolvedGeneration = Boolean(task?.currentNode?.runState === 'running' && (task.currentNode.id !== node?.id || task.currentNode.runId !== run?.id))
+  const generating = run?.state === 'running' || unresolvedGeneration
+  // 仅主进程确认离线的候选允许离开；尚未读到当前节点时仍保留关闭保护。
+  const activeGeneration = run?.state === 'running' && run.active !== false || unresolvedGeneration
   const ready = status !== null && status.schemaVersion >= 9 && !status.requiresUpgrade && connections !== null && !connections.requiresUpgrade
   const edited = formDirty || reviewDirty
-  const dirty = blocked || generating || edited
+  const dirty = blocked || activeGeneration || edited
   const formLocked = blocked || archived || generating || Boolean(discard)
+  const formConnection = connections?.connections.find((item) => item.id === form.connectionId)
+  const missingFormConnection = Boolean(connections && form.connectionId && !formConnection)
   const staleRun = Boolean(run && status && (run.context.bookRevision !== status.bookRevision || run.context.knowledgeRevision !== status.knowledgeRevision))
   const savedConnection = connections?.connections.find((item) => item.id === run?.context.connection.id)
   const changedConnection = Boolean(run?.state === 'prepared' && connections && (!savedConnection || JSON.stringify(savedConnection) !== JSON.stringify(run.context.connection)))
@@ -168,7 +174,8 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   function acceptConnections(value: AiConnectionPage): boolean {
     if (value.bookId !== book.book.id) return false
     setConnections(value)
-    if (!formDirtyRef.current) setForm((previous) => ({ ...previous, connectionId: value.connections.some((item) => item.id === previous.connectionId) ? previous.connectionId : value.connections[0]?.id ?? '' }))
+    // 首次可使用首个连接；已有选择失效时保留原 ID，必须由作者明确改选。
+    if (!formDirtyRef.current) setForm((previous) => ({ ...previous, connectionId: previous.connectionId || value.connections[0]?.id || '' }))
     return true
   }
   function resetReview(value: AiRun | null) {
@@ -209,8 +216,8 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
     else proceed()
   }
   function leave(proceed: () => void) {
-    if (blocked || lock.current || pendingRef.current || requestedRef.current || generating) return
-    if (formDirtyRef.current || reviewDirtyRef.current) { setDiscard({ label: '放弃本页未保存的任务要求和摘要修改，并离开？已保存的任务、采用记录与原输出会保留。', proceed: () => { markFormDirty(false); markReviewDirty(false); callback.current(false); proceed() } }); return }
+    if (blocked || lock.current || pendingRef.current || requestedRef.current || activeGeneration) return
+    if (formDirtyRef.current || reviewDirtyRef.current) { setDiscard({ label: '放弃本页未保存的任务要求和摘要修改，并离开？已保存的任务、采用记录与原输出会保留。', leaving: true, proceed: () => { markFormDirty(false); markReviewDirty(false); callback.current(false); proceed() } }); return }
     callback.current(false); proceed()
   }
   function close() { leave(onClose) }
@@ -230,6 +237,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   }, [api, book.book.id])
   useEffect(() => { callback.current(dirty) }, [dirty])
   useEffect(() => { setRecoveryConfirmed(false) }, [pending, pendingMessage, form, acceptedText, edited])
+  useEffect(() => { if (discard) discardNotice.current?.focus() }, [discard])
 
   async function write<T>(label: string, send: () => Promise<Result<T>>, accept: (value: T) => boolean, receive: (response: CompletedRequest) => boolean, allowArchived = false): Promise<boolean> {
     const at = begin(label, allowArchived)
@@ -406,7 +414,8 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   async function start(event: FormEvent) {
     event.preventDefault()
     const current = statusRef.current
-    if (!current || !ready || current.activeTask || generating) return
+    if (!current || !ready || current.activeTask || formLocked || lock.current) return
+    if (!formConnection) { setMessage('请选择当前可用的模型连接后再创建汇总任务。'); return }
     let input: AiSummaryStartInput
     try { input = parseAiSummaryStartInput({ bookId: book.book.id, expectedBookRevision: current.bookRevision,
       expectedKnowledgeRevision: current.knowledgeRevision, connectionId: form.connectionId, scope: formScope(form.scope), fanIn: form.fanIn, instruction: form.instruction }) }
@@ -521,7 +530,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
   const canStep = activeView && task?.sourceCurrent && ['planning', 'ready'].includes(task.state) &&
     (task.phase === 'planning' || !task.currentNode?.runId || needsCheckpoint)
 
-  return <Dialog title="全书分层汇总" wide busy={blocked || generating} onClose={close} error={panelError}>
+  return <Dialog title="全书分层汇总" wide busy={blocked || activeGeneration} onClose={close} error={panelError}>
     {operation && <p className={styles.note} role="status">{operation}…</p>}
     {(pending || pendingMessage) && <section className={layout.pending} role="alert"><h3>本次操作结果未确认</h3><p>{pendingMessage ?? `${pending?.label}尚未收到确定回执，新的写入已暂停。`}</p><p>查询原请求只核对已保存的结果，不会重新发送或采用。</p>
       <label>任务、候选与本页编辑的恢复副本<textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={8} onFocus={(event) => event.target.select()} /></label>
@@ -543,11 +552,12 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
       <section className={styles.composer} aria-label="新建汇总任务"><div className={styles.heading}><h3>新建分层汇总</h3><span>{status.activeTask ? '已有活动任务' : '同时保留一个活动任务'}</span></div>
         <form className={layout.editorForm} onSubmit={(event) => void start(event)}>
           <div className={layout.twoColumns}><label>汇总范围<select value={form.scope} disabled={formLocked} onChange={(event) => { setForm({ ...form, scope: event.target.value }); markFormDirty(true) }}><option value="book">全书章节</option>{book.volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.title}</option>)}<option value="ungrouped">未分卷章节</option></select></label><label>每组完整摘要数<select value={form.fanIn} disabled={formLocked} onChange={(event) => { setForm({ ...form, fanIn: Number(event.target.value) as 2 | 4 | 8 }); markFormDirty(true) }}><option value={2}>2 份</option><option value={4}>4 份</option><option value={8}>8 份</option></select></label></div>
-          <label>已保存的模型连接<select value={form.connectionId} disabled={formLocked} onChange={(event) => { setForm({ ...form, connectionId: event.target.value }); markFormDirty(true) }}><option value="" disabled>请选择连接</option>{connections.connections.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}</select></label>
+          <label>已保存的模型连接<select value={form.connectionId} disabled={formLocked} onChange={(event) => { setForm({ ...form, connectionId: event.target.value }); markFormDirty(true) }}><option value="" disabled>请选择连接</option>{missingFormConnection && <option value={form.connectionId} disabled>原连接不可用，请重新选择</option>}{connections.connections.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}</select></label>
+          {missingFormConnection && <p className={shared.formError} role="alert">原选择的模型连接已不可用，任务要求已保留；请明确选择其他连接，不会自动替换。</p>}
           <p className={styles.note}>连接与本次会话的密钥在“AI 创作协作”管理。当前范围含 {selectedChapters.toLocaleString()} 章；全书已有 {status.availableChapterSummaries.toLocaleString()}／{status.totalChapters.toLocaleString()} 章具备当前稿、当前标题的已采用摘要，创建时逐章核对所选范围。</p>
           <label>每层汇总要求<textarea aria-label="每层汇总要求" value={form.instruction} rows={4} maxLength={6000} required disabled={formLocked} onChange={(event) => { setForm({ ...form, instruction: event.target.value }); markFormDirty(true) }} /></label>
           <p className={styles.note}>来源超预算会拒绝准备，请选择较小分组或调整连接预算。一次最多规划 {AI_SUMMARY_PLAN_PAGE} 个节点，所有发送均需逐节点确认。</p>
-          <div className={styles.actions}><button type="submit" className={shared.primaryButton} disabled={formLocked || Boolean(status.activeTask) || !form.connectionId || !form.instruction.trim() || selectedChapters === 0}>创建本地汇总任务</button><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setRefreshRequested(true)}>刷新状态</button></div>
+          <div className={styles.actions}><button type="submit" className={shared.primaryButton} disabled={formLocked || Boolean(status.activeTask) || !formConnection || !form.instruction.trim() || selectedChapters === 0}>创建本地汇总任务</button><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setRefreshRequested(true)}>刷新状态</button></div>
         </form>
       </section>
       {status.activeTask && task?.id !== status.activeTask.id && <section className={styles.run}><h3>当前活动任务 · {status.activeTask.scopeTitle}</h3><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => openTask(status.activeTask!.id)}>返回活动任务</button></section>}
@@ -581,7 +591,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
             {currentView && !['running', 'adopted', 'rejected'].includes(run.state) && <button type="button" className={shared.button} disabled={blocked || archived} onClick={() => guardReview('放弃未采用的摘要修改，并拒绝本次候选？原输出仍保留。', () => void finishRun('reject'))}>拒绝本次候选</button>}
             <button type="button" className={shared.button} disabled={blocked} onClick={() => void readNode({ task, node, runOnly: true })}>只读刷新候选</button>
           </div>
-          {run.state === 'running' && run.active === false && <p className={styles.note}>桌面进程没有对应活动网络。核对后可明确标记中断，不会自动重发。</p>}
+          {run.state === 'running' && run.active === false && <p className={styles.note}>桌面进程没有对应活动网络。可以离开并保留记录，或核对后明确标记中断；不会自动重发。</p>}
           <details className={styles.messages}><summary>保留的模型原输出</summary><pre>{run.outputText || '尚无输出'}</pre></details>
           {parsed.error && <p className={shared.formError} role="alert">{parsed.error}</p>}
           {parsed.proposal && <><label className={styles.output}>作者审阅后的摘要<textarea className={styles.acceptedText} value={acceptedText} rows={10} maxLength={AI_SUMMARY_TEXT_LIMIT} disabled={blocked || archived || !editable} onChange={(event) => { setAcceptedText(event.target.value); markReviewDirty(true) }} /></label><p className={styles.note}>摘要最多 {AI_SUMMARY_TEXT_LIMIT.toLocaleString()} 字符，始终是 AI 整理资料；采用不提升为客观事实。下列引用来自固定下层摘要，不是本次读取的全书正文。</p><details className={styles.sources}><summary>固定下层摘要引文（{parsed.proposal.citations.length} 处）</summary>{parsed.proposal.citations.map((citation, index) => <div key={`${citation.sourceId}:${index}`}><p className={layout.sourceIds}>摘要来源 {citation.sourceId}</p><blockquote>{citation.quote}</blockquote></div>)}</details>
@@ -592,7 +602,7 @@ function AiSummarySession({ api, book, initialTaskId, busy, error, pendingMessag
       {status.recentTasks.length > 0 && <details className={styles.history}><summary>最近 {Math.min(10, status.recentTasks.length)} 份汇总任务</summary><ul>{status.recentTasks.slice(0, 10).map((item) => <li key={item.id}><button type="button" className={styles.historyItem} disabled={blocked || generating} aria-current={task?.id === item.id ? 'true' : undefined} onClick={() => openTask(item.id)}><span><strong>{item.scopeTitle} · 每组 {item.fanIn} 份</strong><small>已采用 {item.approvedNodes}／{item.totalNodes} 个节点 · {item.sourceCurrent ? '来源当前' : '历史来源'}</small></span><span>{taskLabels[item.state]}<small>{displayTime(item.updatedAt)}</small></span></button></li>)}</ul></details>}
       {archived && <p className={styles.note}>作品已归档，可读取历史与来源；解除归档后可继续汇总。</p>}
     </div></details></>}
-    {discard && <section className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || generating} onClick={() => setDiscard(null)}>保留当前内容</button><button type="button" className={shared.primaryButton} disabled={blocked || generating} onClick={() => { const proceed = discard.proceed; setDiscard(null); proceed() }}>确认并继续</button></div></section>}
-    <div className={styles.footer}><button type="button" className={shared.button} disabled={blocked || generating} onClick={close}>关闭</button></div>
+    {discard && <section ref={discardNotice} tabIndex={-1} className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || activeGeneration} onClick={() => setDiscard(null)}>保留当前内容</button><button type="button" className={shared.primaryButton} disabled={blocked || activeGeneration || generating && !discard.leaving} onClick={() => { const proceed = discard.proceed; setDiscard(null); proceed() }}>确认并继续</button></div></section>}
+    <div className={styles.footer}><button type="button" className={shared.button} disabled={blocked || activeGeneration} onClick={close}>关闭</button></div>
   </Dialog>
 }
