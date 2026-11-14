@@ -37,7 +37,12 @@ type RecoveryRequest = { targetRoot: string; recoveryEpoch: number } & (
 interface PendingRequest { source: RecoveryRequest; requestId?: string }
 interface ExportedBook { receipt: BookRecoveryExportReceipt; title: string; targetRoot: string }
 interface RestoredBook { receipt: BookRecoveryRestoreReceipt; preview: BookRecoveryPreview }
-interface PackageEntry { id: string; title: string; path: string; createdAt: string; bytes: number; state: 'verified' | 'conflict' | 'unchecked' | 'restored' }
+interface PackageEntry {
+  id: string; title: string; path: string; createdAt: string; bytes: number
+  state: 'verified' | 'unchecked' | 'restored'
+  targetState?: BookRecoveryPreview['targetState']
+}
+const targetStateLabels = { new: '可恢复', resumable: '可续办', incomplete: '未完成冲突', conflict: '目标目录冲突' } as const
 
 function label(source: RecoveryRequest): string {
   return source.command === 'recovery.export' ? '创建作品备份' : source.command === 'recovery.prepare' ? '校验恢复包' : '恢复作品'
@@ -76,6 +81,7 @@ export function BookRecoveryPanel(props: Props) {
   const [inventoryError, setInventoryError] = useState<string | null>(null)
   const [inventoryReading, setInventoryReading] = useState(false)
   const [inventoryAttempt, setInventoryAttempt] = useState(0)
+  const [validationFailure, setValidationFailure] = useState<{ targetRoot: string; recoveryEpoch: number; message: string } | null>(null)
   const current = useRef(props)
   const mounted = useRef(false)
   const lock = useRef(false)
@@ -87,12 +93,14 @@ export function BookRecoveryPanel(props: Props) {
   const blocked = busy || Boolean(operation || pending)
   const needsReconciliation = Boolean(unresolved && !reconciled)
   const currentPreview = preview?.targetRoot === targetRoot && selectionRef.current?.recoveryEpoch === recoveryEpoch ? preview : null
+  const currentValidationFailure = validationFailure?.targetRoot === targetRoot && validationFailure.recoveryEpoch === recoveryEpoch ? validationFailure : null
 
   function publishLock() { current.current.onDirtyChange(lock.current || Boolean(pendingRef.current)) }
   function hold(value: PendingRequest | null) { pendingRef.current = value; setPending(value); publishLock() }
   function clearPreview() { previewRef.current = null; setPreview(null); setConfirmed(false) }
   function begin(name: string, allowPending = false): boolean {
     if (!current.current.open || current.current.busy || lock.current || (!allowPending && pendingRef.current)) return false
+    setValidationFailure(null)
     lock.current = true; setOperation(name); setMessage(null); publishLock(); return true
   }
   function finish() { lock.current = false; if (mounted.current) { setOperation(null); publishLock() } }
@@ -102,6 +110,7 @@ export function BookRecoveryPanel(props: Props) {
     return () => { mounted.current = false; current.current.onDirtyChange(false) }
   }, [])
   useEffect(() => {
+    setValidationFailure(null)
     selectionRef.current = null; clearPreview()
     // 重新连接只释放旧会话锁，不代表此前的磁盘操作没有发生；保留身份供作者核对。
     if (previousRecovery.current !== recoveryEpoch && pendingRef.current) {
@@ -161,6 +170,8 @@ export function BookRecoveryPanel(props: Props) {
       hold({ source, requestId: failure.requestId })
       setMessage('尚未收到确定结果，较大的恢复包可能需要更长时间。请查询原回执，不要重复提交。')
     } else {
+      // 失败回执不一定含包身份，也可能是权限或目录错误，不能据此虚构“损坏包”列表项。
+      if (source.command === 'recovery.prepare') setValidationFailure({ targetRoot: source.targetRoot, recoveryEpoch: source.recoveryEpoch, message: failure.message })
       if (source.command === 'recovery.restore') setFailedRestore({ preview: source.preview, message: failure.message })
       setMessage(failure.message + (source.command === 'recovery.restore' ? ' 本次预览已失效，请重新选择恢复包并核对目标书库。' : ''))
     }
@@ -256,11 +267,12 @@ export function BookRecoveryPanel(props: Props) {
   if (restored?.receipt.targetRoot === targetRoot) packages.set(restored.receipt.packageId, { id: restored.receipt.packageId, title: restored.receipt.book.title,
     path: restored.preview.packagePath, createdAt: restored.preview.createdAt, bytes: restored.preview.totalBytes, state: 'restored' })
   if (currentPreview) packages.set(currentPreview.packageId, { id: currentPreview.packageId, title: currentPreview.book.title,
-    path: currentPreview.packagePath, createdAt: currentPreview.createdAt, bytes: currentPreview.totalBytes, state: currentPreview.conflict ? 'conflict' : 'verified' })
+    path: currentPreview.packagePath, createdAt: currentPreview.createdAt, bytes: currentPreview.totalBytes, state: 'verified', targetState: currentPreview.targetState })
   const capacity = draftInventory?.capacity
   const capacityRatio = capacity ? capacity.bytes / Math.max(1, capacity.maxBytes) : 0
   const previewState = pending ? '等待回执' : operation ? `${operation}…`
-    : currentPreview ? currentPreview.conflict ? '目标存在冲突' : '预览已校验'
+    : currentValidationFailure ? '校验未完成'
+      : currentPreview ? targetStateLabels[currentPreview.targetState]
       : failedRestore?.preview.targetRoot === targetRoot ? '恢复未完成'
         : restored?.receipt.targetRoot === targetRoot ? '恢复已完成' : '等待选择恢复包'
 
@@ -275,15 +287,15 @@ export function BookRecoveryPanel(props: Props) {
       </section>
     </div>
     <div className={styles.fieldStack} aria-busy={Boolean(operation)}>
-      {operation && <p className={styles.helpText} role="status">{operation}…</p>}
-      {message && <p className={styles.helpText} role="status">{message}</p>}
+      {operation && <p className={recovery.operationStatus} role="status"><span className={styles.spinner} aria-hidden="true" />{operation}…</p>}
+      {message && !currentValidationFailure && <p className={styles.helpText} role="status">{message}</p>}
       {pending && <section className={styles.inlineNotice} role="alert"><div className={styles.fieldStack}>
         <strong>{label(pending.source)}结果待确认</strong>
         <p>原操作可能仍在处理或已经完成。请查询原回执，暂时不要再次备份或提交恢复。</p>
         {!pending.requestId && <p>本次没有可查询的请求编号，请保留操作记录并进入草稿与恢复核对。</p>}
         <label>本次操作记录<textarea value={recoveryInfo(pending)} readOnly rows={5} onFocus={(event) => event.target.select()} /></label>
         <div className={styles.actionRow}>
-          <button className={styles.button} type="button" disabled={busy || Boolean(operation) || !pending.requestId} onClick={() => void checkReceipt()}>查询原回执</button>
+          <button className={styles.button} type="button" aria-busy={operation === '查询原回执'} disabled={busy || Boolean(operation) || !pending.requestId} onClick={() => void checkReceipt()}>查询原回执</button>
           <button className={styles.button} type="button" disabled={busy || Boolean(operation)} onClick={recover}>进入草稿与恢复</button>
         </div>
       </div></section>}
@@ -296,7 +308,7 @@ export function BookRecoveryPanel(props: Props) {
       <section className={`${styles.fieldStack} ${recovery.backup}`} aria-label="备份当前作品">
         <header className={recovery.sectionHeading}><h3>恢复包列表</h3><button className={recovery.iconButton} type="button" disabled={blocked || needsReconciliation || !targetRoot} title="选择恢复包并校验" aria-label="选择恢复包并校验" onClick={selectPackage}><StudioIcon name="refresh" size={20} /></button></header>
         <ul className={recovery.packages} aria-label="本次会话恢复包">{[...packages.values()].map((item) => <li key={item.id} data-state={item.state} data-current={currentPreview?.packageId === item.id}>
-          <span className={recovery.packageMark} aria-hidden="true"><StudioIcon name="archive" size={28} /></span><div className={recovery.packageDetails}><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString('zh-CN')} · {formatBytes(item.bytes)}</small><span title={item.path}>{item.path}</span></div><span className={recovery.packageState}><StudioIcon name={item.state === 'conflict' ? 'close' : item.state === 'unchecked' ? 'clock' : 'check'} size={18} />{item.state === 'conflict' ? '目标冲突' : item.state === 'unchecked' ? '待校验' : item.state === 'restored' ? '已恢复' : '通过'}</span>
+          <span className={recovery.packageMark} aria-hidden="true"><StudioIcon name="archive" size={28} /></span><div className={recovery.packageDetails}><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString('zh-CN')} · {formatBytes(item.bytes)}</small><span title={item.path}>{item.path}</span>{item.targetState && <small className={recovery.packageTargetState} data-state={item.targetState}>{targetStateLabels[item.targetState]}</small>}</div><span className={recovery.packageState}><StudioIcon name={item.state === 'unchecked' ? 'clock' : 'check'} size={18} />{item.state === 'unchecked' ? '待校验' : item.state === 'restored' ? '已恢复' : '通过'}</span>
         </li>)}</ul>
         {!packages.size && <div className={recovery.empty}><StudioIcon name="archive" size={32} /><p>尚未选择恢复包</p><button className={styles.button} type="button" disabled={blocked || needsReconciliation || !targetRoot} onClick={selectPackage}>选择恢复包</button></div>}
         <p className={styles.helpText}>仅列出本次会话已创建或选择的恢复包。</p>
@@ -306,7 +318,7 @@ export function BookRecoveryPanel(props: Props) {
         <p className={styles.helpText}>保存书内数据库中的正文、历史版本、作者定稿、资料与任务记录，以及登记的导入原件。恢复前会校验数据库结构、内容和文件摘要。</p>
         <p className={styles.helpText}>恢复包不含未提交编辑、书库级自动检查点（包括已经落盘的各代草稿）、待补存模型结果、书架目录库、升级备份及显示偏好。全局灵感库 inspiration.sqlite 也不包含；先复制到书内笔记的灵感会随作品备份。请分别保留这些资料；模型会话密钥不会写入备份。完整作品备份不能替代整个工作区的备份。</p>
         <p className={styles.helpText}>{book ? `当前作品：《${book.title}》 · 作品版本 ${book.revision}${book.archivedAt ? ' · 已归档，可备份' : ''}` : '需要备份时，请先从书架打开作品。下方恢复入口可直接使用。'}</p>
-        <button className={styles.button} type="button" disabled={blocked || needsReconciliation || !book || !targetRoot} onClick={exportBook}>选择保存位置并备份当前作品</button>
+        <button className={styles.button} type="button" aria-busy={operation === '创建作品备份'} disabled={blocked || needsReconciliation || !book || !targetRoot} onClick={exportBook}>选择保存位置并备份当前作品</button>
         <p className={styles.helpText}>选择父目录后，将新建一个独立的恢复包子目录。请完整保留其中的文件。</p>
         {exported && <div className={styles.copyReceipt} role="status">《{exported.title}》最近一次备份已完成
           <span>恢复包：{exported.receipt.packagePath}</span>
@@ -317,20 +329,20 @@ export function BookRecoveryPanel(props: Props) {
         </details>
       </section>
       <section className={`${styles.fieldStack} ${recovery.restore}`} aria-label="从恢复包恢复作品">
-        <header className={recovery.sectionHeading}><h3>恢复预览</h3><span className={recovery.state}>{previewState}</span></header>
+        <header className={recovery.sectionHeading}><h3>恢复预览</h3><span className={recovery.state} data-state={pending ? 'pending' : operation ? 'working' : currentValidationFailure ? 'failed' : currentPreview?.targetState ?? (failedRestore?.preview.targetRoot === targetRoot ? 'failed' : restored?.receipt.targetRoot === targetRoot ? 'restored' : 'idle')}>{previewState}</span></header>
         <p className={styles.helpText}>目标作品库：{targetRoot ?? '尚未选择，请先选择作品库。'}</p>
-        <div className={styles.actionRow}>
-          <button className={styles.button} type="button" disabled={blocked || needsReconciliation || !targetRoot} onClick={selectPackage}>选择恢复包目录并预览</button>
-          <button className={styles.button} type="button" disabled={blocked} onClick={chooseWorkspace}>选择其他作品库</button>
-        </div>
         <p className={styles.helpText}>请选择包含 manifest.json 的完整恢复包目录。预览校验通过并确认后，才会恢复作品。</p>
+        {currentValidationFailure && <div className={recovery.validationFailure} role="alert">
+          <span className={recovery.decisionMark} aria-hidden="true"><StudioIcon name="warning" size={24} /></span>
+          <div><strong>恢复包校验未完成</strong><p>{currentValidationFailure.message}</p><p>请核对完整恢复包与目标作品库，再重新选择并校验。</p></div>
+        </div>}
         {failedRestore && <div className={styles.stateBlock}>
           <p className={styles.formError}>最近一次恢复返回：{failedRestore.message}</p>
           <p className={styles.directoryPath}>恢复包：{failedRestore.preview.packagePath}</p>
           <p className={styles.directoryPath}>目标作品库：{failedRestore.preview.targetRoot}</p>
           <p>请先核对目标目录和书架；继续恢复须重新选择恢复包预览。</p>
         </div>}
-        {!currentPreview && !restored && !failedRestore && <div className={recovery.previewEmpty}><StudioIcon name="archive" size={64} /><p>选择完整恢复包后查看作品身份与清单</p></div>}
+        {!currentPreview && !currentValidationFailure && !restored && !failedRestore && <div className={recovery.previewEmpty}><StudioIcon name="archive" size={64} /><p>选择完整恢复包后查看作品身份与清单</p></div>}
         {currentPreview && <>
           <div className={recovery.previewIdentity}><span className={recovery.previewMark} aria-hidden="true"><StudioIcon name="archive" size={64} /></span><div className={recovery.identityDetails}>
             <h4>《{currentPreview.book.title}》{currentPreview.book.archivedAt ? ' · 已归档' : ''}</h4>
@@ -348,14 +360,21 @@ export function BookRecoveryPanel(props: Props) {
             <p className={styles.directoryPath}>恢复包：{currentPreview.packagePath}</p>
             <p className={styles.directoryPath}>目标作品库：{currentPreview.targetRoot}</p>
           </div>
-          <div className={recovery.restoreDecision} data-state={currentPreview.targetState}>
-          <div className={currentPreview.conflict ? recovery.conflict : recovery.verified} role={currentPreview.conflict ? 'alert' : 'status'}><span className={recovery.decisionMark} aria-hidden="true"><StudioIcon name={currentPreview.conflict ? 'warning' : 'check'} size={24} /></span><div><strong>{currentPreview.targetState === 'resumable' ? '可续办' : currentPreview.targetState === 'incomplete' ? '未完成冲突' : currentPreview.conflict ? '目标目录冲突' : '可恢复'}</strong><p>{currentPreview.targetMessage}</p></div></div>
-          {!currentPreview.conflict && <label className={`${styles.checkLabel} ${recovery.restoreConfirmation}`}>
+        </>}
+        {/* 预览与书库选择按钮常驻同一父节点，目录窗口返回时不因预览挂载而替换焦点目标。 */}
+        <div className={recovery.restoreDecision} data-state={currentPreview?.targetState ?? 'unselected'}>
+          {currentPreview && <div className={currentPreview.conflict ? recovery.conflict : recovery.verified} role={currentPreview.conflict ? 'alert' : 'status'}><span className={recovery.decisionMark} aria-hidden="true"><StudioIcon name={currentPreview.conflict ? 'warning' : 'check'} size={24} /></span><div><strong>{targetStateLabels[currentPreview.targetState]}</strong><p>{currentPreview.targetMessage}</p></div></div>}
+          {currentPreview && !currentPreview.conflict && <label className={`${styles.checkLabel} ${recovery.restoreConfirmation}`}>
             <input type="checkbox" checked={confirmed} disabled={blocked || needsReconciliation} onChange={(event) => setConfirmed(event.target.checked)} />{currentPreview.targetState === 'resumable' ? '我已核对恢复来源与目标，确认保留已有文件并续办这次恢复。' : '我已核对作品、备份时间和目标作品库，确认恢复这份作品。'}
           </label>}
-          <button className={styles.primaryButton} type="button" disabled={blocked || needsReconciliation || currentPreview.conflict || !confirmed} onClick={restoreBook}>{currentPreview.targetState === 'resumable' ? '确认续办恢复' : '确认恢复作品'}</button>
+          <div className={recovery.decisionActions}>
+            <button className={styles.button} type="button" disabled={blocked || needsReconciliation || !targetRoot}
+              aria-busy={operation === '校验恢复包'} title="从原生窗口选择完整恢复包目录，校验并预览" onClick={selectPackage}>{currentPreview ? '重新校验并预览' : '选择恢复包目录并预览'}</button>
+            {currentPreview && <button className={styles.primaryButton} type="button" disabled={blocked || needsReconciliation || currentPreview.conflict || !confirmed}
+              title={currentPreview.conflict ? currentPreview.targetMessage : !confirmed ? '请先勾选下方恢复确认。' : undefined} onClick={restoreBook}>{currentPreview.targetState === 'resumable' ? '确认续办恢复' : '确认恢复作品'}</button>}
+            <button className={styles.button} type="button" disabled={blocked} onClick={chooseWorkspace}>选择其他作品库</button>
           </div>
-        </>}
+        </div>
         {restored && <div className={styles.fieldStack}>
           <div className={styles.copyReceipt} role="status">《{restored.receipt.book.title}》已恢复完成
             <span>目标作品库：{restored.receipt.targetRoot}</span>
