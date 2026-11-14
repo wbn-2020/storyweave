@@ -222,6 +222,8 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   const [sourceChapter, setSourceChapter] = useState<ChapterSnapshot | null>(null)
   const [blockId, setBlockId] = useState('')
   const [evidence, setEvidence] = useState<{ source: KnowledgeSource; revision: RevisionSnapshot } | null>(null)
+  const detailMore = useRef<HTMLDetailsElement>(null)
+  const sourceHeading = useRef<HTMLHeadingElement>(null)
   const mounted = useRef(false)
   const readTicket = useRef(0)
   const listTicket = useRef(0)
@@ -306,6 +308,14 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
   }
 
   function resetSource() { setSourceType(''); setQuote(''); setSourceChapter(null); setBlockId(''); setEvidence(null) }
+
+  function revealSources() {
+    if (!mayLeave() || !detailMore.current || !sourceHeading.current) return
+    // 先展开原资料区再定位，保留固定来源读取入口，不跳到其他稿件。
+    detailMore.current.open = true
+    sourceHeading.current.focus({ preventScroll: true })
+    sourceHeading.current.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
 
   async function selectItem(id: string) {
     if (!mayLeave()) return
@@ -638,44 +648,40 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
       <section className={styles.detailPane} aria-label="知识条目详情" aria-busy={reading}>
         {mode === 'view' ? detail ? <>
           <SavedPortrait api={api} bookId={book.book.id} personId={detail.id} metadata={detail.kind === 'person' ? portraits.items.find((value) => value.personId === detail.id) : undefined} name={detail.name} className={styles.detailPortrait} fallback={<StudioIcon name={categoryIcons[detail.kind]} size={64} />} />
-          <div className={styles.detailHeading}>
-            <div className={styles.detailHeroLeft}>
-              <div>
-                <div className={styles.detailTagRow}>
-                  <span className={styles.roleTag} data-kind={detail.kind}>{kindLabels[detail.kind]}</span>
-                  <span className={styles.natureBadge}>{natureLabels[detail.nature]}</span>
-                </div>
-                <h3>{detail.name}</h3>
-                <span className={styles.cardState} data-tone={cardState(detail).tone}>{cardState(detail).label}</span>
-                {detail.aliases.length > 0 && <p className={shared.helpText}>别名 / 称号：{detail.aliases.join('、')}</p>}
-              </div>
-            </div>
-            <div className={styles.listActions}><button className={shared.primaryButton} type="button" disabled={unavailable || archived} onClick={() => beginEdit(false)}>编辑卡片</button>
-              <button className={shared.button} type="button" disabled={unavailable || !adjudicationReady} onClick={() => { if (mayLeave()) { resetSource(); setActiveView('adjudication') } }}><StudioIcon name="warning" size={18} />{adjudicationReady ? '冲突裁决' : '需先启用知识裁决'}</button>
-              <button className={shared.textButton} type="button" disabled={unavailable} onClick={() => void selectItem(detail.id)}>重新读取当前条目</button>
-              {detail.kind === 'person' && onForge && <details className={styles.forgeActions}><summary>AI 工坊</summary><div><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'fill') }}>AI 补全空白</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'extract') }}>从正文提炼</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'audition') }}>角色试戏</button></div></details>}
-            </div>
+          <div className={styles.detailTitleBar}>
+            <h3>{detail.name}</h3>
+            <span className={styles.cardState} data-tone={cardState(detail).tone}>{cardState(detail).label}</span>
           </div>
-
-          <details className={styles.judgment}><summary>作者判断与状态</summary><div className={styles.labels}>
-            <span>采纳状态：{decisionLabels[detail.authorDecision]}</span>
-            <span>新鲜度：{freshnessLabels[detail.freshness]}</span>
-            <span>一致性：{conflictLabels[detail.conflictState]}</span>
-          </div>{detail.adjudications?.[0] && <p>最近独立裁决：{{ keep_a: '保留 A', keep_b: '保留 B', intentional: '标为有意安排' }[detail.adjudications[0].resolution]} · {detail.adjudications[0].revisionId === detail.revisions[0]?.id ? '对应当前修订' : '之后已有条目修订，请查看固定历史'}</p>}</details>
           {detail.nature === 'future_plan' && <p className={styles.natureNote}>这是尚未写成的未来计划，不作为当前已发生事实。</p>}
           {detail.nature === 'ai_inference' && <p className={styles.natureNote}>这是推断记录，需要依据与作者判断，不能自动视为已成立。</p>}
 
-          <div className={styles.summaryCard}>
-            <h4>身份与设定</h4>
-            <p className={styles.body}>{detail.summary || '尚未填写说明。'}</p>
-          </div>
-          <dl className={styles.keyFacts}>
-            {detail.kind === 'person' && <><div><dt>动机</dt><dd>{detail.characterProfile?.motivation || '未填写'}</dd></div><div><dt>致命弱点</dt><dd>{detail.characterProfile?.weakness || '未填写'}</dd></div><div><dt>身世</dt><dd>{detail.characterProfile?.background || '未填写'}</dd></div></>}
+          <dl className={`${styles.keyFacts} ${styles.detailFacts}`}>
+            <div><dt>别名</dt><dd>{detail.aliases.join('、') || '未填写'}</dd></div>
+            <div><dt>{detail.kind === 'person' ? '身份' : '设定'}</dt><dd>{detail.summary || '尚未填写说明。'}</dd></div>
+            {detail.kind === 'person' && <><div><dt>动机</dt><dd>{detail.characterProfile?.motivation || '未填写'}</dd></div><div><dt>致命弱点</dt><dd>{detail.characterProfile?.weakness || '未填写'}</dd></div></>}
             <div><dt>首次登场</dt><dd title={storyContext?.state === 'ready' && storyContext.firstAppearance ? `${storyContext.firstAppearance.chapterTitle} · 当前稿中最早的有效登场登记` : undefined}>{storyContext?.state === 'ready' ? storyContext.firstAppearance ? `第 ${storyContext.firstAppearance.chapterPosition + 1} 章` : '暂无有效登场登记' : contextUnavailable}</dd></div>
             <div><dt>关联对象</dt><dd>{storyContext?.state === 'ready' ? relatedObjects.length ? <div className={styles.relatedObjects}>{relatedObjects.map((item) => <button key={item.entityId} className={styles.relatedObject} type="button" title={`${item.name}\n${storyContext.relations.filter((relation) => relation.entityId === item.entityId).map((relation) => `${relation.relationType} · ${natureLabels[relation.nature]} · ${decisionLabels[relation.authorDecision]} · ${freshnessLabels[relation.freshness]} · ${conflictLabels[relation.conflictState]}${relation.layer === 'hidden' ? ' · 隐藏关系' : ''}`).join('\n')}`} aria-label={`查看${item.name}的设定`} disabled={unavailable} onClick={() => void selectItem(item.entityId)}>
               <SavedPortrait api={api} bookId={book.book.id} personId={item.entityId} metadata={item.kind === 'person' ? portraits.items.find((portrait) => portrait.personId === item.entityId) : undefined} name={item.name} className={styles.relatedPortrait} fallback={<StudioIcon name={categoryIcons[item.kind]} size={20} />} />
             </button>)}</div> : '暂无已登记关系' : contextUnavailable}</dd></div>
           </dl>
+          <div className={styles.detailActions}>
+            <button className={styles.detailSourceButton} type="button" disabled={unavailable} onClick={revealSources}><StudioIcon name="notes" size={20} />查看出处</button>
+            <button className={styles.detailEditButton} type="button" disabled={unavailable || archived} onClick={() => beginEdit(false)}><StudioIcon name="pen" size={20} />编辑卡片</button>
+          </div>
+          <details className={styles.detailMore} key={`detail-more-${detail.id}`} ref={detailMore}><summary>更多资料与操作</summary>
+            <div className={styles.listActions}>
+              <button className={shared.button} type="button" disabled={unavailable || !adjudicationReady} onClick={() => { if (mayLeave()) { resetSource(); setActiveView('adjudication') } }}><StudioIcon name="warning" size={18} />{adjudicationReady ? '冲突裁决' : '需先启用知识裁决'}</button>
+              <button className={shared.textButton} type="button" disabled={unavailable} onClick={() => void selectItem(detail.id)}>重新读取当前条目</button>
+              {detail.kind === 'person' && onForge && <details className={styles.forgeActions}><summary>AI 工坊</summary><div><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'fill') }}>AI 补全空白</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'extract') }}>从正文提炼</button><button className={shared.button} type="button" disabled={unavailable || archived} onClick={() => { if (mayLeave()) onForge(detail.id, 'audition') }}>角色试戏</button></div></details>}
+            </div>
+            <details className={styles.judgment}><summary>作者判断与状态</summary>
+              <div className={styles.detailTagRow}><span className={styles.roleTag} data-kind={detail.kind}>{kindLabels[detail.kind]}</span><span className={styles.natureBadge}>{natureLabels[detail.nature]}</span></div>
+              <div className={styles.labels}>
+                <span>采纳状态：{decisionLabels[detail.authorDecision]}</span>
+                <span>新鲜度：{freshnessLabels[detail.freshness]}</span>
+                <span>一致性：{conflictLabels[detail.conflictState]}</span>
+              </div>{detail.adjudications?.[0] && <p>最近独立裁决：{{ keep_a: '保留 A', keep_b: '保留 B', intentional: '标为有意安排' }[detail.adjudications[0].resolution]} · {detail.adjudications[0].revisionId === detail.revisions[0]?.id ? '对应当前修订' : '之后已有条目修订，请查看固定历史'}</p>}
+            </details>
           {storyContext?.state === 'ready' && storyContext.relations.length > 0 && <details className={styles.judgment}><summary>查看关联登记{storyContext.relationsTruncated ? `（仅最近 ${KNOWLEDGE_RELATED_LIMIT} 条）` : ''}</summary>
             <p className={shared.helpText}>按已登记关系展示，不代表当前剧情中有效。</p>
             <ul className={styles.history}>{storyContext.relations.map((relation) => <li key={relation.recordId}><strong>{relation.name} · {relation.relationType}</strong><span>{relation.title} · {{ outgoing: '本条目指向对方', incoming: '对方指向本条目', mutual: '双向关系' }[relation.direction]} · {relation.layer === 'hidden' ? '隐藏关系' : relation.layer === 'surface' ? '表面关系' : '未标注层次'}</span><span>{natureLabels[relation.nature]} · {decisionLabels[relation.authorDecision]} · {freshnessLabels[relation.freshness]} · {conflictLabels[relation.conflictState]}</span></li>)}</ul>
@@ -687,12 +693,13 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
             </details>
           )}
 
-          <div className={styles.sectionHeading}><h4>正文出处与依据</h4><span>{detail.sources.length} 条</span></div>
+          <div className={styles.sectionHeading}><h4 ref={sourceHeading} tabIndex={-1}>正文出处与依据</h4><span>{detail.sources.length} 条</span></div>
           {detail.sources.length === 0 && <p className={shared.helpText}>暂无已登记来源。</p>}
           <ul className={styles.sources}>{detail.sources.map((source) => <li key={source.id}><div><strong>{sourceLabels[source.sourceType]}</strong><span>{source.sourceType === 'chapter_text' ? validityLabels[source.validity] : '手工来源记录'}{source.sourceType === 'chapter_text' && source.referenceState === 'historical' ? ' · 引用历史稿' : ''}</span></div><blockquote>{source.quote}</blockquote>{source.sourceType === 'chapter_text' && <button className={shared.button} type="button" onClick={() => void showSource(source)} disabled={unavailable}>查看此版本原文</button>}</li>)}</ul>
           {evidence && <Evidence source={evidence.source} revision={evidence.revision} onClose={() => setEvidence(null)} />}
           <div className={styles.sectionHeading}><h4>修改记录</h4><span>共 {detail.revisions.length} 次保存</span></div>
           <ol className={styles.history}>{detail.revisions.map((revision) => <li key={revision.id}><time dateTime={revision.createdAt}>{displayTime(revision.createdAt)}</time><span>{revision.reason === 'created' ? '建立卡片' : '更新卡片'} · {revision.fields.name} · {decisionLabels[revision.fields.authorDecision]}</span></li>)}</ol>
+          </details>
         </> : (
           <div className={styles.empty}>
             <StudioIcon name="read" size={32} /><h3>{reading ? '正在读取卡片…' : '尚未选择设定'}</h3>

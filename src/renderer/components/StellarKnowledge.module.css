@@ -139,6 +139,21 @@
 .keyFacts > div { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: var(--space-3); padding-block: var(--space-3); border-bottom: 1px solid var(--color-line); }
 .keyFacts dt { color: var(--color-muted); }
 .keyFacts dd { margin: 0; white-space: pre-wrap; }
+.detailTitleBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.panel .detailTitleBar h3 { flex: 1 1 50%; min-width: 0; margin: 0; font-size: var(--text-title); overflow-wrap: anywhere; }
+.detailTitleBar > .cardState { flex-shrink: 0; }
+.detailFacts { border-top: 1px solid var(--color-line-strong); }
+.detailFacts > div:last-child { border-bottom: 0; }
+.detailFacts dd { min-width: 0; overflow-wrap: anywhere; }
+.detailActions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); }
+.detailSourceButton { composes: button from './stellar/Workspace.module.css'; }
+.detailEditButton { composes: button from './stellar/Workspace.module.css'; }
+.detailActions > button { flex: 1 1 40%; min-width: 0; border-radius: var(--radius-xl); color: var(--color-ink); white-space: normal; overflow-wrap: anywhere; }
+.detailActions .detailSourceButton { border-color: color-mix(in srgb,var(--galaxy-person) 50%,var(--color-line)); background: color-mix(in srgb,var(--galaxy-person) 20%,var(--bg-surface)); }
+.detailActions .detailEditButton { border-color: var(--color-accent-2); background: color-mix(in srgb,var(--color-accent-2) 24%,var(--bg-surface)); }
+.detailActions .detailSourceButton:hover:not(:disabled) { border-color: var(--galaxy-person); color: var(--color-ink); }
+.detailActions .detailEditButton:hover:not(:disabled) { border-color: var(--color-accent-2); color: var(--color-ink); background: color-mix(in srgb,var(--color-accent-2) 36%,var(--bg-surface)); }
+.detailMore { margin-top: var(--space-4); border-top: 1px solid var(--color-line); }
 .relatedObjects { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .relatedObject { width: var(--control-height); height: var(--control-height); flex-shrink: 0; padding: 0; border: 1px solid var(--color-line-strong); border-radius: 50%; background: var(--bg-raised); color: var(--color-ink-secondary); }
 .relatedObject:hover:not(:disabled) { border-color: var(--color-accent); }
