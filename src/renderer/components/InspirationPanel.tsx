@@ -12,7 +12,7 @@ import styles from './StellarInspiration.module.css'
 import { InspirationImport } from './InspirationImport'
 import { emptyStudyCard, isStudyCardKind, studyMaterialText } from '../../contracts/study-card'
 import { StudyCardEditor, StudyTextCardEditor } from './StudyCardEditor'
-import { hasStudyTextCard } from '../../contracts/study-text-card'
+import { hasStudyTextCard, isStudyTextCardKind } from '../../contracts/study-text-card'
 import { StudioIcon, type StudioIconName } from './StudioIcon'
 import { NoteChapterPicker } from './NoteChapterPicker'
 import { InspirationThumbnail, readNoteThumbnailFile } from './NoteThumbnail'
@@ -385,7 +385,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
           <label>关联作品<select value={draft.input.fields.bookId ?? ''} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, bookId: event.target.value || null } } })}><option value="">暂不关联</option>{draft.input.fields.bookId && !books.some((item) => item.id === draft.input.fields.bookId) && <option value={draft.input.fields.bookId}>原关联作品暂不在书架</option>}{books.map((item) => <option key={item.id} value={item.id}>{item.title}{item.archivedAt ? '（已归档）' : ''}</option>)}</select></label></div>
           <label>标题<input required maxLength={160} value={draft.input.fields.title} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, title: event.target.value } } })} /></label>
           {isStudyCardKind(draft.input.fields.kind) ? <StudyCardEditor kind={draft.input.fields.kind} body={draft.input.fields.body} disabled={tool.locked} onChange={(body) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body } } })} />
-            : hasStudyTextCard(draft.input.fields.kind, draft.input.fields.body) ? <StudyTextCardEditor kind={draft.input.fields.kind} body={draft.input.fields.body} disabled={tool.locked} onChange={(body) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body } } })} />
+            : isStudyTextCardKind(draft.input.fields.kind) && hasStudyTextCard(draft.input.fields.kind, draft.input.fields.body) ? <StudyTextCardEditor kind={draft.input.fields.kind} body={draft.input.fields.body} disabled={tool.locked} onChange={(body) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body } } })} />
             : <label>{draft.input.fields.kind === 'excerpt' ? '摘录内容' : draft.input.fields.kind === 'method' ? '方法与适用条件' : draft.input.fields.kind === 'technique' ? '写法、作用与分析' : '内容'}<textarea rows={10} maxLength={40000} value={draft.input.fields.body} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, body: event.target.value } } })} /></label>}
           <label>出处<textarea rows={2} maxLength={2000} placeholder="作品、作者、章节、页码或链接；记录足够的回查线索" value={draft.input.fields.source} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, source: event.target.value } } })} /></label>
           <label>标签<input maxLength={1100} placeholder="用逗号分隔，最多 20 个，每个最多 50 字符" value={draft.tags} onChange={(event) => changed({ ...draft, tags: event.target.value })} /></label>

@@ -148,7 +148,8 @@
 .radarSegment[data-segment='overdue'] { color: var(--color-danger); }
 .radarSegment[data-segment='closed'] { color: var(--color-ink-secondary); }
 .radarSegment[data-empty='true'] { color: var(--color-muted); cursor: default; }
-.radarSegment > circle:not(.radarSegmentHalo) { filter: drop-shadow(0 0 6px currentColor); }
+.radarSegment > circle:not(.radarSegmentHalo):not(.radarSegmentTarget) { filter: drop-shadow(0 0 6px currentColor); }
+.radarSegmentTarget { fill: transparent; }
 .radarSegment text { font: 16px/1.5 var(--font-ui); }
 .radarSegmentHalo { fill: none; stroke: currentColor; stroke-width: 1; opacity: .35; }
 .radarSegment[data-highlighted='true'] .radarSegmentHalo { stroke-width: 3; opacity: 1; }

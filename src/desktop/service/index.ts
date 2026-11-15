@@ -235,6 +235,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'import.commit': return imports.commit(request.payload)
     case 'draft.import': return repository.importDraft(request.payload)
     case 'recovery.export': return bookRecovery.export(request.payload)
+    case 'recovery.catalog': return bookRecovery.catalog()
     case 'recovery.prepare': return bookRecovery.prepare(request.payload)
     case 'recovery.restore': return bookRecovery.restore(request.payload)
     case 'book.export': {

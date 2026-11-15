@@ -15,6 +15,7 @@ import type { AiRepository } from '../ai/ai-repository'
 import type { StudioRepository } from '../storage/studio-repository'
 import { chapterToken, currentOutlineNodes, livingConflict, livingFailure, parseChapterToken, readMemoryBatch,
   requireLiving, storedJson, type LivingDependency } from './living-state'
+import { storedRunIds } from './stored-run-ids'
 
 interface BookState { id: string; revision: number; knowledge_revision: number; archived_at: string | null; lifecycle: string; logline: string }
 interface LivingEnvelope {
@@ -375,8 +376,8 @@ export class LivingRepository {
     const db = this.studio.getMemoryDatabase(bookId)
     requireLiving(db)
     this.snapshot(db, bookId)
-    for (const value of db.prepare('SELECT run_id FROM living_runs').iterate()) {
-      const { run, request, envelope } = this.readRun(db, bookId, (value as { run_id: string }).run_id)
+    for (const runId of storedRunIds(db, 'living_runs')) {
+      const { run, request, envelope } = this.readRun(db, bookId, runId)
       for (const source of envelope.dependencies) this.verifySourceHistory(db, bookId, source)
       const source = db.prepare('SELECT document_json FROM chapter_revisions WHERE chapter_id = ? AND id = ?').get(run.chapterId, run.context.chapterRevisionId) as { document_json: string } | undefined
       if (!source) return livingFailure('创作提案缺少固定正文修订。')

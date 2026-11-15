@@ -69,6 +69,44 @@ export interface BookRecoveryRestoreReceipt {
   revisionCount: number
   sourceCount: number
 }
+export interface BookRecoveryRegistration {
+  packageId: string; packagePath: string; manifestHash: string
+  bookId: string; title: string; bookRevision: number; createdAt: string; totalBytes: number
+}
+export interface BookRecoveryCatalogEntry extends BookRecoveryRegistration {
+  state: 'unchecked' | 'unavailable'
+  message: string
+}
+export interface BookRecoveryCatalog {
+  targetRoot: string
+  entries: BookRecoveryCatalogEntry[]
+  warnings: string[]
+}
+
+export function parseBookRecoveryRegistration(value: unknown): BookRecoveryRegistration {
+  const data = record(value, ['packageId', 'packagePath', 'manifestHash', 'bookId', 'title', 'bookRevision', 'createdAt', 'totalBytes'])
+  return { packageId: id(data.packageId), packagePath: path(data.packagePath), manifestHash: digest(data.manifestHash),
+    bookId: id(data.bookId), title: requiredText(data.title, '作品名', 120),
+    bookRevision: requiredInteger(data.bookRevision, '作品版本'), createdAt: time(data.createdAt),
+    totalBytes: requiredInteger(data.totalBytes, '恢复包字节数', MAX_RECOVERY_BYTES) }
+}
+export function isBookRecoveryCatalogFor(value: unknown, targetRoot: string): value is BookRecoveryCatalog {
+  try {
+    const data = record(value, ['targetRoot', 'entries', 'warnings'])
+    if (path(data.targetRoot) !== targetRoot || !Array.isArray(data.entries) || data.entries.length > 256 ||
+      !Array.isArray(data.warnings) || data.warnings.length > 258 || data.warnings.some((item) => typeof item !== 'string' || item.length > 2000)) return false
+    const seen = new Set<string>()
+    for (const entry of data.entries) {
+      const item = record(entry, ['packageId', 'packagePath', 'manifestHash', 'bookId', 'title', 'bookRevision', 'createdAt', 'totalBytes', 'state', 'message'])
+      const { state, message, ...registration } = item
+      const parsed = parseBookRecoveryRegistration(registration)
+      const key = parsed.packagePath.toLocaleLowerCase()
+      if (seen.has(key) || !['unchecked', 'unavailable'].includes(String(state)) || typeof message !== 'string' || message.length > 2000) return false
+      seen.add(key)
+    }
+    return true
+  } catch { return false }
+}
 
 function invalid(): DomainError {
   return new DomainError({ code: 'INVALID_INPUT', message: '作品恢复包格式或请求无效，请重新选择完整恢复包。' })

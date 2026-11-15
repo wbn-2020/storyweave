@@ -254,6 +254,8 @@ export class ImageSessions {
       if (active.controller.signal.aborted) throw new Error('aborted')
       let value: unknown
       try { value = JSON.parse(text) } catch { throw new Error('图片接口返回的 JSON 无效。') }
+      // 有些兼容提供方用 HTTP 200 包装失败；不把它当成图片格式错误，也不透传可能含请求信息的远端文案。
+      if (isRecord(value) && Object.hasOwn(value, 'error')) throw new Error('图片接口返回了提供方错误，未生成图片。请核对模型、额度及提供方请求记录；不会自动重发。')
       if (!isRecord(value) || !Array.isArray(value.data) || value.data.length !== 1 || !isRecord(value.data[0])) throw new Error('图片接口必须返回一张有效图片。')
       const item = value.data[0]
       let declaredMime = typeof item.mime_type === 'string' ? item.mime_type : null

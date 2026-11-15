@@ -262,12 +262,14 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   const [checkingLocal, setCheckingLocal] = useState(false)
   const [refreshRequested, setRefreshRequested] = useState(true)
   const [requestedRunId, setRequestedRunId] = useState<string | null>(null)
+  const [runView, setRunView] = useState(0)
   const [pollStopped, setPollStopped] = useState(false)
   const [pollCycle, setPollCycle] = useState(0)
   const [upgradeConfirmed, setUpgradeConfirmed] = useState(false)
   const [backupPath, setBackupPath] = useState<string | null>(null)
   const [discard, setDiscard] = useState<DiscardAction | null>(null)
   const discardNotice = useRef<HTMLElement>(null)
+  const runSection = useRef<HTMLElement>(null)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
   const mounted = useRef(false)
   const epoch = useRef(0)
@@ -292,6 +294,10 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   const activeGeneration = generating && run?.active !== false
   const blocked = busy || loading || reading || studyDirty || reviewDirty || presetsDirty || Boolean(operation || pending || pendingMessage)
   const ready = knowledge !== null && knowledge.schemaVersion >= 6 && connections !== null && !connections.requiresUpgrade && history !== null && !history.requiresUpgrade
+  useEffect(() => {
+    // 只在切换或明确查看候选时定位；流式检查点不能拉走作者正在阅读的位置。
+    if (ready && run?.id) runSection.current?.scrollIntoView({ block: 'start' })
+  }, [ready, run?.id, runView])
   const memoryTask = isAiMemoryTask(kind)
   const characterMode = perspective === 'character'
   const characterRequiresUpgrade = characterMode && (!knowledge || knowledge.schemaVersion < 4)
@@ -844,7 +850,10 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
     const result = await request(() => api.getAiRun({ bookId: book.book.id, runId: id }))
     if (!active(at) || currentTicket !== ticket.current) return
     if (!polling) { lock.current = false; setReading(false) }
-    if (result.ok && acceptRun(result.data, id)) { setPollStopped(false); setPollCycle((value) => value + 1) }
+    if (result.ok && acceptRun(result.data, id)) {
+      setPollStopped(false); setPollCycle((value) => value + 1)
+      if (!polling) setRunView((value) => value + 1)
+    }
     else {
       setMessage(result.ok ? '读取的提议身份不符。' : result.error.message); setPollStopped(true)
       if (!result.ok && ['REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(result.error.code)) {
@@ -1239,7 +1248,7 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
         <CreativeResourcePicker api={api} bookId={book.book.id} chapterId={chapter.id} bookRevision={knowledge.bookRevision} disabled={blocked || generating || archived} limited={perspective !== 'author' || memoryTask} studyOnly={purpose === 'study'} value={creativeSelection} onChange={(value) => { setCreativeSelection(value); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null) }} />
         <div className={styles.actions}><button className={shared.primaryButton} type="button" aria-busy={operation === '保存发送预览'} disabled={blocked || generating || archived || configDirty || !selectedConnection || !instruction.trim() || Boolean(selection.error) || memoryRequiresUpgrade || summaryBlocked || characterTaskBlocked || characterMemoryBlocked || (characterMode && (!characterSelection.scope || characterRequiresUpgrade))} onClick={() => void prepare()}>保存并预览发送内容</button><span className={styles.note}>这一步只在本地保存，不发起模型调用。</span></div>
       </div></details>
-      {run && <section className={styles.run} aria-label="当前提议" data-state={run.state}
+      {run && <section ref={runSection} className={styles.run} aria-label="当前提议" data-state={run.state}
         data-unconfirmed={Boolean(pending || pendingMessage || pollStopped || run.state === 'running' && run.active === false)}>
         <header className={styles.runHeader}>
           <span className={styles.runEmblem} aria-hidden="true"><StudioIcon name={run.state === 'running' && run.active === false ? 'warning' : stateIcons[run.state]} size={24} /></span>
@@ -1250,7 +1259,11 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
           <div><dt>连接与模型</dt><dd>{run.connectionName} · {run.model}</dd></div>
           <div><dt>{run.state === 'prepared' ? '输入估算' : '已保存输出'}</dt><dd>{run.state === 'prepared' ? `${run.context.estimatedInputTokens.toLocaleString()} tokens` : `${run.outputCharacters.toLocaleString()} 字符`}</dd></div>
         </dl>
-        {!taskCurrent && <p className={styles.note}>这是其他章节的记录。回到对应章节后才能发送或采用。</p>}{run.error && <p className={shared.formError}>{run.error}</p>}<ContextPreview context={run.context} />
+        {!taskCurrent && <p className={styles.note}>这是其他章节的记录。回到对应章节后才能发送或采用。</p>}{run.error && <p className={shared.formError}>{run.error}</p>}
+        <details key={`${run.id}:${run.state === 'prepared'}`} className={styles.fixedContext} open={run.state === 'prepared'}>
+          <summary>{run.state === 'prepared' ? '核对固定发送内容' : '查看本次固定输入'}</summary>
+          <ContextPreview context={run.context} />
+        </details>
         {run.state === 'prepared' && <><p className={styles.note}>{composeDirty || configDirty || !runScopeMatches ? '要求、人物范围或配置已有修改，请保存新的预览后再发送。' : '确认上面的接口、模型与实际内容后，再发送这份固定预览。'}</p><button className={shared.primaryButton} type="button" aria-busy={operation === '确认发送并生成'} disabled={blocked || archived || !taskCurrent || composeDirty || configDirty || !runScopeMatches || characterRequiresUpgrade || characterTaskBlocked || summaryBlocked || characterMemoryBlocked} onClick={() => void sendRun()}>确认发送并开始生成</button></>}
         {run.state !== 'prepared' && (isAiMemoryTask(run.kind)
           ? <AiMemoryReview api={api} run={run} drafts={memoryDrafts} disabled={blocked || archived || !taskCurrent} error={pendingMessage ?? panelError} onChange={(value) => { setMemoryDrafts(value); setOutputDirty(true) }} onAdopt={adoptMemory} />

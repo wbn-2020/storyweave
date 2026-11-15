@@ -153,10 +153,17 @@ export function validateKnowledgeAdjudicationsDatabase(db: Database.Database, bo
   perform(() => {
     if ((db.pragma('user_version', { simple: true }) as number) < KNOWLEDGE_ADJUDICATION_SCHEMA_VERSION) return
     const state = readState(db, bookId)
-    const rows = db.prepare('SELECT DISTINCT item_id FROM knowledge_adjudications').iterate() as Iterable<{ item_id: string }>
-    for (const row of rows) {
-      readItem(db, bookId, row.item_id)
-      readAdjudications(db, state, row.item_id)
+    const query = db.prepare('SELECT DISTINCT item_id FROM knowledge_adjudications WHERE item_id > ? ORDER BY item_id LIMIT 128')
+    let after = ''
+    while (true) {
+      // 先结束编号查询，再执行含 pragma 的逐项校验，避免活动游标令恢复与升级失败。
+      const rows = query.all(after) as { item_id: string }[]
+      for (const row of rows) {
+        readItem(db, bookId, row.item_id)
+        readAdjudications(db, state, row.item_id)
+      }
+      if (rows.length < 128) return
+      after = rows.at(-1)!.item_id
     }
   })
 }

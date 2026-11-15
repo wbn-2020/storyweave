@@ -20,7 +20,8 @@ function text(value: unknown, maximum: number, required = false): string {
 export function isStudyTextCardKind(kind: string): kind is StudyTextCardKind {
   return kind === 'method' || kind === 'technique' || kind === 'excerpt'
 }
-export function hasStudyTextCard(kind: string, body: string): kind is StudyTextCardKind {
+// 同类型的旧版普通文本也会返回 false，格式检查不能排除其素材类型。
+export function hasStudyTextCard(kind: string, body: string): boolean {
   if (!isStudyTextCardKind(kind) || body.length > 40000) return false
   try {
     const value: unknown = JSON.parse(body)
@@ -48,7 +49,7 @@ export function parseStudyTextCard(kind: StudyTextCardKind, value: unknown, draf
 }
 export function readStudyTextCard(kind: string, body: string, draft = false): StudyTextCard | null {
   // 仅显式格式标记启用新卡；历史普通文本与无关 JSON 不猜测、不转换。
-  if (!hasStudyTextCard(kind, body)) return null
+  if (!isStudyTextCardKind(kind) || !hasStudyTextCard(kind, body)) return null
   return parseStudyTextCard(kind, JSON.parse(body), draft)
 }
 export function validateStudyTextSource(card: StudyTextCard, sourceText: string): void {

@@ -23,7 +23,7 @@ import type { AiSummaryAdoptInput, AiSummaryAdoptReceipt, AiSummaryControlInput,
 import type { AiContextSummaryInput, AiContextSummaryPage } from './ai-context-summary'
 import type { AiContextRecommendationInput, AiContextRecommendationPage } from './ai-context-recommendation'
 import type { MemoryVectorFinishInput, MemoryVectorPrepareInput, MemoryVectorPrepareServiceInput, MemoryVectorProfileInput, MemoryVectorProfileServiceInput, MemoryVectorReadInput, MemoryVectorRun, MemoryVectorRunPage, MemoryVectorStartInput, MemoryVectorStatus, MemoryVectorVersionInput } from './memory-vector'
-import type { BookRecoveryExportInput, BookRecoveryExportServiceInput, BookRecoveryExportReceipt, BookRecoveryPrepareInput, BookRecoveryPreview, BookRecoveryRestoreInput, BookRecoveryRestoreReceipt } from './book-recovery'
+import type { BookRecoveryCatalog, BookRecoveryExportInput, BookRecoveryExportServiceInput, BookRecoveryExportReceipt, BookRecoveryPrepareInput, BookRecoveryPreview, BookRecoveryRestoreInput, BookRecoveryRestoreReceipt } from './book-recovery'
 import type { RecoveryDraftInventory, RecoveryDraftListInput, RecoveryDraftRotateInput } from './book-recovery'
 import type { CopyInspirationInput, InspirationItem, InspirationPage, ListInspirationInput, LogWritingSessionInput, ReorderScenesInput, SaveBriefInput, SaveInspirationInput, SaveReviewIssueInput, SaveSceneInput, SaveWritingGoalInput, WorkbenchSnapshot } from './workbench'
 import type { ApplyReviewIssueInput, ApplyReviewIssueReceipt } from './workbench'
@@ -295,6 +295,7 @@ export interface CommandMap {
   'import.commit': { input: CommitImportInput; output: BookSnapshot }
   'book.export': { input: ExportBookInput & { filePath: string }; output: ExportBookReceipt }
   'recovery.export': { input: BookRecoveryExportServiceInput; output: BookRecoveryExportReceipt }
+  'recovery.catalog': { input: undefined; output: BookRecoveryCatalog }
   'recovery.prepare': { input: BookRecoveryPrepareInput; output: BookRecoveryPreview }
   'recovery.restore': { input: BookRecoveryRestoreInput; output: BookRecoveryRestoreReceipt }
   'knowledge.status': { input: BookInput; output: KnowledgeStatus }
@@ -436,6 +437,7 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   commitTextImport(input: CommitImportInput): Promise<Result<BookSnapshot>>
   exportBook(input: ExportBookInput): Promise<Result<ExportBookReceipt | null>>
   exportBookRecovery(input: BookRecoveryExportInput): Promise<Result<BookRecoveryExportReceipt | null>>
+  listBookRecoveries(): Promise<Result<BookRecoveryCatalog>>
   selectBookRecovery(): Promise<Result<BookRecoveryPreview | null>>
   restoreBookRecovery(input: BookRecoveryRestoreInput): Promise<Result<BookRecoveryRestoreReceipt>>
   saveDraftCopy(input: SaveDraftCopyInput): Promise<Result<FileWriteReceipt | null>>

@@ -287,8 +287,8 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     requestDirty, detail, proposal, proposalDirty, previewInput, uncertain, backupPath, lastAttempt, error: tool.error,
     pending: tool.pending ? { command: tool.pending.command, error: tool.pending.error } : null, readFailure: tool.readFailure }, null, 2) : ''
 
-  return <div className={styles.panel} aria-busy={tool.busy}>
-    <div className={styles.toolbar}>
+  const showingRebaseReview = tab === 'outline' && reviewingRebase && proposal?.kind === 'rebase'
+  const toolbar = <div className={styles.toolbar}>
       <div className={styles.tabs} role="group" aria-label="创作资料视图">
         <button type="button" aria-pressed={tab === 'outline'} disabled={blocked || outlineDirty || proposalDirty} onClick={() => setTab('outline')}>演进大纲</button>
         <button type="button" aria-pressed={tab === 'memory'} disabled={blocked || outlineDirty || proposalDirty} onClick={() => { setTab('memory'); setKind('memory') }}>定稿记忆</button>
@@ -296,6 +296,9 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
       <div className={styles.actions}><button className={shared.button} type="button" disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={() => void load()}>刷新资料</button>
         {(outlineDirty || proposalDirty || requestDirty) && <button className={shared.button} type="button" disabled={blocked} onClick={discard}>放弃未保存表单</button>}</div>
     </div>
+
+  return <div className={styles.panel} aria-busy={tool.busy}>
+    {!showingRebaseReview && toolbar}
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
     {tool.pending && <div className={styles.warning}><p>原写入结果待核对，当前表单已保留。</p><button type="button" className={shared.button} disabled={tool.busy || !tool.pending.error.requestId} onClick={() => { void tool.checkReceipt().then(async (confirmed) => { if (confirmed) { await tool.read(() => api.getLiving({ bookId: book.book.id }), (value) => receiveSnapshot(value, true)); await syncBook() } }) }}>查询原请求回执</button></div>}
@@ -314,7 +317,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
       <button className={shared.primaryButton} type="button" disabled={blocked || !upgradeConfirmed} onClick={() => void upgrade()}>备份并升级</button></section>}
     {backupPath && <p className={styles.note}>本次备份：{backupPath}</p>}
     {proposal?.kind === 'rebase' && tab === 'outline' && <div className={styles.actions}><button type="button" className={shared.button} onClick={() => setReviewingRebase((value) => !value)}><StudioIcon name={reviewingRebase ? 'arrow' : 'workflow'} size={20} />{reviewingRebase ? '返回大纲沙盘' : '查看修纲三栏对照'}</button></div>}
-    {snapshot && !snapshot.requiresUpgrade && <div className={styles.workspace} data-view={tab} data-review={tab === 'outline' && reviewingRebase && proposal?.kind === 'rebase' ? 'rebase' : undefined}>
+    {snapshot && !snapshot.requiresUpgrade && <div className={styles.workspace} data-view={tab} data-review={showingRebaseReview ? 'rebase' : undefined}>
       {tab === 'outline' ? <div className={styles.outlineLayout}>
         <nav className={styles.tree} aria-label="总纲与分卷">
           {bookNode && <button type="button" className={`${styles.treeItem} ${selectedId === bookNode.id ? styles.selected : ''}`} aria-current={selectedId === bookNode.id ? 'true' : undefined} disabled={blocked} onClick={() => selectNode(bookNode)}><StudioIcon name="compass" size={24} /><strong>全书总纲</strong><small>{bookNode.locked ? '已锁定' : bookNode.stale ? '待复核' : bookNode.version ? `修订 ${bookNode.version}` : '尚未保存'}</small></button>}
@@ -386,7 +389,9 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         <label>你的要求<textarea value={instruction} rows={3} maxLength={2000} disabled={blocked} onChange={(event) => editRequest(() => setInstruction(event.target.value))} /></label>
         <button className={shared.primaryButton} type="button" disabled={blocked || outlineDirty || proposalDirty || !connectionId || !anchorId || !instruction.trim()} onClick={() => void prepare()}>保存并预览本次请求</button>
       </section>
-      {run && <section className={styles.proposal}><div className={styles.editorHeading}><h2>{kindLabels[detail!.kind]} · {detail?.adopted ? '已采纳' : run.state === 'running' ? '生成中' : run.state === 'succeeded' ? '待审阅' : run.state}</h2><div className={styles.actions}><button type="button" className={shared.button} disabled={tool.locked} onClick={() => { setPollStopped(false); void refreshRun() }}>核对原提案状态</button>{run.state === 'running' && <button type="button" className={shared.button} disabled={tool.locked} onClick={() => void control(run.active === false ? 'interrupt' : 'cancel')}>{run.active === false ? '标记无会话运行为中断' : '取消并保留输出'}</button>}</div></div>
+      {run && <section className={styles.proposal}>
+        {proposal?.kind === 'rebase' && <OutlineRebaseReview proposal={proposal} targets={detail?.targets ?? []} current={snapshot.outlines} sourceTitle={book.chapters.find((item) => item.id === run.chapterId)?.title ?? '固定来源章节'} adopted={detail?.adopted ?? false} disabled={!editableProposal} onChange={editProposal} />}
+        <div className={styles.editorHeading}><h2>{kindLabels[detail!.kind]} · {detail?.adopted ? '已采纳' : run.state === 'running' ? '生成中' : run.state === 'succeeded' ? '待审阅' : run.state}</h2><div className={styles.actions}><button type="button" className={shared.button} disabled={tool.locked} onClick={() => { setPollStopped(false); void refreshRun() }}>核对原提案状态</button>{run.state === 'running' && <button type="button" className={shared.button} disabled={tool.locked} onClick={() => void control(run.active === false ? 'interrupt' : 'cancel')}>{run.active === false ? '标记无会话运行为中断' : '取消并保留输出'}</button>}</div></div>
         <details><summary>本次固定发送内容 · {run.model} · 估算输入 {run.context.estimatedInputTokens} tokens</summary>{run.context.messages.map((message, index) => <pre key={index}>{message.role}{'\n'}{message.content}</pre>)}</details>
         {run.state === 'prepared' && <><p className={styles.note}>{matchesPreview ? '输入与预览一致，确认后发起模型请求。' : '当前输入与原预览不一致。重新准备预览后可发送。'}</p><button className={shared.primaryButton} type="button" disabled={blocked || !matchesPreview || outlineDirty || proposalDirty} onClick={() => void control('start')}>确认发送给模型</button></>}
         {detail?.parseError && <p className={styles.warning}>{detail.parseError}</p>}
@@ -394,7 +399,6 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         {proposal?.kind === 'memory' && <><label>本章摘要<textarea rows={4} value={proposal.summary.text} maxLength={8000} disabled={!editableProposal} onChange={(event) => editProposal({ ...proposal, summary: { ...proposal.summary, text: event.target.value } })} /></label><p className={styles.note}>摘要作为整理资料保存。下方事件和状态可修改性质、编辑说明或取消采用，引文保持原样。</p>
           {proposal.events.map((event, index) => <fieldset className={styles.reviewItem} key={`event-${index}`}><legend>{event.title}</legend><select aria-label={`${event.title}的知识性质`} value={event.nature} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, events: proposal.events.map((item, at) => at === index ? { ...item, nature: value.target.value as typeof event.nature } : item) })}>{Object.entries(natureLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><textarea aria-label={`${event.title}的说明`} value={event.text} rows={3} maxLength={8000} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, events: proposal.events.map((item, at) => at === index ? { ...item, text: value.target.value } : item) })} />{event.citations.map((citation, at) => <blockquote key={at}>{citation.quote}</blockquote>)}<button type="button" className={shared.button} disabled={!editableProposal} onClick={() => editProposal({ ...proposal, events: proposal.events.filter((_, at) => at !== index) })}>本次不采用此事件</button></fieldset>)}
           {proposal.states.map((state, index) => <fieldset className={styles.reviewItem} key={`state-${index}`}><legend>{snapshot.entities.find((entity) => entity.id === state.entityId)?.name ?? state.entityId} · {state.attribute}</legend><select aria-label={`${state.attribute}的知识性质`} value={state.nature} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, states: proposal.states.map((item, at) => at === index ? { ...item, nature: value.target.value as typeof state.nature } : item) })}>{Object.entries(natureLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><textarea aria-label={`${state.attribute}的说明`} value={state.text} rows={3} maxLength={8000} disabled={!editableProposal} onChange={(value) => editProposal({ ...proposal, states: proposal.states.map((item, at) => at === index ? { ...item, text: value.target.value } : item) })} />{state.citations.map((citation, at) => <blockquote key={at}>{citation.quote}</blockquote>)}<button type="button" className={shared.button} disabled={!editableProposal} onClick={() => editProposal({ ...proposal, states: proposal.states.filter((_, at) => at !== index) })}>本次不采用此状态</button></fieldset>)}</>}
-        {proposal?.kind === 'rebase' && <OutlineRebaseReview proposal={proposal} targets={detail?.targets ?? []} current={snapshot.outlines} sourceTitle={book.chapters.find((item) => item.id === run.chapterId)?.title ?? '固定来源章节'} adopted={detail?.adopted ?? false} disabled={!editableProposal} onChange={editProposal} />}
         {proposal?.kind === 'expand' && proposal.chapters.map((entry, index) => {
           const original = detail?.targets.find((item) => item.id === entry.chapterId)
           return <section className={styles.outlineDiff} key={entry.chapterId ?? index}>
@@ -411,6 +415,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
       </section>}
       {snapshot.runs.length > 0 && <section className={styles.runHistory}><h3>最近的整理与修纲提案</h3>{snapshot.runs.map((item) => <button className={shared.button} type="button" key={item.id} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={() => void refreshRun(item.id)}>{kindLabels[item.kind]} · {item.state} · {displayTime(item.createdAt)}</button>)}</section>}
     </div>}
+    {showingRebaseReview && toolbar}
     {confirmAdopt && proposal && proposal.kind !== 'memory' && run && snapshot && <DialogDisplayContext.Provider value="modal"><Dialog title="采纳本次章纲？" onClose={() => setConfirmAdopt(false)} busy={tool.busy}>
       <div className={styles.section}><p>{proposal.kind === 'expand' ? `将新增 ${proposal.chapters.length} 章。` : `将替换明确选择的 ${proposal.chapters.length} 项章纲；范围外的手改保持原样。`}</p>
         <p className={styles.note}>作品修订 {snapshot.bookRevision} · 提案修订 {run.version}。采用时继续核对来源、锁定状态和作者授权；版本变化会停止写入。</p>
@@ -474,7 +479,8 @@ function OutlineTensionChart({ outlines, disabled, onSelect }: {
       {segments.map((items) => <g key={items[0]!.node.id}>
         {items.length > 1 && <><polygon points={`${items[0]!.x},208 ${items.map((item) => `${item.x},${item.y}`).join(' ')} ${items.at(-1)!.x},208`} fill={`url(#${gradient})`} /><polyline points={items.map((item) => `${item.x},${item.y}`).join(' ')} className={styles.curve} /></>}
         {items.map(({ node, x: cx, y: cy }) => <g key={node.id} className={styles.curvePoint} tabIndex={disabled ? -1 : 0} role="button" aria-disabled={disabled} aria-label={`${node.fields.title}，紧张度 ${node.fields.tension}，编辑章纲`} onMouseEnter={() => setHoveredId(node.id)} onMouseLeave={() => setHoveredId(null)} onFocus={() => setFocusedId(node.id)} onBlur={() => setFocusedId(null)} onClick={() => { if (!disabled) onSelect(node) }} onKeyDown={(event) => { if (!disabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(node) } }}>
-          <circle cx={cx} cy={cy} r="16" className={styles.pointTarget} /><circle cx={cx} cy={cy} r={activeId === node.id ? 5 : 3.5} /><title>{node.fields.title}：{node.fields.tension}</title>
+          {/* 图表最小缩放为 720/960，44 个坐标单位保证实际命中区仍不少于 32px。 */}
+          <circle cx={cx} cy={cy} r="22" className={styles.pointTarget} /><circle cx={cx} cy={cy} r={activeId === node.id ? 5 : 3.5} /><title>{node.fields.title}：{node.fields.tension}</title>
         </g>)}
       </g>)}
       </g>

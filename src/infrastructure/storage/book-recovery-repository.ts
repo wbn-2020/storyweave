@@ -5,9 +5,10 @@ import Database from 'better-sqlite3'
 import { DomainError, optionalText, requiredId, requiredInteger, requiredText, type BookSummary } from '../../contracts/api'
 import {
   MAX_RECOVERY_BYTES, MAX_RECOVERY_FILES, MAX_RECOVERY_MANIFEST_BYTES,
-  parseBookRecoveryExportServiceInput, parseBookRecoveryManifest, parseBookRecoveryPrepareInput, parseBookRecoveryRestoreInput,
+  parseBookRecoveryExportServiceInput, parseBookRecoveryManifest, parseBookRecoveryPrepareInput, parseBookRecoveryRestoreInput, parseBookRecoveryRegistration,
   type BookRecoveryExportServiceInput, type BookRecoveryExportReceipt, type BookRecoveryFile, type BookRecoveryManifest,
   type BookRecoveryPrepareInput, type BookRecoveryPreview, type BookRecoveryRestoreInput, type BookRecoveryRestoreReceipt,
+  type BookRecoveryCatalog, type BookRecoveryRegistration,
 } from '../../contracts/book-recovery'
 import { countCharacters, documentToText, MAX_CHAPTER_LENGTH, parseManuscript } from '../../contracts/manuscript'
 import { parseKnowledgeFields, parseKnowledgeSource } from '../../contracts/knowledge'
@@ -50,6 +51,9 @@ const MAX_SOURCE_BYTES = 32 * 1024 * 1024
 const IO_BYTES = 1024 * 1024
 const PREVIEW_TTL = 30 * 60 * 1000
 const MAX_SCHEMA_OBJECTS = 512
+const CATALOG_DIRECTORY = 'recovery-catalog'
+const MAX_CATALOG_ENTRIES = 256
+const MAX_CATALOG_RECORD_BYTES = 128 * 1024
 interface PathIdentity { path: string; directory: boolean; stat: Stats }
 interface Snapshot {
   book: BookSummary; schemaVersion: number; chapterCount: number; revisionCount: number; sources: BookRecoveryFile[]
@@ -67,7 +71,8 @@ function invalid(message: string): never {
 }
 
 function failure(error: unknown, operation: string, retained?: string): DomainError {
-  const detail = error instanceof DomainError ? error.detail : { code: 'STORAGE_ERROR' as const, message: `${operation}失败，请检查文件与磁盘空间。` }
+  const nativeCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && /^(?:SQLITE_[A-Z_]+|E[A-Z]+)$/.test(error.code) ? error.code : null
+  const detail = error instanceof DomainError ? error.detail : { code: 'STORAGE_ERROR' as const, message: `${operation}失败${nativeCode ? `（${nativeCode}）` : ''}，请检查文件与磁盘空间。` }
   return new DomainError({ ...detail, message: retained ? `${detail.message} 本次文件已保留在：${retained}。请保留并核对；未完成的目录不能作为恢复包或作品使用。` : detail.message })
 }
 
@@ -750,10 +755,83 @@ export class BookRecoveryRepository {
   private prepared: PreparedPackage | null = null
   private generation = 0
   private exporting = false
+  private catalogWarning: { root: string; message: string } | null = null
 
   constructor(private readonly studio: StudioRepository) {}
 
   clear(): void { this.prepared = null; this.generation += 1 }
+
+  private remember(checked: CheckedPackage): void {
+    const rootPath = this.studio.getBookRecoveryWorkspace().rootPath
+    try {
+      const root = checkedPath(rootPath, true)
+      const directoryPath = join(root.path, CATALOG_DIRECTORY)
+      if (!lstatSync(directoryPath, { throwIfNoEntry: false })) mkdirSync(directoryPath)
+      const directory = checkedPath(directoryPath, true)
+      const manifest = checked.manifest
+      const registration: BookRecoveryRegistration = { packageId: manifest.packageId, packagePath: checked.directory.path,
+        manifestHash: checked.manifestHash, bookId: manifest.book.id, title: manifest.book.title,
+        bookRevision: manifest.book.revision, createdAt: manifest.createdAt, totalBytes: totalBytes(manifest) }
+      const identity = createHash('sha256').update(registration.packagePath.toLowerCase()).digest('hex')
+      const file = join(directory.path, `${identity}.json`)
+      const bytes = Buffer.from(JSON.stringify(registration, null, 2) + '\n', 'utf8')
+      if (bytes.length > MAX_CATALOG_RECORD_BYTES) invalid('恢复包路径登记超过 128 KiB，原包已保留，可通过原生窗口选择校验。')
+      // 登记是不可变的旁路记录，不保存令牌；失败不能把已完成的备份误报为失败并诱发重做。
+      if (lstatSync(file, { throwIfNoEntry: false })) {
+        if (!readBounded(checkedPath(file, false), MAX_CATALOG_RECORD_BYTES).equals(bytes)) invalid('该路径已有不同恢复包登记，请保留原记录并核对。')
+      } else {
+        const handle = opendirSync(directory.path)
+        try {
+          let count = 0
+          while (handle.readSync()) if (++count >= MAX_CATALOG_ENTRIES) invalid('恢复包登记已达 256 项，原包仍可通过原生窗口选择校验。')
+        } finally { handle.closeSync() }
+        writeNew(file, bytes, [root, directory, checked.directory])
+      }
+      checkGuards([root, directory])
+      this.catalogWarning = null
+    } catch (error) {
+      this.catalogWarning = { root: rootPath, message: error instanceof DomainError ? error.detail.message : '恢复包已完成校验，但持久登记未完成；请保留恢复包路径并重新选择核对。' }
+    }
+  }
+
+  catalog(): BookRecoveryCatalog {
+    const workspace = this.studio.getBookRecoveryWorkspace()
+    const root = checkedPath(workspace.rootPath, true)
+    const result: BookRecoveryCatalog = { targetRoot: root.path, entries: [], warnings: [] }
+    if (this.catalogWarning?.root === root.path) result.warnings.push(this.catalogWarning.message)
+    const directoryPath = join(root.path, CATALOG_DIRECTORY)
+    if (!lstatSync(directoryPath, { throwIfNoEntry: false })) return result
+    const directory = checkedPath(directoryPath, true)
+    const handle = opendirSync(directory.path)
+    try {
+      let count = 0
+      for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+        if (++count > MAX_CATALOG_ENTRIES) { result.warnings.push('登记超过 256 项，本次只读取前 256 项；其他恢复包仍可手动选择。'); break }
+        try {
+          if (!/^[a-f0-9]{64}\.json$/.test(entry.name) || !entry.isFile()) invalid('存在非标准登记文件，已保留并跳过。')
+          const item = parseBookRecoveryRegistration(JSON.parse(readBounded(checkedPath(join(directory.path, entry.name), false), MAX_CATALOG_RECORD_BYTES).toString('utf8')))
+          if (`${createHash('sha256').update(resolve(item.packagePath).toLowerCase()).digest('hex')}.json` !== entry.name) invalid('恢复包登记路径与记录身份不符，已跳过。')
+          let state: 'unchecked' | 'unavailable' = 'unchecked'
+          let message = '历史登记不代表当前文件有效，请重新选择完整恢复包校验。'
+          try {
+            const packageDirectory = checkedPath(item.packagePath, true)
+            const bytes = readBounded(checkedPath(join(packageDirectory.path, MANIFEST_NAME), false), MAX_RECOVERY_MANIFEST_BYTES)
+            if (createHash('sha256').update(bytes).digest('hex') !== item.manifestHash) invalid('恢复包清单已变化，请保留文件并重新核对。')
+            const manifest = parseBookRecoveryManifest(JSON.parse(bytes.toString('utf8')))
+            if (manifest.packageId !== item.packageId || manifest.book.id !== item.bookId || manifest.book.revision !== item.bookRevision ||
+              manifest.createdAt !== item.createdAt || totalBytes(manifest) !== item.totalBytes || manifest.book.title !== item.title) invalid('恢复包身份与登记不符。')
+            recheck(packageDirectory)
+          } catch {
+            state = 'unavailable'; message = '恢复包缺失、路径异常或清单已改变，请重新选择完整恢复包核对。'
+          }
+          result.entries.push({ ...item, state, message })
+        } catch { result.warnings.push(`恢复包登记 ${entry.name.slice(0, 80)} 无法读取，原文件已保留。`) }
+      }
+      checkGuards([root, directory])
+      result.entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.packagePath.localeCompare(b.packagePath))
+      return result
+    } finally { handle.closeSync() }
+  }
 
   async export(input: BookRecoveryExportServiceInput): Promise<BookRecoveryExportReceipt> {
     if (this.exporting) throw new DomainError({ code: 'WORKSPACE_BUSY', message: '已有完整作品导出正在执行，请等待其完成。' })
@@ -852,6 +930,7 @@ export class BookRecoveryRepository {
       writeNew(join(packagePath, MANIFEST_NAME), manifestBytes, guards)
       const manifestHash = createHash('sha256').update(manifestBytes).digest('hex')
       const checked = inspectPackage(packagePath, manifestHash)
+      this.remember(checked)
       return { packageId, packagePath, manifestHash, createdAt, bookId: snapshot.book.id, bookRevision: snapshot.book.revision,
         schemaVersion: snapshot.schemaVersion, chapterCount: snapshot.chapterCount, revisionCount: snapshot.revisionCount,
         sourceCount: snapshot.sources.length, totalBytes: totalBytes(checked.manifest) }
@@ -877,6 +956,7 @@ export class BookRecoveryRepository {
         chapterCount: manifest.chapterCount, revisionCount: manifest.revisionCount, sourceCount: manifest.files.length - 1,
         totalBytes: totalBytes(manifest), packagePath: checked.directory.path, targetRoot: workspace.rootPath, ...target }
       this.prepared = { preview, expiresAt: Date.now() + PREVIEW_TTL, generation: workspace.generation, root, books, checked }
+      this.remember(checked)
       return { ...preview, book: { ...preview.book } }
     } catch (error) { throw failure(error, '预览恢复包') }
   }

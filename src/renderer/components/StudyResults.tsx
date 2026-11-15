@@ -12,7 +12,7 @@ import ui from './stellar/Workspace.module.css'
 import styles from './StellarStudy.module.css'
 import { isStudyCardKind, readStudyCard } from '../../contracts/study-card'
 import { StudyCardEditor, StudyTextCardEditor } from './StudyCardEditor'
-import { hasStudyTextCard } from '../../contracts/study-text-card'
+import { hasStudyTextCard, isStudyTextCardKind } from '../../contracts/study-text-card'
 import { StudyTextCardPreview } from './StudyTextCardPreview'
 import { StudyStyleMetrics } from './StudyStyleMetrics'
 import { Dialog, DialogDisplayContext } from './Dialog'
@@ -358,7 +358,7 @@ function StudyCompletedResults({ api, run, book, chapterId, disabled, error, onD
           <fieldset disabled={locked || draft.saved} className={styles.editor}><legend className={styles.caption}>分析与方法</legend>
             <label>标题<input value={draft.title} aria-invalid={titleInvalid} onChange={(event) => edit(index, { title: event.target.value })} /><span className={titleInvalid ? styles.invalid : ui.muted}>{draft.title.length} / {MAX_STUDY_TITLE} 字符{titleInvalid ? '，请填写有效标题' : ''}</span></label>
             {isStudyCardKind(draft.kind) ? <StudyCardEditor kind={draft.kind} body={draft.body} disabled={locked || draft.saved} onChange={(body) => edit(index, { body })} />
-              : hasStudyTextCard(draft.kind, draft.body) ? <StudyTextCardEditor kind={draft.kind} body={draft.body} disabled={locked || draft.saved} onChange={(body) => edit(index, { body })} />
+              : isStudyTextCardKind(draft.kind) && hasStudyTextCard(draft.kind, draft.body) ? <StudyTextCardEditor kind={draft.kind} body={draft.body} disabled={locked || draft.saved} onChange={(body) => edit(index, { body })} />
               : <label>分析或可复用的方法<textarea rows={7} value={draft.body} aria-invalid={bodyInvalid} onChange={(event) => edit(index, { body: event.target.value })} /></label>}
             <span className={bodyInvalid ? styles.invalid : ui.muted}>{draft.body.length} / {MAX_STUDY_BODY.toLocaleString()} 字符{bodyInvalid ? '，请调整内容后再入库' : ''}</span>
           </fieldset>

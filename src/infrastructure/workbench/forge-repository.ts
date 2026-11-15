@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { storedRunIds } from './stored-run-ids'
 import { DomainError, requiredId, requiredText } from '../../contracts/api'
 import { FORGE_INSTRUCTION_LIMIT, forgeUsesChapter, parseForgeAdoptInput, parseForgePrepareInput, parseForgeProposal, parseForgeReadInput, parseForgeRunInput,
   type ForgeAdoptInput, type ForgeAdoptReceipt, type ForgeCard, type ForgePrepareInput, type ForgeProposal, type ForgeReadInput, type ForgeRef, type ForgeRelationProposal, type ForgeRunDetail, type ForgeRunInput, type ForgeSnapshot } from '../../contracts/forge'
@@ -276,8 +277,8 @@ export class ForgeRepository {
     if ((db.pragma('user_version', { simple: true }) as number) < 17) return
     if (db.prepare(`SELECT 1 FROM ai_runs a WHERE json_extract(a.context_json, '$.purpose') = 'forge'
       AND NOT EXISTS (SELECT 1 FROM forge_runs f WHERE f.run_id = a.id) LIMIT 1`).get()) return forgeFailure('工坊模型记录缺少固定来源。')
-    for (const value of db.prepare('SELECT run_id FROM forge_runs').iterate()) {
-      const { run, request } = this.readRun(db, bookId, (value as { run_id: string }).run_id)
+    for (const runId of storedRunIds(db, 'forge_runs')) {
+      const { run, request } = this.readRun(db, bookId, runId)
       const chapter = db.prepare('SELECT document_json FROM chapter_revisions WHERE chapter_id = ? AND id = ?').get(run.chapterId, run.context.chapterRevisionId) as { document_json: string } | undefined
       if (!chapter) return forgeFailure()
       const document = parseManuscript(forgeJson(chapter.document_json))

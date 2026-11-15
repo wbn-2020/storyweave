@@ -453,6 +453,8 @@ export function ForeshadowRadar(props: Props) {
                 onFocus={() => setFocused(first?.id ?? null)} onBlur={() => setFocused((value) => value === first?.id ? null : value)} onClick={(event) => first && select(first.id, event.currentTarget)}
                 onKeyDown={(event) => { if (first && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(first.id, event.currentTarget) } }}>
                 <title>{first ? `${segment.label} · 本页${matches.length}条` : `本页暂无${segment.label}记录`}</title>
+                {/* 保留原光环尺寸；透明目标覆盖窄栏缩放后的最小点击高度。 */}
+                <circle className={styles.radarSegmentTarget} cx={x} cy={y} r={22} />
                 <circle className={styles.radarSegmentHalo} cx={x} cy={y} r={14} /><circle cx={x} cy={y} r={6} />
                 <text x={x + 36} y={y + 5}>{segment.label} {matches.length}</text>
               </g>

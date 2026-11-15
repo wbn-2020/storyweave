@@ -42,7 +42,7 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
   const id = requiredId(value.id)
   const command = value.command
   const payload = value.payload
-  if (command === 'workspace.get' || command === 'service.close' || command === 'workspace.orphans' || command === 'generation.connections') {
+  if (command === 'workspace.get' || command === 'service.close' || command === 'workspace.orphans' || command === 'generation.connections' || command === 'recovery.catalog') {
     if (payload !== undefined) throw invalidRequest()
     return { id, command, payload: undefined }
   }

@@ -81,7 +81,7 @@ const rendererCommands = new Set<RendererCommand>([
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
   'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.directory', 'book.export.commitFile', 'book.export.reveal',
   'import.select', 'import.reparse', 'import.chapter', 'import.commit', 'book.exportFile', 'draft.copy', 'service.restart',
-  'recovery.exportFile', 'recovery.select', 'recovery.restore',
+  'recovery.exportFile', 'recovery.select', 'recovery.restore', 'recovery.catalog',
   'draft.checkpoint', 'draft.list', 'draft.rotate', 'draft.select', 'draft.preview', 'draft.commit',
   'knowledge.status', 'knowledge.upgrade', 'knowledge.list', 'knowledge.get', 'knowledge.create', 'knowledge.update',
   'notes.list', 'notes.get', 'notes.thumbnail', 'notes.create', 'notes.update', 'notes.promote', 'notes.chapters',

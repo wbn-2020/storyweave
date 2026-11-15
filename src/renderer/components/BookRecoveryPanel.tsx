@@ -9,6 +9,7 @@ import { Dialog } from './Dialog'
 import styles from '../StellarShared.module.css'
 import recovery from './StellarRecovery.module.css'
 import { StudioIcon } from './StudioIcon'
+import { useBookRecoveryCatalog } from './stellar/useBookRecoveryCatalog'
 
 interface Props {
   api: StudioApi
@@ -39,7 +40,8 @@ interface ExportedBook { receipt: BookRecoveryExportReceipt; title: string; targ
 interface RestoredBook { receipt: BookRecoveryRestoreReceipt; preview: BookRecoveryPreview }
 interface PackageEntry {
   id: string; title: string; path: string; createdAt: string; bytes: number
-  state: 'verified' | 'unchecked' | 'restored'
+  state: 'verified' | 'unchecked' | 'restored' | 'unavailable'
+  message?: string
   targetState?: BookRecoveryPreview['targetState']
 }
 type PackageRecord = Omit<PackageEntry, 'state' | 'targetState'> & { targetRoot: string }
@@ -96,6 +98,7 @@ export function BookRecoveryPanel(props: Props) {
   const needsReconciliation = Boolean(unresolved && !reconciled)
   const currentPreview = preview?.targetRoot === targetRoot && selectionRef.current?.recoveryEpoch === recoveryEpoch ? preview : null
   const currentValidationFailure = validationFailure?.targetRoot === targetRoot && validationFailure.recoveryEpoch === recoveryEpoch ? validationFailure : null
+  const catalog = useBookRecoveryCatalog(api, targetRoot, open, recoveryEpoch)
 
   function publishLock() { current.current.onDirtyChange(lock.current || Boolean(pendingRef.current)) }
   function hold(value: PendingRequest | null) { pendingRef.current = value; setPending(value); publishLock() }
@@ -147,6 +150,7 @@ export function BookRecoveryPanel(props: Props) {
     setPackageHistory((previous) => [{ targetRoot: target, id: value.packageId, title,
       path: value.packagePath, createdAt: value.createdAt, bytes: value.totalBytes },
     ...previous.filter((item) => item.targetRoot !== target || item.id !== value.packageId)])
+    catalog.retry()
   }
 
   function accept(source: RecoveryRequest, value: unknown): boolean {
@@ -272,12 +276,17 @@ export function BookRecoveryPanel(props: Props) {
 
   // 校验通过的包也可能与目标目录冲突，不能将其标为包内容损坏。
   const packages = new Map<string, PackageEntry>()
+  for (const item of catalog.data?.entries ?? []) {
+    packages.set(`${item.packageId}:${item.packagePath}`, { id: item.packageId, title: item.title,
+      path: item.packagePath, createdAt: item.createdAt, bytes: item.totalBytes, state: item.state, message: item.message })
+  }
   for (const item of packageHistory) {
     if (item.targetRoot !== targetRoot) continue
     const completed = restored?.receipt.targetRoot === targetRoot && restored.receipt.packageId === item.id && restored.preview.packagePath === item.path
-    packages.set(item.id, { ...item, state: completed ? 'restored' : 'unchecked' })
+    const key = `${item.id}:${item.path}`
+    packages.set(key, { ...item, state: completed ? 'restored' : packages.get(key)?.state ?? 'unchecked', message: packages.get(key)?.message })
   }
-  if (currentPreview) packages.set(currentPreview.packageId, { id: currentPreview.packageId, title: currentPreview.book.title,
+  if (currentPreview) packages.set(`${currentPreview.packageId}:${currentPreview.packagePath}`, { id: currentPreview.packageId, title: currentPreview.book.title,
     path: currentPreview.packagePath, createdAt: currentPreview.createdAt, bytes: currentPreview.totalBytes, state: 'verified', targetState: currentPreview.targetState })
   const capacity = draftInventory?.capacity
   const capacityRatio = capacity ? capacity.bytes / Math.max(1, capacity.maxBytes) : 0
@@ -294,7 +303,7 @@ export function BookRecoveryPanel(props: Props) {
   return <Dialog title="备份与恢复" inline busy={blocked} onClose={close} error={error} className={recovery.page}>
     <p className={recovery.subtitle}>管理您的书库备份，随时恢复重要数据</p>
     <div className={recovery.overview}>
-      <section className={recovery.location} aria-label="当前书库位置"><span className={recovery.overviewMark} aria-hidden="true"><StudioIcon name="folder" size={28} /></span><div><h3>当前书库位置</h3><strong>{targetRoot ?? '尚未选择作品库'}</strong></div><dl><div><dt>书籍数</dt><dd>{props.bookCount.toLocaleString()}</dd></div><div><dt>最近备份</dt><dd>{exported?.targetRoot === targetRoot ? new Date(exported.receipt.createdAt).toLocaleString('zh-CN') : '本次会话暂无'}</dd></div></dl></section>
+      <section className={recovery.location} aria-label="当前书库位置"><span className={recovery.overviewMark} aria-hidden="true"><StudioIcon name="folder" size={28} /></span><div><h3>当前书库位置</h3><strong>{targetRoot ?? '尚未选择作品库'}</strong></div><dl><div><dt>书籍数</dt><dd>{props.bookCount.toLocaleString()}</dd></div><div><dt>最近备份</dt><dd>{exported?.targetRoot === targetRoot ? new Date(exported.receipt.createdAt).toLocaleString('zh-CN') : catalog.data?.entries[0] ? new Date(catalog.data.entries[0].createdAt).toLocaleString('zh-CN') : catalog.loading ? '读取中' : catalog.error ? '未读取' : '暂无登记'}</dd></div></dl></section>
       <section className={recovery.capacity} aria-label="检查点容量"><span className={recovery.overviewMark} aria-hidden="true"><StudioIcon name="layers" size={28} /></span><div className={recovery.capacityContent}><header><h3>检查点容量</h3>{capacityNearLimit && <span className={recovery.capacityWarning}><StudioIcon name="warning" size={18} />{capacityFull ? '已达上限' : '接近上限'}</span>}<button type="button" className={recovery.iconButton} disabled={inventoryReading || blocked || !props.draftScope} title="刷新检查点容量" aria-label="刷新检查点容量" onClick={() => setInventoryAttempt((value) => value + 1)}><StudioIcon name="refresh" size={20} /></button></header>
         {capacity ? <><dl><div><dt>当前代文件数</dt><dd>{capacity.files.toLocaleString()}<small> / {capacity.maxFiles.toLocaleString()}</small></dd></div><div><dt>容量使用</dt><dd>{Math.round(capacityRatio * 100)}%<progress value={Math.min(1, capacityRatio)} max={1} aria-label="检查点容量使用比例" /></dd></div></dl><p>{formatBytes(capacity.bytes)} / {formatBytes(capacity.maxBytes)} · {draftInventory?.generations.length.toLocaleString()} 代</p></> : <p role={inventoryError ? 'alert' : 'status'}>{inventoryError ?? (inventoryReading ? '正在读取检查点容量…' : '选择作品库后查看')}</p>}
         {draftInventory?.warnings.map((warning, index) => <p className={recovery.capacityNotice} role="alert" key={`${index}:${warning}`}>{warning}</p>)}
@@ -322,11 +331,14 @@ export function BookRecoveryPanel(props: Props) {
       <div className={recovery.workspace}>
       <section className={`${styles.fieldStack} ${recovery.backup}`} aria-label="备份当前作品">
         <header className={recovery.sectionHeading}><h3>恢复包列表</h3><button className={recovery.iconButton} type="button" disabled={blocked || needsReconciliation || !targetRoot} title="选择恢复包并校验" aria-label="选择恢复包并校验" onClick={selectPackage}><StudioIcon name="refresh" size={20} /></button></header>
-        <ul className={recovery.packages} aria-label="本次会话恢复包">{[...packages.values()].map((item) => <li key={item.id} data-state={item.state} data-current={currentPreview?.packageId === item.id}>
-          <span className={recovery.packageMark} aria-hidden="true"><StudioIcon name="archive" size={28} /></span><div className={recovery.packageDetails}><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString('zh-CN')} · {formatBytes(item.bytes)}</small><span title={item.path}>{item.path}</span>{item.targetState && <small className={recovery.packageTargetState} data-state={item.targetState}>{targetStateLabels[item.targetState]}</small>}</div><span className={recovery.packageState}><StudioIcon name={item.state === 'unchecked' ? 'clock' : 'check'} size={18} />{item.state === 'unchecked' ? '待校验' : item.state === 'restored' ? '已恢复' : '通过'}</span>
+        <ul className={recovery.packages} aria-label="已登记恢复包" aria-busy={catalog.loading}>{[...packages.values()].map((item) => <li key={`${item.id}:${item.path}`} data-state={item.state} data-current={currentPreview?.packageId === item.id && currentPreview.packagePath === item.path}>
+          <span className={recovery.packageMark} aria-hidden="true"><StudioIcon name="archive" size={28} /></span><div className={recovery.packageDetails}><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString('zh-CN')} · {formatBytes(item.bytes)}</small><span title={item.path}>{item.path}</span>{item.message && <small>{item.message}</small>}{item.targetState && <small className={recovery.packageTargetState} data-state={item.targetState}>{targetStateLabels[item.targetState]}</small>}</div><span className={recovery.packageState}><StudioIcon name={item.state === 'unavailable' ? 'warning' : item.state === 'unchecked' ? 'clock' : 'check'} size={18} />{item.state === 'unavailable' ? '需核对' : item.state === 'unchecked' ? '待校验' : item.state === 'restored' ? '已恢复' : '通过'}</span>
         </li>)}</ul>
-        {!packages.size && <div className={recovery.empty}><StudioIcon name="archive" size={32} /><p>尚未选择恢复包</p><button className={styles.button} type="button" disabled={blocked || needsReconciliation || !targetRoot} onClick={selectPackage}>选择恢复包</button></div>}
-        <p className={styles.helpText}>仅列出本次会话已创建或校验过的恢复包；历史记录需重新选择校验。</p>
+        {!packages.size && <div className={recovery.empty}><StudioIcon name="archive" size={32} /><p>{catalog.loading ? '正在读取恢复包登记…' : catalog.error ? '恢复包登记未读取' : '尚未登记恢复包'}</p><button className={styles.button} type="button" disabled={blocked || needsReconciliation || !targetRoot} onClick={selectPackage}>选择恢复包</button></div>}
+        {catalog.error && <p className={styles.formError} role="alert">{catalog.error}</p>}
+        {catalog.data?.warnings.map((warning, index) => <p className={styles.formError} role="alert" key={index}>{warning}</p>)}
+        <p className={styles.helpText}>列出在当前书库创建或校验后登记的恢复包，不扫描其他磁盘。历史登记不代表当前文件有效，恢复前须重新选择并完整校验。</p>
+        <button className={styles.button} type="button" disabled={blocked || catalog.loading || !targetRoot} onClick={catalog.retry}>刷新恢复包登记</button>
         <details className={recovery.backupDetails}>
         <summary>备份当前作品</summary>
         <h3>备份当前作品</h3>

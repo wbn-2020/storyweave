@@ -9,12 +9,15 @@ import { StellarEmpty } from './stellar/StellarEmpty'
 import { StellarTooltip } from './stellar/StellarTooltip'
 import { useBookPreview } from './stellar/useBookPreview'
 import { useShelfStatistics } from './stellar/useShelfStatistics'
+import { useBookRecoveryCatalog } from './stellar/useBookRecoveryCatalog'
+import type { BookRecoveryCatalogEntry } from '../../contracts/book-recovery'
 import ui from './stellar/stellar.module.css'
 import styles from './StudioPages.module.css'
 
-export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdit }: {
+export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdit, backup }: {
   api?: StudioApi; scope?: string; book: BookSummary; busy: boolean
   onOpen: (id: string) => void; onWrite: (id: string) => void; onEdit?: (book: BookSummary) => void
+  backup?: BookRecoveryCatalogEntry
 }) {
   const { snapshot, loading, error, retry } = useBookPreview(api, scope, book)
   const lifecycle = snapshot?.book.lifecycle ?? book.lifecycle
@@ -25,6 +28,7 @@ export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdi
       <BookCover api={api} workspaceScope={scope} book={book} />
       <div><h3>{book.title}</h3><small className={styles.bookGenre}>{book.genre || '未设置题材'}</small>
         <span className={`${ui.chip} ${styles.bookState}`} data-lifecycle={lifecycle} data-tone={book.archivedAt || lifecycle === 'finished' ? 'warning' : lifecycle ? 'accent' : undefined}>{book.archivedAt ? '已归档' : lifecycle === 'finished' ? '已完结' : lifecycle === 'kickstarting' ? '孵化中' : lifecycle === 'active' ? '连载中' : loading ? '读取中' : '状态待核对'}</span>
+        {backup && <span className={ui.chip} data-tone="warning" title={`${backup.message}\n${backup.packagePath}`}>{backup.state === 'unavailable' ? '备份需核对' : '备份待校验'}</span>}
         {Boolean(snapshot?.chapters.length) && <div className={styles.bookProgress} title={`已定稿 ${final} / ${snapshot!.chapters.length} 章`}><progress className={ui.progress} value={final} max={snapshot!.chapters.length} aria-label={`已定稿 ${final} / ${snapshot!.chapters.length} 章`} /><span>{Math.round(final / snapshot!.chapters.length * 100)}%</span></div>}
         <small>{snapshot ? `${count!.toLocaleString()} 字 · ${snapshot.chapters.length} 章` : loading ? '读取作品…' : '统计暂不可用'}</small>
       </div>
@@ -34,8 +38,9 @@ export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdi
   </article>
 }
 
-export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onWrite, onEdit, onCreate, onImport, onRecover }: {
+export function StellarShelf({ api, scope, targetRoot, books, recentOpens, busy, onOpen, onWrite, onEdit, onCreate, onImport, onRecover }: {
   api?: StudioApi; scope?: string; books: BookSummary[]; recentOpens: readonly RecentBookOpen[]; busy: boolean
+  targetRoot: string | null
   onOpen: (id: string) => void; onWrite: (id: string) => void; onEdit: (book: BookSummary) => void
   onCreate: () => void; onImport: () => void; onRecover: () => void
 }) {
@@ -56,6 +61,9 @@ export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onW
   const currentPage = Math.min(page, pageCount - 1)
   const genres = [...STELLAR_GENRES.map((item) => item.label), ...new Set(books.map((item) => item.genre).filter((item) => item && !STELLAR_GENRES.some((genre) => genre.label === item)))]
   const statistics = useShelfStatistics(api, scope, books)
+  const catalog = useBookRecoveryCatalog(api, targetRoot, true, scope)
+  const backups = new Map<string, BookRecoveryCatalogEntry>()
+  for (const entry of catalog.data?.entries ?? []) if (!backups.has(entry.bookId)) backups.set(entry.bookId, entry)
   return <section className={styles.page} aria-label="作品书架"><div className={styles.pageInner}>
     <header className={styles.heading}><div><h1 className={styles.visuallyHidden}>作品书架</h1><p className={styles.shelfStatistics} aria-busy={statistics.loading}><span><strong>{books.length}</strong>部作品</span><span><strong>{statistics.unknown ? '—' : statistics.activeCount}</strong>部连载中</span><span><strong>{statistics.unknown ? '—' : statistics.finishedCount}</strong>部已完结</span></p>
       {statistics.unknown > 0 && <div className={styles.shelfStatisticsStatus} role="status"><span>{statistics.loading ? '正在核对作品状态…' : statistics.error ? `统计未完成：${statistics.error}` : `${statistics.unknown} 部作品未提供生命周期，连载与完结统计暂不可用。`}</span>{statistics.error && statistics.canRetry && <button className={ui.ghost} type="button" disabled={busy || statistics.loading} onClick={statistics.retry}>重新读取统计</button>}</div>}
@@ -67,7 +75,8 @@ export function StellarShelf({ api, scope, books, recentOpens, busy, onOpen, onW
         <label><StudioIcon name="search" size={18} /><input type="search" aria-label="搜索作品" placeholder="搜索作品、题材…" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} /></label></div>
     </div>
     <div className={styles.shelfLayout}><div>
-      {visible.length ? <div className={`${styles.bookGrid} ${mode === 'grid' ? styles.shelfGrid : styles.shelfList}`}>{visible.slice(currentPage * 6, currentPage * 6 + 6).map((item) => <StellarBookCard key={`${scope}:${item.id}`} api={api} scope={scope} book={item} busy={busy} onOpen={onOpen} onWrite={onWrite} onEdit={onEdit} />)}</div>
+      {(catalog.error || Boolean(catalog.data?.warnings.length)) && <div className={ui.error} role="status">{catalog.error ?? catalog.data?.warnings.join(' ')}<button className={ui.ghost} type="button" disabled={busy || catalog.loading} onClick={catalog.retry}>重新读取备份记录</button></div>}
+      {visible.length ? <div className={`${styles.bookGrid} ${mode === 'grid' ? styles.shelfGrid : styles.shelfList}`}>{visible.slice(currentPage * 6, currentPage * 6 + 6).map((item) => <StellarBookCard key={`${scope}:${item.id}`} api={api} scope={scope} book={item} busy={busy} onOpen={onOpen} onWrite={onWrite} onEdit={onEdit} backup={backups.get(item.id)} />)}</div>
         : <StellarEmpty icon={query || genre ? 'search' : 'read'} title={query || genre ? '没有匹配的作品' : archived ? '暂无归档作品' : books.length ? '暂无未归档作品' : '从一句话开始'}
           description={query || genre ? '试试其他书名或题材，或清空筛选查看作品。' : archived ? '归档后的作品仍可阅读和导出。' : books.length ? '可新建作品，或切换到“已归档”查看作品。' : '从一句话故事种子开始，或导入已有的 TXT / Markdown 稿件。'}
           hint={query || genre ? '清空筛选后查看已有作品' : archived ? '归档作品可在作品资料中解除归档' : books.length ? '已有作品可在“已归档”中查看' : '开始你的第一个故事吧'}>

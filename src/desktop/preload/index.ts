@@ -103,6 +103,7 @@ const api: StudioApi = {
   commitTextImport: (input) => invoke('import.commit', input),
   exportBook: (input) => invoke('book.exportFile', input),
   exportBookRecovery: (input) => invoke('recovery.exportFile', input),
+  listBookRecoveries: () => invoke('recovery.catalog'),
   selectBookRecovery: () => invoke('recovery.select'),
   restoreBookRecovery: (input) => invoke('recovery.restore', input),
   saveDraftCopy: (input) => invoke('draft.copy', input),

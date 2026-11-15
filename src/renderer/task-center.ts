@@ -23,7 +23,7 @@ export interface TaskEntry {
 }
 export const taskStateLabels: Record<string, string> = {
   prepared: '等待发送', running: '处理中', planning: '规划中', ready: '等待审阅', paused: '已暂停',
-  failed: '失败', completed: '已完成', succeeded: '等待采纳', superseded: '来源已变化', cancelled: '已取消',
+  failed: '失败', completed: '已完成', succeeded: '待审阅', superseded: '来源已变化', cancelled: '已取消',
   interrupted: '已中断', rejected: '已丢弃', adopted: '已采纳',
   saved: '已存入本书', discarded: '已放弃',
 }
