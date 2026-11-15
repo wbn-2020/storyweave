@@ -129,6 +129,8 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   const quickCountId = useId()
   const freshRef = useRef(true)
   const editorRef = useRef<HTMLFormElement>(null)
+  const discardTrigger = useRef<HTMLButtonElement>(null)
+  const discardDisabledReason = tool.locked ? '请先完成当前操作或核对原请求' : undefined
   const visible = (page?.items ?? []).filter((item) => (!kind || item.kind === kind) && (!tag || item.tags.includes(tag)))
   const tags = [...new Set(page?.items.flatMap((item) => item.tags) ?? [])].slice(0, 12)
   const copyFields = copy ? asNote(copy.source) : null
@@ -181,10 +183,18 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     tool.setDirty(Boolean(parent))
     tool.setError(null); tool.setNotice(null)
   }
-  function closeEditor() {
-    if (tool.locked) return
-    if (tool.dirty && !discard) { setDiscard(true); return }
+  function closeEditor(confirmed = false) {
+    if (tool.locked || tool.hasPending()) return
+    if (tool.hasChanges() && (!confirmed || !discard)) { setDiscard(true); return }
     putDraft(null); setSelected(null); setCopy(null); setDiscard(false); tool.setDirty(false); tool.setError(null)
+  }
+  function cancelDiscard() {
+    if (tool.locked || tool.hasPending()) return
+    setDiscard(false); discardTrigger.current?.focus()
+  }
+  function discardQuick() {
+    if (tool.locked || tool.hasPending() || !discard || draftRef.current || copyRef.current) return
+    setQuick({ id: crypto.randomUUID(), body: '' }); setDiscard(false); tool.setDirty(false)
   }
   async function pickThumbnail(file: File) {
     const submitted = draftRef.current
@@ -215,6 +225,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
       tags: draft.tags === draft.input.fields.tags.join('，') ? draft.input.fields.tags
         : draft.tags.split(/[,，、\n]/).map((item) => item.trim()).filter(Boolean) } }) }
     catch (failure) { tool.setError(failure instanceof DomainError ? failure.detail.message : '请检查灵感内容后重试。'); return }
+    setDiscard(false)
     const success = await tool.write('inspiration.save', () => api.saveInspiration(input), (value) => validItem(value) && value.id === input.id
       && value.revision === input.expectedRevision + 1 && sameFields(value, input.fields)
       && (input.thumbnail === undefined ? sameInspirationThumbnail(value.thumbnail, selected?.thumbnail ?? null) : matchesInspirationThumbnail(value.thumbnail, input.thumbnail)), (value) => {
@@ -227,10 +238,14 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     event.preventDefault()
     if (tool.locked || !quick.body.trim()) return
     // 快速记录也固定客户端身份；超时后由原回执接续，不能重新生成 ID 再次写入。
-    const input = parseSaveInspirationInput({ id: quick.id, expectedRevision: 0, fields: {
+    let input: SaveInspirationInput
+    try { input = parseSaveInspirationInput({ id: quick.id, expectedRevision: 0, fields: {
       kind: 'idea', title: quick.body.trim().split(/\r?\n/, 1)[0].slice(0, 160), body: quick.body,
       source: '', tags: [], parentId: null, bookId: currentBook && !currentBook.archivedAt ? currentBook.id : null, archived: false,
-    } })
+    } }) }
+    catch (failure) { tool.setError(failure instanceof DomainError ? failure.detail.message : '快速记录内容无效，原文仍保留，请检查后重试。'); return }
+    // 保存开始即收起旧的放弃确认，避免失败或回执未知时丢失原文及固定标识。
+    setDiscard(false)
     const success = await tool.write('inspiration.save', () => api.saveInspiration(input),
       (value) => validItem(value) && value.id === input.id && value.revision === 1 && sameFields(value, input.fields) && value.thumbnail === null,
       () => { setQuick({ id: crypto.randomUUID(), body: '' }); setDiscard(false) }, '灵感已保存，原文保留在全局收件箱。')
@@ -391,8 +406,8 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
           <label className={ui.check}><input type="checkbox" checked={draft.input.fields.archived} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, archived: event.target.checked } } })} />归档条目（原文、出处与参考链继续保留）</label>
           <p className={ui.muted}>关联作品只标记归属。点击“复制到作品笔记”才会在作品内新增笔记，后续可在笔记中明确转为设定。</p>
         </div></fieldset>
-        <div className={ui.actions}><button className={ui.primaryButton} type="submit" disabled={tool.locked || Boolean(draft.input.expectedRevision && !tool.dirty)}>{tool.busy ? '正在保存…' : '保存条目'}</button><button className={ui.button} type="button" disabled={tool.locked} onClick={closeEditor}>{tool.dirty ? '放弃未保存更改' : '收起编辑'}</button></div>
-        {discard && <div className={ui.warning} role="alert"><p>确定放弃这份表单的未保存更改？已保存原件会保留。</p><div className={ui.actions}><button className={ui.button} type="button" onClick={closeEditor}>确认放弃</button><button className={ui.button} type="button" onClick={() => setDiscard(false)}>继续编辑</button></div></div>}
+        <div className={ui.actions}><button className={ui.primaryButton} type="submit" disabled={tool.locked || Boolean(draft.input.expectedRevision && !tool.dirty)}>{tool.busy ? '正在保存…' : '保存条目'}</button><button ref={discardTrigger} className={ui.button} type="button" disabled={tool.locked} onClick={() => closeEditor()}>{tool.dirty ? '放弃未保存更改' : '收起编辑'}</button></div>
+        {discard && <div className={ui.warning} role="alert"><p>确定放弃这份表单的未保存更改？已保存原件会保留。</p><div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked} title={discardDisabledReason} onClick={() => closeEditor(true)}>确认放弃</button><button className={ui.button} type="button" disabled={tool.locked} title={discardDisabledReason} onClick={cancelDiscard}>继续编辑</button></div></div>}
         {selected && <div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked || tool.dirty} onClick={() => create(selected)}>以此继续写{kindLabels[nextKind[selected.kind]]}</button><button className={ui.button} type="button" disabled={tool.locked || tool.dirty || !books.some((item) => !item.archivedAt)} onClick={() => startCopy(selected)}>复制已保存版本到作品笔记</button></div>}
       </form>}
       {copy && copyFields && <section className={styles.copy} aria-label={copy.linkChapters ? '关联章节' : '复制到作品笔记'}><div className={ui.heading}><h4>{copy.linkChapters ? '关联章节' : '复制'} · {copy.source.title}</h4><button className={ui.button} type="button" disabled={tool.locked} onClick={() => putCopy(null)}>取消{copy.linkChapters ? '关联' : '复制'}</button></div><p className={ui.muted}>{copy.linkChapters ? '确认后在目标作品保存一份笔记并关联所选章节。' : ''}原件与参考链留在收件箱，作品笔记中保留出处和标签。</p>
@@ -414,8 +429,8 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
         <div className={styles.quickInput}><label><span className={styles.srOnly}>快速记录内容</span><textarea rows={10} maxLength={500} value={quick.body} disabled={tool.locked} aria-describedby={quickCountId} placeholder="记录一闪而过的灵感…" onChange={(event) => { setQuick({ ...quick, body: event.target.value }); setDiscard(false); tool.setDirty(Boolean(event.target.value)); tool.setNotice(null) }} /></label>
           <span id={quickCountId} className={styles.quickCount}>{quick.body.length} / 500</span></div>
         <button type="submit" className={`${ui.primaryButton} ${styles.quickSave}`} disabled={tool.locked || !quick.body.trim()}><StudioIcon name="save" size={18} />{currentBook && !currentBook.archivedAt ? '保存并关联本书' : '保存灵感'}</button>
-        {quick.body && <button type="button" className={ui.button} disabled={tool.locked} onClick={() => setDiscard(true)}>放弃本次记录</button>}
-        {discard && <div className={ui.warning} role="alert"><p>放弃这条尚未保存的记录？</p><div className={ui.actions}><button type="button" className={ui.button} onClick={() => { setQuick({ id: crypto.randomUUID(), body: '' }); setDiscard(false); tool.setDirty(false) }}>确认放弃记录</button><button type="button" className={ui.button} onClick={() => setDiscard(false)}>继续记录</button></div></div>}
+        {quick.body && <button ref={discardTrigger} type="button" className={ui.button} disabled={tool.locked} onClick={() => setDiscard(true)}>放弃本次记录</button>}
+        {discard && <div className={ui.warning} role="alert"><p>放弃这条尚未保存的记录？</p><div className={ui.actions}><button type="button" className={ui.button} disabled={tool.locked} title={discardDisabledReason} onClick={discardQuick}>确认放弃记录</button><button type="button" className={ui.button} disabled={tool.locked} title={discardDisabledReason} onClick={cancelDiscard}>继续记录</button></div></div>}
       </form><section className={styles.recent} aria-label="当前筛选最近记录"><h4><StudioIcon name="clock" size={20} />最近记录</h4><ul>{page?.items.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={tool.locked || tool.dirty} title={item.title} onClick={() => open(item)}><span>{item.title}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time></button></li>)}</ul>{!page?.items.length && <p className={styles.recentEmpty}>{page ? '暂无记录' : '尚未取得记录'}</p>}</section></>}
     </div></div>
   </section>
