@@ -39,6 +39,7 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
   const panelId = useId()
   const keepTask = useRef<HTMLButtonElement>(null)
   const stopTrigger = useRef<HTMLButtonElement | null>(null)
+  const focusTabAfterStop = useRef(false)
   const previousPending = useRef(pendingMessage)
   useEffect(() => {
     mounted.current = true
@@ -49,9 +50,11 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
   useEffect(() => {
     if (confirmStop) keepTask.current?.focus()
     else if (stopTrigger.current) {
-      if (stopTrigger.current.isConnected) stopTrigger.current.focus()
+      if (!focusTabAfterStop.current && stopTrigger.current.isConnected && !stopTrigger.current.disabled
+        && !stopTrigger.current.closest('[inert]')) stopTrigger.current.focus()
       else dialog.current?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus()
       stopTrigger.current = null
+      focusTabAfterStop.current = false
     }
   }, [confirmStop])
   useEffect(() => {
@@ -110,6 +113,8 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
     try {
       const result = await onStop(target.stop)
       if (mounted.current) {
+        // 回执后会重建任务列表，焦点回到不会被该刷新移除的当前标签。
+        focusTabAfterStop.current = true
         setConfirmStop(null)
         setStopError(result.confirmed ? null : result.message)
         setStopMessage(result.confirmed ? '任务状态已确认，正在重新读取。' : null)
