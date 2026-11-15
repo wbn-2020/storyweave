@@ -508,7 +508,7 @@ function OutlineRebaseReview({ proposal, targets, current, sourceTitle, adopted,
     })
   })
   return <div className={styles.rebaseReview}>
-    {stale.length > 0 && <div className={styles.rebaseBanner} role="status"><StudioIcon name="bolt" size={24} /><div><strong>上游来源变更 · 受影响章纲 {stale.length} 条</strong><p>{[...new Set(stale.map((item) => current.find((value) => value.id === item.id)?.staleReason).filter(Boolean))].join('；')}</p></div></div>}
+    {stale.length > 0 && <div className={styles.rebaseBanner} role="status"><StudioIcon name="warning" size={24} /><div><strong>上游来源变更 · 受影响章纲 {stale.length} 条</strong><p>{[...new Set(stale.map((item) => current.find((value) => value.id === item.id)?.staleReason).filter(Boolean))].join('；')}</p></div></div>}
     <div className={styles.rebaseColumns}>
       <section className={styles.rebaseCurrent}><h3><StudioIcon name="spark" size={20} />当前章纲</h3>{proposal.chapters.map((entry, index) => {
         const original = targets.find((item) => item.id === entry.chapterId)
@@ -516,7 +516,7 @@ function OutlineRebaseReview({ proposal, targets, current, sourceTitle, adopted,
         return <article key={entry.chapterId ?? index}><header><strong>{original?.fields.title ?? `章纲 ${index + 1}`}</strong>{original?.manual && <span className={styles.manualBadge}>作者手改</span>}</header>{!adopted && live && original && live.version !== original.version && <p className={styles.warning}>当前版本 {live.version} 与固定预览版本 {original.version} 不同，请重新准备预览。</p>}<p>{original?.fields.summary || '尚未填写大纲内容'}</p>{original && <details><summary>固定原章纲 · 修订 {original.version}</summary><dl>{(Object.keys(outlineFieldLabels) as (keyof OutlineFields)[]).map((key) => <div key={key}><dt>{outlineFieldLabels[key]}</dt><dd>{outlineFieldText(original.fields[key])}</dd></div>)}</dl></details>}</article>
       })}</section>
       <section className={styles.rebaseChanges}><h3><StudioIcon name="workflow" size={20} />差异清单</h3>{changes.map((change) => <article key={`${change.index}:${change.key}`} data-change={change.state}>
-        <div><span className={styles.changeSymbol} aria-hidden="true">{change.state === 'added' ? '+' : change.state === 'kept' ? '=' : '~'}</span><strong>{change.state === 'added' ? '新增' : change.state === 'kept' ? '保留' : '修改'}：{outlineFieldLabels[change.key]}</strong></div><p>{outlineFieldText(change.after)}</p><small>{proposal.chapters[change.index]!.fields.title} · 来源：{sourceTitle}</small>
+        <div><span className={styles.changeSymbol} aria-hidden="true">{change.state === 'added' ? '+' : change.state === 'kept' ? '=' : '~'}</span><div><strong>{change.state === 'added' ? '新增' : change.state === 'kept' ? '保留' : '修改'}：{outlineFieldLabels[change.key]}</strong><p>{outlineFieldText(change.after)}</p></div></div><small><span>{proposal.chapters[change.index]!.fields.title}</span><span>来源：{sourceTitle}</span></small>
       </article>)}</section>
       <section className={styles.rebaseProposal}><h3><StudioIcon name="spark" size={20} />AI 修纲提案</h3>{proposal.chapters.map((entry, index) => <article key={entry.chapterId ?? index}>
         <strong>{entry.fields.title}</strong><p>{entry.fields.summary || '尚未填写大纲内容'}</p><details><summary>审阅并编辑完整提案</summary><div className={styles.section}><OutlineFieldsEditor fields={entry.fields} chapter disabled={disabled} onChange={(fields) => onChange({ ...proposal, chapters: proposal.chapters.map((item, at) => at === index ? { ...item, fields } : item) })} /></div></details>
