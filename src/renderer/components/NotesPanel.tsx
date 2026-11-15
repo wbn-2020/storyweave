@@ -114,11 +114,11 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   const [page, setPage] = useState<NotePage | null>(null)
   const [listing, setListing] = useState<Listing>(initialListing)
   const [search, setSearch] = useState('')
-  const [category, setCategory] = useState<NoteCategory | ''>('')
   const [detail, setDetail] = useState<NoteDetail | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [dirty, setDirty] = useState(false)
+  const [discardDraft, setDiscardDraft] = useState(false)
   const [quickBody, setQuickBody] = useState('')
   const [discardQuick, setDiscardQuick] = useState(false)
   const quickRef = useRef('')
@@ -144,6 +144,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   const quickCountId = useId()
   const heading = useRef<HTMLHeadingElement>(null)
   const titleInput = useRef<HTMLInputElement>(null)
+  const discardTrigger = useRef<HTMLButtonElement>(null)
   const thumbnailInput = useRef<HTMLInputElement>(null)
   const mounted = useRef(false)
   const initialReadStarted = useRef(false)
@@ -180,7 +181,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   }
   function putDraft(value: Draft | null, changed: boolean) {
     draftRef.current = value; dirtyRef.current = changed
-    setDraft(value); setDirty(changed); setRecoveryConfirmed(false); reportGuard()
+    setDraft(value); setDirty(changed); setDiscardDraft(false); setRecoveryConfirmed(false); reportGuard()
   }
   function holdWrite(message: string) {
     writeIssueRef.current = message; setWriteIssue(message); setRecoveryConfirmed(false); reportGuard()
@@ -413,6 +414,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   }
   function discard() {
     if (operationBlocked()) return
+    if (dirtyRef.current && !discardDraft) { setDiscardDraft(true); return }
     putDraft(null, false); lastWrite.current = null; setMessage(null); setNotice('已放弃本次未保存内容。')
   }
   async function pickThumbnail(file: File) {
@@ -547,7 +549,8 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   }
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    void loadList({ search: search.trim(), category, tag: listing.tag, offset: 0 })
+    // 分类只使用通过离开门禁后的列表状态，拒绝切换时不留下隐藏筛选。
+    void loadList({ search: search.trim(), category: listing.category, tag: listing.tag, offset: 0 })
   }
   function movePage(offset: number) {
     if (!page) return
@@ -605,9 +608,9 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
         <aside className={materialStyles.filters} aria-label="本书素材分类">
           <h4>素材分类</h4>
           <button type="button" aria-pressed={!listing.category} disabled={blocked}
-            onClick={() => { setCategory(''); void loadList({ search: search.trim(), category: '', tag: '', offset: 0 }) }}><StudioIcon name="grid" />全部</button>
+            onClick={() => void loadList({ search: search.trim(), category: '', tag: '', offset: 0 })}><StudioIcon name="grid" />全部</button>
           {NOTE_CATEGORIES.map((value) => <button key={value} type="button" aria-pressed={listing.category === value} disabled={blocked}
-            onClick={() => { setCategory(value); void loadList({ search: search.trim(), category: value, tag: '', offset: 0 }) }}><StudioIcon name={value === 'inspiration' ? 'bulb' : value === 'method' ? 'workflow' : 'notes'} />{NOTE_CATEGORY_LABELS[value]}</button>)}
+            onClick={() => void loadList({ search: search.trim(), category: value, tag: '', offset: 0 })}><StudioIcon name={value === 'inspiration' ? 'bulb' : value === 'method' ? 'workflow' : 'notes'} />{NOTE_CATEGORY_LABELS[value]}</button>)}
         </aside>
         <section className={styles.catalog} aria-label="笔记列表">
           <form className={styles.search} onSubmit={submitSearch}>
@@ -687,8 +690,13 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
             <p className={styles.paperMeta}>编辑基线：作品版本 {draft.expectedBookRevision}{draft.expectedNoteRevision === null ? ' · 新笔记' : ` · 笔记版本 ${draft.expectedNoteRevision}`}</p>
             <div className={styles.actions}>
               <button type="submit" className={`${shared.primaryButton} ${styles.saveButton}`} disabled={formLocked}>{writing === 'create' || writing === 'update' ? '正在保存…' : '保存笔记'}</button>
-              <button type="button" className={shared.button} disabled={blocked} onClick={discard}>放弃本次修改</button>
+              <button ref={discardTrigger} type="button" className={shared.button} disabled={blocked}
+                onClick={() => { if (!operationBlocked()) { if (dirtyRef.current) setDiscardDraft(true); else discard() } }}>放弃本次修改</button>
             </div>
+            {discardDraft && <div className={styles.paperNotice} role="alert"><p>确定放弃这份笔记尚未保存的修改？已保存的笔记会保留。</p><div className={styles.actions}>
+              <button type="button" className={shared.button} disabled={blocked} onClick={discard}>确认放弃修改</button>
+              <button type="button" className={shared.button} disabled={blocked} onClick={() => { setDiscardDraft(false); discardTrigger.current?.focus() }}>继续编辑</button>
+            </div></div>}
           </form> : detail ? <>
             <p className={styles.paperMeta}>{NOTE_CATEGORY_LABELS[detail.category]} · 笔记版本 {detail.revision} · 更新于 {displayTime(detail.updatedAt)}</p>
             {detail.thumbnail && <NoteThumbnail api={api} bookId={bookId} metadata={detail.thumbnail} name={detail.title} className={styles.detailThumbnail} />}
