@@ -42,6 +42,7 @@ interface PackageEntry {
   state: 'verified' | 'unchecked' | 'restored'
   targetState?: BookRecoveryPreview['targetState']
 }
+type PackageRecord = Omit<PackageEntry, 'state' | 'targetState'> & { targetRoot: string }
 const targetStateLabels = { new: '可恢复', resumable: '可续办', incomplete: '未完成冲突', conflict: '目标目录冲突' } as const
 
 function label(source: RecoveryRequest): string {
@@ -70,6 +71,7 @@ export function BookRecoveryPanel(props: Props) {
   const [confirmed, setConfirmed] = useState(false)
   const [exported, setExported] = useState<ExportedBook | null>(null)
   const [restored, setRestored] = useState<RestoredBook | null>(null)
+  const [packageHistory, setPackageHistory] = useState<PackageRecord[]>([])
   const [failedRestore, setFailedRestore] = useState<{ preview: BookRecoveryPreview; message: string } | null>(null)
   const [pending, setPending] = useState<PendingRequest | null>(null)
   const [unresolved, setUnresolved] = useState<PendingRequest | null>(null)
@@ -140,9 +142,17 @@ export function BookRecoveryPanel(props: Props) {
     if (mounted.current) setRefreshError(failure)
   }
 
+  function rememberPackage(target: string, value: Pick<BookRecoveryPreview, 'packageId' | 'packagePath' | 'createdAt' | 'totalBytes'>, title: string) {
+    // 会话清单只保留显示字段；历史校验状态和一次性令牌不能成为下一次恢复的依据。
+    setPackageHistory((previous) => [{ targetRoot: target, id: value.packageId, title,
+      path: value.packagePath, createdAt: value.createdAt, bytes: value.totalBytes },
+    ...previous.filter((item) => item.targetRoot !== target || item.id !== value.packageId)])
+  }
+
   function accept(source: RecoveryRequest, value: unknown): boolean {
     if (source.command === 'recovery.export') {
       if (!isBookRecoveryExportReceiptFor(value, source.input)) return false
+      rememberPackage(source.targetRoot, value, source.title)
       setExported({ receipt: value, title: source.title, targetRoot: source.targetRoot })
       setMessage('作品备份已创建，请保留整个恢复包目录。'); return true
     }
@@ -152,10 +162,12 @@ export function BookRecoveryPanel(props: Props) {
       if (selectionRef.current !== source || current.current.targetRoot !== source.targetRoot || current.current.recoveryEpoch !== source.recoveryEpoch) {
         setMessage('原预览回执已确认，书库或会话已变化，请重新选择恢复包。'); return true
       }
+      rememberPackage(source.targetRoot, value, value.book.title)
       previewRef.current = value; setPreview(value); setConfirmed(false)
       setMessage('恢复包已校验，请核对内容与目标作品库。'); return true
     }
     if (!isBookRecoveryRestoreReceiptFor(value, source.preview)) return false
+    rememberPackage(source.targetRoot, source.preview, value.book.title)
     // 先保存确定的完成回执，书架刷新是独立的只读操作，失败不能重新开放旧令牌提交。
     clearPreview(); setRestored({ receipt: value, preview: source.preview }); setFailedRestore(null); setRefreshError(null)
     setMessage('作品恢复已完成。')
@@ -260,12 +272,11 @@ export function BookRecoveryPanel(props: Props) {
 
   // 校验通过的包也可能与目标目录冲突，不能将其标为包内容损坏。
   const packages = new Map<string, PackageEntry>()
-  if (exported?.targetRoot === targetRoot) packages.set(exported.receipt.packageId, { id: exported.receipt.packageId, title: exported.title,
-    path: exported.receipt.packagePath, createdAt: exported.receipt.createdAt, bytes: exported.receipt.totalBytes, state: 'unchecked' })
-  if (failedRestore?.preview.targetRoot === targetRoot) packages.set(failedRestore.preview.packageId, { id: failedRestore.preview.packageId,
-    title: failedRestore.preview.book.title, path: failedRestore.preview.packagePath, createdAt: failedRestore.preview.createdAt, bytes: failedRestore.preview.totalBytes, state: 'unchecked' })
-  if (restored?.receipt.targetRoot === targetRoot) packages.set(restored.receipt.packageId, { id: restored.receipt.packageId, title: restored.receipt.book.title,
-    path: restored.preview.packagePath, createdAt: restored.preview.createdAt, bytes: restored.preview.totalBytes, state: 'restored' })
+  for (const item of packageHistory) {
+    if (item.targetRoot !== targetRoot) continue
+    const completed = restored?.receipt.targetRoot === targetRoot && restored.receipt.packageId === item.id && restored.preview.packagePath === item.path
+    packages.set(item.id, { ...item, state: completed ? 'restored' : 'unchecked' })
+  }
   if (currentPreview) packages.set(currentPreview.packageId, { id: currentPreview.packageId, title: currentPreview.book.title,
     path: currentPreview.packagePath, createdAt: currentPreview.createdAt, bytes: currentPreview.totalBytes, state: 'verified', targetState: currentPreview.targetState })
   const capacity = draftInventory?.capacity
@@ -315,7 +326,7 @@ export function BookRecoveryPanel(props: Props) {
           <span className={recovery.packageMark} aria-hidden="true"><StudioIcon name="archive" size={28} /></span><div className={recovery.packageDetails}><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString('zh-CN')} · {formatBytes(item.bytes)}</small><span title={item.path}>{item.path}</span>{item.targetState && <small className={recovery.packageTargetState} data-state={item.targetState}>{targetStateLabels[item.targetState]}</small>}</div><span className={recovery.packageState}><StudioIcon name={item.state === 'unchecked' ? 'clock' : 'check'} size={18} />{item.state === 'unchecked' ? '待校验' : item.state === 'restored' ? '已恢复' : '通过'}</span>
         </li>)}</ul>
         {!packages.size && <div className={recovery.empty}><StudioIcon name="archive" size={32} /><p>尚未选择恢复包</p><button className={styles.button} type="button" disabled={blocked || needsReconciliation || !targetRoot} onClick={selectPackage}>选择恢复包</button></div>}
-        <p className={styles.helpText}>仅列出本次会话已创建或选择的恢复包。</p>
+        <p className={styles.helpText}>仅列出本次会话已创建或校验过的恢复包；历史记录需重新选择校验。</p>
         <details className={recovery.backupDetails}>
         <summary>备份当前作品</summary>
         <h3>备份当前作品</h3>
