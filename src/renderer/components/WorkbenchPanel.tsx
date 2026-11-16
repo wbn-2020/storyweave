@@ -18,6 +18,7 @@ import { AiTextDiff } from './AiTextDiff'
 import { StudioIcon, type StudioIconName } from './StudioIcon'
 import { ReviewDiscussion } from './ReviewDiscussion'
 import type { AnnotationAction } from './ReaderAnnotations'
+import { SavedMediaImage, useSavedMedia } from './SavedPortrait'
 
 export interface WorkbenchPanelProps {
   api: StudioApi
@@ -127,6 +128,9 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
     ?? catalog.chapters.find((item) => item.id === currentChapter?.id) ?? catalog.chapters[0] ?? null
   const planningScenes = (snapshot?.scenes ?? []).filter((item) => !item.archived && item.chapterId === (planningChapter?.id ?? null))
     .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
+  // 只使用场景明确关联地点的正式图片；作品版本变化时旧图立即失效。
+  const sceneMedia = useSavedMedia(api, bookId, book.book.revision, snapshot, tab === 'outline' && Boolean(snapshot
+    && snapshot.bookRevision === book.book.revision && planningScenes.some((item) => item.locationId)))
   const scenes = useMemo(() => (snapshot?.scenes ?? []).filter((item) => (includeArchived || !item.archived)
     && (!search.trim() || `${item.title} ${item.goal} ${item.plotline}`.includes(search.trim())))
     .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id)), [snapshot, includeArchived, search])
@@ -525,8 +529,13 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
                   <td><div className={styles.actions}><button className={styles.iconButton} type="button" title={blockedReason ?? '编辑章节规划'} aria-label={`编辑《${item.title}》的章节规划`} disabled={blocked} onClick={() => editChapter(item)}><StudioIcon name="pen" size={16} /></button>
                     <button className={styles.iconButton} type="button" title="进入本章写作" aria-label={`进入《${item.title}》写作`} disabled={tool.locked || syncRequired} onClick={() => { if (canSwitch()) onNavigate(item.id) }}><StudioIcon name="arrow" size={16} /></button></div></td></tr>)}{!visibleChapters.length && <tr><td colSpan={6}><div className={styles.empty}><p>没有符合条件的章节。</p><button type="button" className={styles.button} onClick={() => setSearch('')}>清空搜索</button></div></td></tr>}</tbody>
               </table></div>}</div><aside className={styles.sceneAside} aria-label="本章场景卡"><h4><span><StudioIcon name="grid" size={20} />场景卡</span><small title={planningChapter?.title}>{planningChapter?.title ?? '未归属章节'}</small></h4>
-                {planningScenes.slice(0, 3).map((item, index) => <article key={item.id} data-scene-id={item.id} data-drop-target={dropSceneId === item.id} onDragOver={(event) => { sceneDropTarget(event, item) }} onDrop={(event) => dropScene(event, item)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropSceneId(null) }}>
-                  <div className={styles.sceneSymbol} data-tone={index % 3} aria-hidden="true"><StudioIcon name={index % 3 === 0 ? 'compass' : index % 3 === 1 ? 'notes' : 'spark'} size={32} /></div>
+                {planningScenes.slice(0, 3).map((item) => {
+                  const image = item.locationId ? sceneMedia.items.find((asset) => asset.kind === 'scene' && asset.placeId === item.locationId) : undefined
+                  return <article key={item.id} data-scene-id={item.id} data-drop-target={dropSceneId === item.id} onDragOver={(event) => { sceneDropTarget(event, item) }} onDrop={(event) => dropScene(event, item)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropSceneId(null) }}>
+                  <SavedMediaImage api={api} bookId={bookId} className={styles.sceneImage}
+                    metadata={image}
+                    name={`${item.title}关联地点的已保存场景图`}
+                    fallback={<><StudioIcon name="image" size={32} /><small>{!item.locationId ? '未关联地点' : sceneMedia.loading || image ? '正在读取场景图…' : sceneMedia.error ? '场景资料暂不可用' : '未设置场景图'}</small></>} />
                   <div className={styles.sceneInfo}><header><button type="button" className={styles.sceneTitle} disabled={blocked} title={blockedReason ?? item.title} onClick={() => editScene(item)}>{item.title}</button><span className={styles.statusChip} data-state={item.stale ? 'review' : item.status}>{item.stale ? '待复核' : sceneStatuses[item.status]}</span>{sceneHandle(item)}</header>
                     <dl><div><dt>目标</dt><dd title={item.goal}>{item.goal || '待补充'}</dd></div><div><dt>冲突</dt><dd title={item.conflict}>{item.conflict || '待补充'}</dd></div><div><dt>结束变化</dt><dd title={item.outcome}>{item.outcome || '待补充'}</dd></div></dl>
                     <p className={styles.sceneMeta}>{[
@@ -535,8 +544,9 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
                       `故事时间：${item.storyTime || '未填写'}`, `情节线：${item.plotline || '未填写'}`,
                     ].map((text, field) => <span key={field} title={text}>{text}</span>)}</p>
                   </div>
-                </article>)}
+                </article>})}
                 {!planningScenes.length && <div className={styles.empty}><StudioIcon name="layers" size={32} /><p>尚无场景。创建第一张场景卡。</p></div>}
+                {sceneMedia.error && <p className={styles.muted} role="status">{sceneMedia.error} 可刷新资料重试。</p>}
                 <button className={styles.addScene} type="button" disabled={blocked} title={blockedReason} onClick={() => editScene(undefined, undefined, planningChapter?.id ?? null)}><StudioIcon name="plus" size={20} />添加场景</button>
                 {planningScenes.length > 3 && <button type="button" className={styles.button} disabled={tool.locked} onClick={() => selectTab('scenes')}>查看全部 {planningScenes.length} 张场景卡</button>}
                 <p className={styles.muted}>场景顺序是计划顺序，调整场景不会移动正文。</p>
