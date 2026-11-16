@@ -525,7 +525,7 @@ export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'servic
   | 'recovery.exportFile' | 'recovery.select'
   | 'book.export.directory' | 'book.export.commitFile' | 'book.export.reveal'
   | 'book.media.exportFile'
-  | 'book.image.list' | 'book.image.get' | 'book.image.start' | 'book.image.cancel' | 'book.image.discard'
+  | 'book.image.list' | 'book.image.get' | 'book.image.start' | 'book.image.cancel' | 'book.image.jpeg' | 'book.image.discard'
   | 'draft.checkpoint' | 'draft.list' | 'draft.rotate' | 'draft.select' | 'draft.preview' | 'draft.commit'
   | 'ai.configure' | 'ai.start' | 'ai.cancel'
   | 'connection.probe' | 'connection.probe.cancel'

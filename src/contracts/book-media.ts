@@ -87,14 +87,19 @@ function parseLabels(value: Record<string, unknown>): Omit<BookMediaFields, 'dat
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 /** 在解码前核对规范 Base64、填充位和预算；拒绝 data URL、路径、空白及宽松解码。 */
 export function validateBookMediaPayload(mime: BookMediaMime, value: unknown): number {
-  if (typeof value !== 'string' || !value.length || value.length > MAX_BOOK_MEDIA_BASE64_LENGTH || value.length % 4 !== 0) return invalid('图片 Base64 长度无效，单张原图不得超过 2 MiB。')
+  return validateBoundedImagePayload(mime, value, MAX_BOOK_MEDIA_ITEM_BYTES)
+}
+/** 生成原图与书内媒体使用各自的固定预算，编码与文件边界校验共用同一实现。 */
+export function validateBoundedImagePayload(mime: BookMediaMime, value: unknown, maximumBytes: number): number {
+  const limit = `单张原图不得超过 ${maximumBytes / 1024 / 1024} MiB。`
+  if (typeof value !== 'string' || !value.length || value.length > Math.ceil(maximumBytes / 3) * 4 || value.length % 4 !== 0) return invalid(`图片 Base64 长度无效，${limit}`)
   const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
   const body = value.slice(0, value.length - padding)
   // 避免对数 MiB 文本使用嵌套重复正则，防止校验自身耗尽正则栈。
   if (/[^A-Za-z0-9+/]/.test(body) || (padding === 2 && (ALPHABET.indexOf(body.at(-1)!) & 15) !== 0)
     || (padding === 1 && (ALPHABET.indexOf(body.at(-1)!) & 3) !== 0)) return invalid('图片必须使用规范 Base64 编码，不能包含 URL、空白或非零填充位。')
   const size = value.length / 4 * 3 - padding
-  if (size < 4 || size > MAX_BOOK_MEDIA_ITEM_BYTES) return invalid('单张原图不得超过 2 MiB。')
+  if (size < 4 || size > maximumBytes) return invalid(limit)
   // 签名检查只取所需字节，契约层可同时用于 renderer 和仓储，无需 Node Buffer。
   const byte = (index: number): number => {
     const offset = Math.floor(index / 3) * 4, shift = index % 3

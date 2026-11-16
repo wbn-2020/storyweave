@@ -76,6 +76,7 @@ const api: StudioApi = {
   getImageGeneration: (input) => invoke('book.image.get', input),
   startImageGeneration: (input) => invoke('book.image.start', input),
   cancelImageGeneration: (input) => invoke('book.image.cancel', input),
+  createImageGenerationJpeg: (input) => invoke('book.image.jpeg', input),
   discardImageGeneration: (input) => invoke('book.image.discard', input),
   getWorkspace: () => invoke('workspace.get'),
   selectWorkspace: () => invoke('workspace.select'),

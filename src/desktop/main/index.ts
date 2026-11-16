@@ -75,7 +75,7 @@ const rendererCommands = new Set<RendererCommand>([
   'study.adopt', 'study.saved',
   'ai.presets.get', 'ai.presets.save',
   'book.media.get', 'book.media.read', 'book.media.save', 'book.media.exportFile',
-  'book.image.list', 'book.image.get', 'book.image.start', 'book.image.cancel', 'book.image.discard',
+  'book.image.list', 'book.image.get', 'book.image.start', 'book.image.cancel', 'book.image.jpeg', 'book.image.discard',
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',

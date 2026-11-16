@@ -5,7 +5,7 @@ import { DomainError, isRecord, requiredId } from '../../contracts/api'
 import { parseAiFinishInput, type AiFinishInput } from '../../contracts/ai'
 import { parseMemoryVectorFinishInput, type MemoryVectorFinishInput } from '../../contracts/memory-vector'
 import { parseGenerationFinishInput, type GenerationFinishInput } from '../../contracts/generation'
-import { parseImageGenerationRun, type ImageGenerationRun } from '../../contracts/image-generation'
+import { MAX_IMAGE_RESULT_BYTES, parseImageGenerationRun, type ImageGenerationRun } from '../../contracts/image-generation'
 import { checkedLocalDirectory, readSelectedFile, writeNewText } from '../file-access'
 
 export type PendingAiPayload = { contextHash: string } & (
@@ -23,7 +23,6 @@ const MAX_BYTES = 4 * 1024 * 1024
 const MAX_ENTRIES = 10_000
 const MAX_VOLUME_BYTES = 512 * 1024 * 1024
 const METADATA_BYTES = 4096
-const MIN_FREE_BYTES = MAX_BYTES + 1024 * 1024
 const ROTATE_AT = 0.8
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const SETTLED_NAME = new RegExp(`^(${UUID})(?:\\.${UUID})?\\.settled\\.json$`)
@@ -70,6 +69,8 @@ function read(path: string, maximum: number): Uint8Array {
 /** 只写规定的任务／结果白名单；认证会话对象、请求头和密钥不能进入恢复日志。 */
 export class PendingAiResults {
   constructor(private readonly directoryName: 'pending-model-results' | 'pending-generation-results' | 'pending-image-results' = 'pending-model-results') {}
+  private get maxBytes(): number { return this.directoryName === 'pending-image-results' ? MAX_IMAGE_RESULT_BYTES : MAX_BYTES }
+  private get minimumFreeBytes(): number { return this.maxBytes + 1024 * 1024 }
   private directory(root: string, create: boolean): string | null {
     const parent = checkedLocalDirectory(root)
     const directory = join(parent, this.directoryName)
@@ -94,7 +95,7 @@ export class PendingAiResults {
       if (volume) capacity = this.capacity(this.locate(root, volume))
       let directory = volume ? this.locate(root, volume) : base
       let freeBytes = this.freeBytes(directory)
-      if (!volume || nearCapacity(capacity!, 3, MAX_BYTES + 2 * METADATA_BYTES)) {
+      if (!volume || nearCapacity(capacity!, 3, this.maxBytes + 2 * METADATA_BYTES)) {
         volume = this.createVolume(root, base, (volume?.sequence ?? 0) + 1)
         directory = this.locate(root, volume)
         capacity = this.capacity(directory)
@@ -104,7 +105,7 @@ export class PendingAiResults {
       const content = JSON.stringify({ format: 'storyweave.pending-ai-ready', version: 1, id: readyId,
         workspaceRoot: root, volumeId: volume.id, volumeHash: volume.hash, createdAt: new Date().toISOString(),
         capacity: { ...capacity!, entryLimit: MAX_ENTRIES, byteLimit: MAX_VOLUME_BYTES, rotateAt: ROTATE_AT,
-          availableBytes: freeBytes.toString(), requiredFreeBytes: MIN_FREE_BYTES, previousVolumeId } }) + '\n'
+          availableBytes: freeBytes.toString(), requiredFreeBytes: this.minimumFreeBytes, previousVolumeId } }) + '\n'
       if (Buffer.byteLength(content, 'utf8') > METADATA_BYTES) invalid('书库路径与预检记录超过 4 KiB，未开始留存预检写入。')
       // claim 和网络请求前，以独占写入及 fsync 验证可写性；记录不含输入正文、连接或密钥。
       // 这是当前余量检查，不能锁住其他进程随后可能占用的磁盘空间。
@@ -126,7 +127,7 @@ export class PendingAiResults {
       invalid('模型结果预检记录已变化，请保留结果并核对原分卷。')
     }
     // 多次失败留下的残件也计入容量；必要时新建分卷，原预检和部分结果均不覆盖。
-    if (nearCapacity(this.capacity(directory), 2, MAX_BYTES + METADATA_BYTES)) {
+    if (nearCapacity(this.capacity(directory), 2, this.maxBytes + METADATA_BYTES)) {
       preflight = this.preflight(root)
       directory = this.locate(root, preflight.volume)
     }
@@ -135,7 +136,7 @@ export class PendingAiResults {
     const content = JSON.stringify({ format: 'storyweave.pending-ai-result', version: 2, id,
       volumeId: volume.id, volumeHash: volume.hash, readyId: preflight.readyId,
       workspaceRoot: root, createdAt: new Date().toISOString(), payload: normalized }) + '\n'
-    if (Buffer.byteLength(content, 'utf8') > MAX_BYTES) invalid('待存模型结果超过 4 MiB，结果仍在窗口会话保留，请另存后处理。')
+    if (Buffer.byteLength(content, 'utf8') > this.maxBytes) invalid(`待存模型结果超过 ${this.maxBytes / 1024 / 1024} MiB，结果仍在窗口会话保留，请另存后处理。`)
     // 先完整落盘并同步，再允许发送 finish；中断后只补写本地终态，绝不再次请求模型。
     writeNewText(join(directory, `${id}.json`), (write) => write(content))
     return { id, hash: digest(content), root, volume, payload: normalized }
@@ -180,7 +181,7 @@ export class PendingAiResults {
         }
         const id = requiredId(name.slice(0, -5)).toLowerCase()
         if (name !== `${id}.json`) invalid('待存模型结果目录含未知项目。')
-        const bytes = read(join(directory, name), MAX_BYTES)
+        const bytes = read(join(directory, name), this.maxBytes)
         const hash = digest(bytes)
         if (this.hasSettlement(directory, volume, id, hash, settlements.get(id) ?? [])) continue
         const value = json(bytes)
@@ -201,7 +202,7 @@ export class PendingAiResults {
   settle(file: PendingAiFile, disposition: 'committed' | 'exported'): void {
     const directory = this.locate(file.root, file.volume)
     const id = requiredId(file.id).toLowerCase()
-    if (digest(read(join(directory, `${id}.json`), MAX_BYTES)) !== file.hash) invalid('待存模型结果已变化，未解除恢复状态。')
+    if (digest(read(join(directory, `${id}.json`), this.maxBytes)) !== file.hash) invalid('待存模型结果已变化，未解除恢复状态。')
     if (this.hasSettlement(directory, file.volume, id, file.hash, this.entries(directory))) return
     // 完成标记也可能在断电时只写了一部分，追加独立记录即可续办，不覆盖残件。
     // 使用原卷身份，不选择当前写入卷；满卷仍可追加这个小标记，不做发送前余量检查。
@@ -228,7 +229,7 @@ export class PendingAiResults {
   private freeBytes(directory: string): bigint {
     const space = statfsSync(directory, { bigint: true })
     const available = space.bavail * space.bsize
-    if (available < BigInt(MIN_FREE_BYTES)) invalid(`模型结果留存可用空间 ${available} 字节，至少需要 ${MIN_FREE_BYTES} 字节；旧结果与日志全部保留。`)
+    if (available < BigInt(this.minimumFreeBytes)) invalid(`模型结果留存可用空间 ${available} 字节，至少需要 ${this.minimumFreeBytes} 字节；旧结果与日志全部保留。`)
     return available
   }
 

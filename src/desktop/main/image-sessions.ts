@@ -2,9 +2,10 @@ import { nativeImage } from 'electron'
 import { createHash } from 'node:crypto'
 import { DomainError, failure, isRecord, type Result } from '../../contracts/api'
 import { parseAiConnection, type AiConnectionPage } from '../../contracts/ai'
-import { MAX_BOOK_MEDIA_BYTES, MAX_BOOK_MEDIA_ITEMS, MAX_BOOK_MEDIA_ITEM_BYTES, isBookMediaImage, isBookMediaSnapshot, validateBookMediaPayload } from '../../contracts/book-media'
+import { MAX_BOOK_MEDIA_BYTES, MAX_BOOK_MEDIA_ITEMS, MAX_BOOK_MEDIA_ITEM_BYTES, isBookMediaImage, isBookMediaSnapshot, validateBookMediaPayload, validateBoundedImagePayload } from '../../contracts/book-media'
 import {
   parseImageGenerationBookInput, parseImageGenerationInput, parseImageGenerationReadInput, parseImageGenerationRun,
+  MAX_GENERATED_IMAGE_BYTES, MAX_IMAGE_RESULT_BYTES, imageGenerationSizes, matchesImageGenerationSize, usesHuantuImageAspect,
   type ImageGenerationInput, type ImageGenerationPage, type ImageGenerationRun,
 } from '../../contracts/image-generation'
 import { PendingAiResults, type PendingAiFile, type PendingAiPreflight } from './pending-ai-results'
@@ -14,7 +15,7 @@ import { writeNewText } from '../file-access'
 
 interface Entry { run: ImageGenerationRun; file?: PendingAiFile; pending: boolean; preflight?: PendingAiPreflight }
 interface Active { entry: Entry; controller: AbortController; stop: 'cancelled' | 'timeout' | null }
-const RESPONSE_BYTES = 4 * 1024 * 1024
+const RESPONSE_BYTES = MAX_IMAGE_RESULT_BYTES
 const TIMEOUT = 180_000
 const PENDING_WARNING = '图片终态尚未确认落盘，结果仍在本次会话保留。请在图片面板重新核对，完成前保留窗口。'
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex')
@@ -147,11 +148,16 @@ export class ImageSessions {
         if (this.active?.entry === entry) { this.active.stop = 'cancelled'; this.active.controller.abort() }
         return { ok: true, data: entry.run }
       }
+      if (command === 'book.image.jpeg') {
+        if (this.integrityFault) return failure('STORAGE_ERROR', this.warning ?? '图片留存目录尚待核对。')
+        await this.reconcile(input.bookId, service)
+        return this.createJpeg(entry)
+      }
       if (command === 'book.image.discard') {
         if (this.active?.entry === entry || entry.run.state === 'running') return failure('WORKSPACE_BUSY', '请先取消图片请求并等待终态，再放弃这次结果。')
         await this.reconcile(input.bookId, service)
         if (entry.run.state === 'saved') return failure('FORBIDDEN', '这张生成图片已存入本书，不能将保存事实改为放弃。')
-        if (entry.run.state !== 'discarded') this.persist(entry, { ...entry.run, state: 'discarded', version: 2, image: null, error: null, updatedAt: updatedTime(entry.run) })
+        if (entry.run.state !== 'discarded') this.persist(entry, { ...entry.run, state: 'discarded', version: entry.run.jpegSource ? 3 : 2, image: null, error: null, updatedAt: updatedTime(entry.run) })
         return { ok: true, data: entry.run }
       }
       return failure('INVALID_INPUT', '不支持此图片任务操作。')
@@ -180,8 +186,43 @@ export class ImageSessions {
         digest(Buffer.from(saved.data.dataBase64, 'base64')) !== run.sha256) {
         throw new DomainError({ code: 'STORAGE_ERROR', message: '已存媒体与生成原图不一致，未解除生成结果的留存状态。' })
       }
-      this.persist(entry, { ...run, state: 'saved', version: 2, image: null, updatedAt: updatedTime(run) })
+      this.persist(entry, { ...run, state: 'saved', version: run.jpegSource ? 3 : 2, image: null, updatedAt: updatedTime(run) })
     }
+  }
+
+  private createJpeg(entry: Entry): Result<ImageGenerationRun> {
+    const run = entry.run
+    if (run.state !== 'succeeded' || !run.image || !run.sha256) return failure('FORBIDDEN', '请先取得待保存的生成原图，再制作入库副本。')
+    // 原号再次核对只返回同一副本，丢失回执或连点均不重复转换，更不发送模型请求。
+    if (run.jpegSource) return { ok: true, data: run }
+    const source = run.image
+    if (source.byteLength <= MAX_BOOK_MEDIA_ITEM_BYTES) return failure('INVALID_INPUT', '原图已符合 2 MiB 入库上限，可以直接编辑并保存。')
+    const bytes = Buffer.from(source.dataBase64, 'base64')
+    if (digest(bytes) !== run.sha256) return failure('STORAGE_ERROR', '原图摘要不符，已保留原任务，未制作副本。')
+    let copy: Buffer
+    try {
+      const decoded = nativeImage.createFromBuffer(bytes)
+      const dimensions = decoded.getSize()
+      if (decoded.isEmpty() || dimensions.width !== source.width || dimensions.height !== source.height) return failure('INVALID_INPUT', '原图无法正确解码，未制作副本。')
+      if (source.mime === 'image/png') {
+        // JPEG 无透明通道；检查实际像素，不能把透明背景静默填成黑色。
+        const bitmap = decoded.toBitmap()
+        if (bitmap.length !== source.width * source.height * 4) return failure('INVALID_INPUT', '原图像素格式不受支持，未制作副本。')
+        for (let offset = 3; offset < bitmap.length; offset += 4) {
+          if (bitmap[offset] !== 255) return failure('INVALID_INPUT', '原图含透明像素，转为 JPEG 会改变背景；已保留原图，请另行准备保留透明的入库图片。')
+        }
+      }
+      copy = decoded.toJPEG(93)
+    } catch { return failure('INVALID_INPUT', '原图解码或 JPEG 编码失败，原任务仍保留。') }
+    if (!copy.length || copy.length > MAX_BOOK_MEDIA_ITEM_BYTES) return failure('INVALID_INPUT', '同尺寸 JPEG（质量 93）仍超过 2 MiB；原图已保留，不会继续降低质量或缩小图片。')
+    const dataBase64 = copy.toString('base64')
+    validateBookMediaPayload('image/jpeg', dataBase64)
+    const dimensions = jpegSize(copy)
+    if (dimensions.width !== source.width || dimensions.height !== source.height) return failure('INVALID_INPUT', 'JPEG 副本尺寸变化，原图已保留，未采用副本。')
+    this.persist(entry, { ...run, version: 2, image: { ...dimensions, mime: 'image/jpeg', dataBase64, byteLength: copy.length },
+      sha256: digest(copy), jpegSource: { mime: source.mime, width: source.width, height: source.height,
+        byteLength: source.byteLength, sha256: run.sha256, quality: 93 }, updatedAt: updatedTime(run) })
+    return { ok: true, data: entry.run }
   }
 
   private async start(input: ImageGenerationInput, service: ServiceClient, sessions: AiSessions): Promise<Result<ImageGenerationRun>> {
@@ -210,6 +251,7 @@ export class ImageSessions {
     const found = page.data.connections.find((item) => item.id === input.connectionId)
     if (!found || found.version !== input.expectedConnectionVersion) return failure('REVISION_CONFLICT', '所选连接已变化，请重新读取连接后确认。')
     const connection = parseAiConnection(found), key = sessions.sessionKey(this.root!, input.bookId, connection)
+    if (!imageGenerationSizes(connection).includes(input.size)) return failure('INVALID_INPUT', '所选提供方与模型不支持此请求画幅，请明确改选 3:4、1:1、3:2 或接口默认画幅；未发送请求。')
     if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(connection.baseUrl).hostname) && !key) return failure('FORBIDDEN', '请先在模型设置保存此连接的本次会话密钥。')
     const preflight = this.journal.preflight(this.root!)
     const now = new Date().toISOString()
@@ -232,12 +274,13 @@ export class ImageSessions {
       const response = await fetch(`${connection.baseUrl}/images/generations`, {
         method: 'POST', redirect: 'error', signal: active.controller.signal,
         headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
-        body: JSON.stringify({ model: connection.model, prompt: input.prompt, n: 1, ...(input.size === 'auto' ? {} : { size: input.size }) }),
+        body: JSON.stringify({ model: connection.model, prompt: input.prompt, n: 1, ...(input.size === 'auto' ? {} : { size: input.size }),
+          ...(usesHuantuImageAspect(connection) ? { response_format: 'b64_json' } : {}) }),
       })
       if (!response.ok) { await response.body?.cancel(); throw new Error(`图片接口返回 HTTP ${response.status}，未读取远端错误正文；请检查图像模型和权限。`) }
       if (!response.body || !/^application\/(?:[\w.-]+[+])?json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '') ||
         Number(response.headers.get('content-length')) > RESPONSE_BYTES) {
-        await response.body?.cancel(); throw new Error('图片接口未返回 JSON，或响应超过 4 MiB。')
+        await response.body?.cancel(); throw new Error('图片接口未返回 JSON，或响应超过 6 MiB。')
       }
       const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true })
       let text = '', size = 0
@@ -246,7 +289,7 @@ export class ImageSessions {
           const chunk = await reader.read()
           if (chunk.done) break
           size += chunk.value.byteLength
-          if (size > RESPONSE_BYTES) throw new Error('图片响应超过 4 MiB，已停止接收。')
+          if (size > RESPONSE_BYTES) throw new Error('图片响应超过 6 MiB，已停止接收。')
           text += decoder.decode(chunk.value, { stream: true })
         }
         text += decoder.decode()
@@ -263,7 +306,7 @@ export class ImageSessions {
       if (typeof item.b64_json === 'string') {
         // 先做有界规范编码与签名检查，再分配 Buffer。
         const mime = item.b64_json.startsWith('/9j/') ? 'image/jpeg' : 'image/png'
-        try { validateBookMediaPayload(mime, item.b64_json) } catch { throw new Error('原图不是有效 PNG / JPEG，或超过单张 2 MiB 上限。') }
+        try { validateBoundedImagePayload(mime, item.b64_json, MAX_GENERATED_IMAGE_BYTES) } catch { throw new Error('原图不是有效 PNG / JPEG，或超过生成原图 4 MiB 上限。') }
         bytes = Buffer.from(item.b64_json, 'base64')
       } else {
         if (typeof item.url !== 'string' || item.url.length > 32768) throw new Error('图片接口没有返回原图或有效地址。')
@@ -275,8 +318,8 @@ export class ImageSessions {
         const imageResponse = await fetch(url, { redirect: 'error', signal: active.controller.signal, headers: { Accept: 'image/png,image/jpeg' } })
         if (!imageResponse.ok) { await imageResponse.body?.cancel(); throw new Error(`原图下载返回 HTTP ${imageResponse.status}，未读取远端错误正文。`) }
         const mime = (imageResponse.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
-        if (!imageResponse.body || !['image/png', 'image/jpeg'].includes(mime) || Number(imageResponse.headers.get('content-length')) > MAX_BOOK_MEDIA_ITEM_BYTES) {
-          await imageResponse.body?.cancel(); throw new Error('原图下载格式不是 PNG / JPEG，或超过单张 2 MiB 上限。')
+        if (!imageResponse.body || !['image/png', 'image/jpeg'].includes(mime) || Number(imageResponse.headers.get('content-length')) > MAX_GENERATED_IMAGE_BYTES) {
+          await imageResponse.body?.cancel(); throw new Error('原图下载格式不是 PNG / JPEG，或超过生成原图 4 MiB 上限。')
         }
         const imageReader = imageResponse.body.getReader(), chunks: Uint8Array[] = []
         let total = 0
@@ -285,7 +328,7 @@ export class ImageSessions {
             const chunk = await imageReader.read()
             if (chunk.done) break
             total += chunk.value.byteLength
-            if (total > MAX_BOOK_MEDIA_ITEM_BYTES) throw new Error('原图下载超过单张 2 MiB 上限。')
+            if (total > MAX_GENERATED_IMAGE_BYTES) throw new Error('原图下载超过生成原图 4 MiB 上限。')
             chunks.push(chunk.value)
           }
         } finally { await imageReader.cancel().catch(() => {}); imageReader.releaseLock() }
@@ -296,11 +339,11 @@ export class ImageSessions {
       const dataBase64 = bytes.toString('base64'), mime = bytes[0] === 255 ? 'image/jpeg' : 'image/png'
       if (declaredMime !== null && declaredMime !== mime) throw new Error('原图签名与提供方声明的格式不符。')
       let byteLength: number
-      try { byteLength = validateBookMediaPayload(mime, dataBase64) }
-      catch { throw new Error('原图不是有效 PNG / JPEG，或超过本书单张 2 MiB 上限。') }
+      try { byteLength = validateBoundedImagePayload(mime, dataBase64, MAX_GENERATED_IMAGE_BYTES) }
+      catch { throw new Error('原图不是有效 PNG / JPEG，或超过生成原图 4 MiB 上限。') }
       const dimensions = mime === 'image/png' ? { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) } : jpegSize(bytes)
       if (!dimensions.width || !dimensions.height || dimensions.width > 4096 || dimensions.height > 4096 ||
-        input.size !== 'auto' && `${dimensions.width}x${dimensions.height}` !== input.size) throw new Error('原图尺寸超出 4096 像素边长上限，或与指定画幅不一致。')
+        !matchesImageGenerationSize(input, connection, dimensions.width, dimensions.height)) throw new Error('原图尺寸超出 4096 像素边长上限，或与指定画幅不一致。')
       const decoded = nativeImage.createFromBuffer(bytes)
       if (decoded.isEmpty() || decoded.getSize().width !== dimensions.width || decoded.getSize().height !== dimensions.height) throw new Error('生成原图无法正确解码。')
       let usage: ImageGenerationRun['usage'] = null

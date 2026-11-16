@@ -253,7 +253,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
       kind: run.input.kind, personId: run.input.personId, title: run.input.title, alt: '', mime, dataBase64,
     } })
     setDraftHash(run.sha256); setDraftBytes(byteLength); setDraftDecoded(false); setConflict(null); setDiscard(false)
-    tool.setDirty(true); setGenerator(null); tool.setNotice('生成原图已读入；请核对人物、名称、预算和作品版本后保存。')
+    tool.setDirty(true); setGenerator(null); tool.setNotice(run.jpegSource ? 'JPEG 入库副本已读入，原图保留在任务文件；请核对人物、名称、预算和作品版本后保存。' : '生成原图已读入；请核对人物、名称、预算和作品版本后保存。')
     await refreshGenerations()
   }
   function canSwitch(): boolean {

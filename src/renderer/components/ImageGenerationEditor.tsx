@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { StudioApi } from '../../contracts/api'
 import type { AiConnectionPage } from '../../contracts/ai'
 import type { KnowledgeItemPage } from '../../contracts/knowledge'
+import { MAX_BOOK_MEDIA_ITEM_BYTES } from '../../contracts/book-media'
 import {
-  IMAGE_PROMPT_LIMIT, IMAGE_SIZES, isImageGenerationRun, parseImageGenerationInput,
+  IMAGE_PROMPT_LIMIT, IMAGE_SIZES, imageGenerationSizes, usesHuantuImageAspect, isImageGenerationRun, parseImageGenerationInput,
   type ImageGenerationInput, type ImageGenerationRun,
 } from '../../contracts/image-generation'
 import { request } from '../request'
@@ -40,6 +41,9 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   const locked = busy || running || Boolean(submitted && !run)
   const connection = connections?.connections.find((item) => item.id === connectionId)
   const keyMissing = connection && !['localhost', '127.0.0.1', '[::1]'].includes(new URL(connection.baseUrl).hostname) && !connections?.sessionKeyIds.includes(connection.id)
+  const availableSizes = imageGenerationSizes(connection)
+  const unsupportedSize = !availableSizes.includes(size)
+  const oversized = Boolean(run?.image && run.image.byteLength > MAX_BOOK_MEDIA_ITEM_BYTES)
 
   useEffect(() => {
     mounted.current = true
@@ -95,7 +99,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   }
   async function start(event: FormEvent) {
     event.preventDefault()
-    if (readOnly || !connection || run || submitted || !consent || keyMissing || connections?.requiresUpgrade) return
+    if (readOnly || !connection || run || submitted || !consent || keyMissing || unsupportedSize || connections?.requiresUpgrade) return
     await operation(async () => {
       const input = parseImageGenerationInput({ bookId, expectedBookRevision: bookRevision, runId: crypto.randomUUID(), mediaId: crypto.randomUUID(),
         connectionId: connection.id, expectedConnectionVersion: connection.version, kind, personId: kind === 'portrait' ? personId : null, title, prompt, size })
@@ -147,6 +151,14 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
       receive(result.data, run.input.runId)
     })
   }
+  async function createJpeg() {
+    if (!run || run.state !== 'succeeded' || !oversized) return
+    await operation(async () => {
+      const result = await request(() => api.createImageGenerationJpeg({ bookId, runId: run.input.runId }))
+      if (!result.ok) throw new Error(result.error.message)
+      receive(result.data, run.input.runId)
+    })
+  }
   function close() {
     if (locked) return
     if (dirty && !confirmDiscard) { setConfirmDiscard(true); return }
@@ -169,7 +181,10 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
       {run.error && <p className={styles.warning} role="status">{run.error}</p>}
       {run.image && <><img className={styles.generatedPreview} src={`data:${run.image.mime};base64,${run.image.dataBase64}`} alt={run.input.title} />
         <p className={styles.muted}>{run.image.width} × {run.image.height} · {(run.image.byteLength / 1024 / 1024).toFixed(2)} MiB · 尚未保存为书内图片</p>
-        <button type="button" className={styles.primaryButton} disabled={busy || disabled || readOnly} onClick={() => void operation(() => callbacks.current.onUse(run))}><StudioIcon name="pen" />编辑并保存到本书</button></>}
+        {oversized && <div className={styles.warning}><p>原图超过书内单张 2 MiB 上限，已完整留存在图片任务中。可明确制作同尺寸 JPEG 入库副本（质量 93，有损压缩）；不缩放、不裁切，原图继续保留。含透明像素的图片不会转换。</p>
+          <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={busy} onClick={() => void createJpeg()}>制作同尺寸 JPEG 入库副本</button></div>}
+        {run.jpegSource && <p className={styles.notice} role="status">当前预览为同尺寸 JPEG 入库副本（质量 {run.jpegSource.quality}）；{(run.jpegSource.byteLength / 1024 / 1024).toFixed(2)} MiB 原图保留在原任务文件，尚未采用为书内图片。</p>}
+        <button type="button" className={styles.primaryButton} disabled={busy || disabled || readOnly || oversized} title={oversized ? '请先制作符合 2 MiB 上限的入库副本' : undefined} onClick={() => void operation(() => callbacks.current.onUse(run))}><StudioIcon name="pen" />编辑并保存到本书</button></>}
       {run.usage && <p className={styles.muted}>提供方返回用量：输入 {run.usage.inputTokens ?? '未知'}，输出 {run.usage.outputTokens ?? '未知'}，合计 {run.usage.totalTokens ?? '未知'} token</p>}
       <details><summary>本次生成输入</summary><p className={styles.notes}>{run.input.prompt}</p><p className={styles.identity}>任务：{run.input.runId}<br />作品基线：v{run.input.expectedBookRevision}</p></details>
       {!running && <div className={styles.actions}>
@@ -196,12 +211,14 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
         </div>}
         <label>图片名称<input required maxLength={120} value={title} onChange={(event) => changed(() => setTitle(event.target.value))} /></label>
         <label>画幅<select value={size} onChange={(event) => changed(() => setSize(event.target.value as ImageGenerationInput['size']))}>
-          {IMAGE_SIZES.map((value) => <option key={value} value={value}>{value === 'auto' ? '接口默认画幅' : `${value === '1024x1536' ? '竖幅' : value === '1536x1024' ? '横幅' : '方形'} · ${value}`}</option>)}</select></label>
+          {IMAGE_SIZES.filter((value) => availableSizes.includes(value) || value === size).map((value) => <option key={value} value={value} disabled={!availableSizes.includes(value)}>{value === 'auto' ? '接口默认画幅' : `${['1024x1536', '768x1024'].includes(value) ? '竖幅' : ['1536x1024', '1200x800'].includes(value) ? '横幅' : '方形'} · ${value}`}</option>)}</select></label>
+        {connection && usesHuantuImageAspect(connection) && <p className={styles.muted}>此连接按 3:4、1:1、3:2 画幅生成，实际返回像素以预览为准。</p>}
+        {unsupportedSize && <p className={styles.warning}>当前画幅不适用于所选模型，请明确改选后再发送。</p>}
         <label>生成提示<textarea required rows={8} maxLength={IMAGE_PROMPT_LIMIT} value={prompt} onChange={(event) => changed(() => setPrompt(event.target.value))} /></label>
-        <p className={styles.muted}>{prompt.length} / {IMAGE_PROMPT_LIMIT} 字符 · 仅发送以上提示，生成一张 PNG / JPEG；单张须不超过 2 MiB。</p>
+        <p className={styles.muted}>{prompt.length} / {IMAGE_PROMPT_LIMIT} 字符 · 仅发送以上提示，接收一张不超过 4 MiB、边长不超过 4096 像素的 PNG / JPEG；书内单张仍限 2 MiB，超限后可另行确认制作 JPEG 副本。</p>
         <label className={styles.check}><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />确认发送至所选提供方，可能产生图像生成费用</label>
       </fieldset>
-      <button type="submit" className={styles.goldButton} disabled={disabled || readOnly || busy || unresolved || !connection || !consent || !!keyMissing || connections?.requiresUpgrade || !title.trim() || !prompt.trim() || kind === 'portrait' && !personId}><StudioIcon name="spark" />开始生成</button>
+      <button type="submit" className={styles.goldButton} disabled={disabled || readOnly || busy || unresolved || !connection || !consent || !!keyMissing || unsupportedSize || connections?.requiresUpgrade || !title.trim() || !prompt.trim() || kind === 'portrait' && !personId}><StudioIcon name="spark" />开始生成</button>
     </form>}
     <button type="button" className={styles.button} disabled={disabled || locked} onClick={close}>{dirty && confirmDiscard ? '确认放弃表单并返回' : '返回图片详情'}</button>
   </div>
