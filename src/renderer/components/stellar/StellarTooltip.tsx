@@ -1,11 +1,11 @@
-import { cloneElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentPropsWithRef, type ReactElement } from 'react'
+import { cloneElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import styles from './StellarTooltip.module.css'
 
 const openingEvent = 'storyweave:tooltip-open'
 
 export function StellarTooltip({ children, placement = 'top' }: {
-  children: ReactElement<ComponentPropsWithRef<'button'>>
+  children: ReactElement<HTMLAttributes<HTMLElement> & { disabled?: boolean }>
   placement?: 'top' | 'right'
 }) {
   const content = children.props.title ?? children.props['aria-label']
@@ -13,9 +13,9 @@ export function StellarTooltip({ children, placement = 'top' }: {
   const tooltip = useRef<HTMLDivElement>(null)
   const openTimer = useRef<number | null>(null)
   const closeTimer = useRef<number | null>(null)
-  const trigger = useRef<HTMLButtonElement | null>(null)
+  const trigger = useRef<HTMLElement | null>(null)
   const hovered = useRef(false)
-  const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null)
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const close = useCallback(() => {
     if (openTimer.current !== null) window.clearTimeout(openTimer.current)
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
@@ -27,7 +27,7 @@ export function StellarTooltip({ children, placement = 'top' }: {
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
     closeTimer.current = null
   }
-  function scheduleOpen(element: HTMLButtonElement) {
+  function scheduleOpen(element: HTMLElement) {
     keepOpen()
     trigger.current = element
     if (!content || anchor || openTimer.current !== null) return
@@ -40,7 +40,7 @@ export function StellarTooltip({ children, placement = 'top' }: {
     }, 300)
   }
   function scheduleClose() {
-    if (hovered.current || trigger.current && !trigger.current.disabled && document.activeElement === trigger.current) return
+    if (hovered.current || trigger.current && !trigger.current.matches(':disabled') && document.activeElement === trigger.current) return
     if (openTimer.current !== null) window.clearTimeout(openTimer.current)
     openTimer.current = null
     keepOpen()

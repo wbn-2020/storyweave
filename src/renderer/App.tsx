@@ -1387,22 +1387,35 @@ export function App({ api }: Props) {
     { id: 'calendar', label: '统计', icon: 'chart' as const, active: modal?.kind === 'calendar', run: () => openToolFromNav('calendar') },
     { id: 'preferences', label: '设置', icon: 'settings' as const, active: modal?.kind === 'preferences' || modal?.kind === 'models', run: () => showDialog({ kind: 'preferences' }) },
   ]
+  const busyReason = busy ? pendingMessage ? '原操作尚未确认，请先核对回执' : '工作区正在处理其他操作，请稍候' : undefined
+  const workspaceLockedReason = busyReason ?? (bookRecoveryLocked ? '恢复操作尚未确认，请先完成核对' : undefined)
+  const composingReason = session.session.composing ? '输入法处理中，请先完成当前输入' : undefined
+  const savingReason = session.session.saving ? '正在保存当前章节，请稍候' : undefined
+  const archivedReason = archived ? '归档作品仅供查阅，请先在作品资料中解除归档' : undefined
+  const recoveryActionReason = !api ? '本地服务未连接' : savingReason ?? composingReason
+    ?? (recoveryBusy ? '正在处理草稿恢复，请稍候' : checkingReceipt ? '正在核对原请求，请稍候' : busy && !pendingMessage ? busyReason : undefined)
+  // 两处保存入口共用当前会话的提示；待确认时仍沿原保存流程核对，不能误导作者重新发送。
+  const saveHint = composingReason ?? savingReason ?? busyReason
+    ?? (!session.session.dirty ? '当前章节已保存，无需重复保存'
+      : session.session.error?.code === 'REVISION_CONFLICT' ? '正文版本冲突，请打开草稿与服务恢复'
+        : session.session.error?.code === 'REQUEST_TIMEOUT' || session.session.error?.code === 'SERVICE_UNAVAILABLE' ? '核对上次保存回执 · Ctrl+S'
+          : session.session.error ? '重试保存当前章节 · Ctrl+S' : '保存 · Ctrl+S')
   const navigation = <>
     <nav className={styles.nav} aria-label="工作室主导航">{primaryNav.map((item) => <StellarTooltip key={item.id} placement="right"><button className={`${styles.navItem} ${item.active ? styles.navItemActive : ''}`} type="button"
-      title={item.label} aria-label={item.label} aria-current={item.active ? 'page' : undefined} disabled={busy || bookRecoveryLocked || (!api && item.id !== 'home' && item.id !== 'preferences')} onClick={item.run}><StudioIcon name={item.icon} size={20} /><span>{item.label}</span></button></StellarTooltip>)}</nav>
-    <div className={styles.navBottom}><StellarTooltip placement="right"><button className={styles.iconButton} type="button" title="切换作品库" aria-label="切换作品库" onClick={() => void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="folder" size={20} /></button></StellarTooltip>
-      <StellarTooltip placement="right"><button className={styles.iconButton} type="button" title="草稿与服务恢复" aria-label="草稿与服务恢复" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={20} /></button></StellarTooltip></div>
+      title={workspaceLockedReason ?? (!api && item.id !== 'home' && item.id !== 'preferences' ? '本地服务未连接' : item.label)} aria-label={item.label} aria-current={item.active ? 'page' : undefined} disabled={busy || bookRecoveryLocked || (!api && item.id !== 'home' && item.id !== 'preferences')} onClick={item.run}><StudioIcon name={item.icon} size={20} /><span>{item.label}</span></button></StellarTooltip>)}</nav>
+    <div className={styles.navBottom}><StellarTooltip placement="right"><button className={styles.iconButton} type="button" title={!api ? '本地服务未连接' : workspaceLockedReason ?? '切换作品库'} aria-label="切换作品库" onClick={() => void openWorkspace()} disabled={!api || busy || bookRecoveryLocked}><StudioIcon name="folder" size={20} /></button></StellarTooltip>
+      <StellarTooltip placement="right"><button className={styles.iconButton} type="button" title={recoveryActionReason ?? '草稿与服务恢复'} aria-label="草稿与服务恢复" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={20} /></button></StellarTooltip></div>
   </>
 
   const rightAsideExpanded = companionOpen || modal?.kind === 'ai' || writeAsideMode !== 'collapsed'
   const inspectorTabs = <div className={styles.copilotToolbar}>
     <div className={styles.copilotTabs} aria-label="写作辅助">
-      <button type="button" aria-pressed={isAiInWriteDrawer && (modal?.kind !== 'ai' || modal.purpose !== 'review')} disabled={busy || !chapter} onClick={() => switchWriteAside('ai')}><StudioIcon name="spark" size={16} />共写</button>
-      <button type="button" aria-pressed={companionOpen} disabled={busy} onClick={() => switchWriteAside('companion')}><StudioIcon name="read" size={16} />设定</button>
-      <button type="button" aria-pressed={isAiInWriteDrawer && modal?.kind === 'ai' && modal.purpose === 'review'} disabled={busy || !chapter} onClick={() => switchWriteAside('review')}><StudioIcon name="check" size={16} />审稿</button>
+      <button type="button" title={busyReason ?? (!chapter ? '请先打开章节' : undefined)} aria-pressed={isAiInWriteDrawer && (modal?.kind !== 'ai' || modal.purpose !== 'review')} disabled={busy || !chapter} onClick={() => switchWriteAside('ai')}><StudioIcon name="spark" size={16} />共写</button>
+      <button type="button" title={busyReason} aria-pressed={companionOpen} disabled={busy} onClick={() => switchWriteAside('companion')}><StudioIcon name="read" size={16} />设定</button>
+      <button type="button" title={busyReason ?? (!chapter ? '请先打开章节' : undefined)} aria-pressed={isAiInWriteDrawer && modal?.kind === 'ai' && modal.purpose === 'review'} disabled={busy || !chapter} onClick={() => switchWriteAside('review')}><StudioIcon name="check" size={16} />审稿</button>
     </div>
-    <div className={styles.copilotActions}>{isAiInWriteDrawer && <button type="button" className={styles.iconButton} disabled={busy} title="宽屏审阅" aria-label="宽屏审阅" onClick={() => void changeView(async () => setAiWideMode(true))}><StudioIcon name="focus" size={16} /></button>}
-      <button type="button" className={styles.iconButton} disabled={busy} title="收起辅助栏" aria-label="收起辅助栏" onClick={closeInspector}><StudioIcon name="close" size={16} /></button></div>
+    <div className={styles.copilotActions}>{isAiInWriteDrawer && <StellarTooltip><button type="button" className={styles.iconButton} disabled={busy} title={busyReason ?? '宽屏审阅'} aria-label="宽屏审阅" onClick={() => void changeView(async () => setAiWideMode(true))}><StudioIcon name="focus" size={16} /></button></StellarTooltip>}
+      <StellarTooltip><button type="button" className={styles.iconButton} disabled={busy} title={busyReason ?? '收起辅助栏'} aria-label="收起辅助栏" onClick={closeInspector}><StudioIcon name="close" size={16} /></button></StellarTooltip></div>
   </div>
   const commandUnavailable = !api ? '本地服务未连接' : busy || bookRecoveryLocked || pendingMessage ? '请先完成或核对当前操作' : undefined
   const needsBook = commandUnavailable ?? (!book ? '请先打开作品' : undefined)
@@ -1477,23 +1490,23 @@ export function App({ api }: Props) {
     onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.open = false }}
     onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false }}>
-    <summary ref={chapterToolsTrigger} title="章节与作品工具" aria-label="章节与作品工具"><StudioIcon name={chapter ? 'down' : 'more'} size={20} /></summary>
+    <StellarTooltip><summary ref={chapterToolsTrigger} title="章节与作品工具" aria-label="章节与作品工具"><StudioIcon name={chapter ? 'down' : 'more'} size={20} /></summary></StellarTooltip>
     <div className={styles.chapterToolItems}>
-      <button type="button" onClick={toggleOutline} disabled={busy || session.session.composing}>章节目录 · {book.chapters.length} 章</button>
-      <button type="button" onClick={() => switchWriteAside(companionOpen ? 'collapsed' : 'companion')} disabled={busy}>伴随资料</button>
-      {chapter && <button type="button" onClick={() => isAiInWriteDrawer ? closeInspector() : switchWriteAside('ai')} disabled={busy}>{isAiInWriteDrawer ? '收起 AI 副驾驶' : 'AI 协作'}</button>}
-      <button type="button" onClick={() => openToolFromNav('workbench')} disabled={busy}>章节规划</button>
+      <button type="button" title={busyReason ?? composingReason} onClick={toggleOutline} disabled={busy || session.session.composing}>章节目录 · {book.chapters.length} 章</button>
+      <button type="button" title={busyReason} onClick={() => switchWriteAside(companionOpen ? 'collapsed' : 'companion')} disabled={busy}>伴随资料</button>
+      {chapter && <button type="button" title={busyReason} onClick={() => isAiInWriteDrawer ? closeInspector() : switchWriteAside('ai')} disabled={busy}>{isAiInWriteDrawer ? '收起 AI 副驾驶' : 'AI 协作'}</button>}
+      <button type="button" title={busyReason} onClick={() => openToolFromNav('workbench')} disabled={busy}>章节规划</button>
       {chapter && <>
-        <button type="button" onClick={() => showDialog({ kind: 'chapterDetails' })} disabled={busy || archived}>{chapter.status === 'finalized' ? '资料 / 重开工作稿' : '本章资料'}</button>
-        <button type="button" onClick={() => showDialog({ kind: 'history' })} disabled={busy}>版本历史与对比</button>
-        <button type="button" onClick={() => showDialog({ kind: 'finalize' })} disabled={busy || archived || chapter.status === 'finalized' && !session.session.dirty}>作者定稿</button>
+        <button type="button" title={busyReason ?? archivedReason} onClick={() => showDialog({ kind: 'chapterDetails' })} disabled={busy || archived}>{chapter.status === 'finalized' ? '资料 / 重开工作稿' : '本章资料'}</button>
+        <button type="button" title={busyReason} onClick={() => showDialog({ kind: 'history' })} disabled={busy}>版本历史与对比</button>
+        <button type="button" title={busyReason ?? archivedReason ?? (chapter.status === 'finalized' && !session.session.dirty ? '当前章节已定稿，无需重复确认' : undefined)} onClick={() => showDialog({ kind: 'finalize' })} disabled={busy || archived || chapter.status === 'finalized' && !session.session.dirty}>作者定稿</button>
       </>}
-      <button type="button" onClick={() => void changeView(async () => { await refreshCurrentBook(book.book.id) })} disabled={busy}>刷新目录</button>
-      <button type="button" onClick={() => showDialog({ kind: 'draftImport' })} disabled={busy || archived || !workspace.recoveryScope}>从草稿恢复新章</button>
-      {BOOK_DESTINATIONS.map((item) => <button type="button" key={item.id} disabled={busy || bookRecoveryLocked} onClick={() => navigateBook(item.id)}>{item.label}</button>)}
+      <button type="button" title={busyReason} onClick={() => void changeView(async () => { await refreshCurrentBook(book.book.id) })} disabled={busy}>刷新目录</button>
+      <button type="button" title={busyReason ?? archivedReason ?? (!workspace.recoveryScope ? '当前书库尚未取得草稿恢复范围，请先核对书库' : undefined)} onClick={() => showDialog({ kind: 'draftImport' })} disabled={busy || archived || !workspace.recoveryScope}>从草稿恢复新章</button>
+      {BOOK_DESTINATIONS.map((item) => <button type="button" key={item.id} title={workspaceLockedReason} disabled={busy || bookRecoveryLocked} onClick={() => navigateBook(item.id)}>{item.label}</button>)}
     </div>
   </details>
-  const saveAction = <StellarTooltip><button className={`${styles.iconButton} ${styles.topbarSave} ${styles.saveButton}`} type="button" title="保存 · Ctrl+S" aria-label="保存当前章节"
+  const saveAction = <StellarTooltip><button className={`${styles.iconButton} ${styles.topbarSave} ${styles.saveButton}`} type="button" title={saveHint} aria-label="保存当前章节"
     aria-busy={session.session.saving} onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}>
     <StudioIcon name="save" size={20} />{!focused && <span>保存</span>}
   </button></StellarTooltip>
@@ -1513,15 +1526,15 @@ export function App({ api }: Props) {
     {commandOpen && <CommandPalette commands={commandItems} onClose={() => setCommandOpen(false)} />}
     <aside id="studio-sidebar" className={styles.sidebar} aria-label="工作室导航">{navigation}</aside>
       <header className={`${styles.topbar} ${homeVisible ? styles.homeTopbar : ''} ${writingVisible ? styles.writingTopbar : ''}`}>
-        <button className={styles.topBrand} type="button" title="织章 · 今日书桌" aria-label="织章 · 今日书桌" disabled={busy || bookRecoveryLocked} onClick={() => void showHome()}>
+        <button className={styles.topBrand} type="button" title={workspaceLockedReason ?? '织章 · 今日书桌'} aria-label="织章 · 今日书桌" disabled={busy || bookRecoveryLocked} onClick={() => void showHome()}>
           <StudioIcon name="planet" size={28} /><span>织章{homeVisible && <small>StoryWeave</small>}</span>
         </button>
         {homeVisible ? <button type="button" className={styles.topSearch} disabled={busy || hasBlockingDialog || bookRecoveryLocked}
           onClick={() => { setNavigationOpen(false); setCommandOpen(true) }} aria-label="搜索作品、章节、人物或命令"><StudioIcon name="search" size={20} /><span>搜索作品、章节、人物或命令</span><kbd>Ctrl K</kbd></button>
           : writingVisible && book ? <div className={styles.writingBreadcrumb}>
-            <button type="button" className={styles.iconButton} title="返回作品总览" aria-label="返回作品总览" disabled={busy || bookRecoveryLocked} onClick={() => void openBookOverview(book.book.id)}><StudioIcon name="arrow" size={20} style={{ transform: 'rotate(180deg)' }} /></button>
-            <button type="button" className={styles.writingBookTitle} disabled={busy || bookRecoveryLocked} title={book.book.title} onClick={() => void openBookOverview(book.book.id)}>《{book.book.title}》</button>
-            <select value={chapter?.id ?? ''} aria-label="选择章节" disabled={busy || session.session.composing || bookRecoveryLocked} onChange={(event) => { if (event.target.value) void openChapter(event.target.value) }}>
+            <StellarTooltip><button type="button" className={styles.iconButton} title={workspaceLockedReason ?? '返回作品总览'} aria-label="返回作品总览" disabled={busy || bookRecoveryLocked} onClick={() => void openBookOverview(book.book.id)}><StudioIcon name="arrow" size={20} style={{ transform: 'rotate(180deg)' }} /></button></StellarTooltip>
+            <button type="button" className={styles.writingBookTitle} disabled={busy || bookRecoveryLocked} title={workspaceLockedReason ?? book.book.title} onClick={() => void openBookOverview(book.book.id)}>《{book.book.title}》</button>
+            <select value={chapter?.id ?? ''} title={workspaceLockedReason ?? composingReason} aria-label="选择章节" disabled={busy || session.session.composing || bookRecoveryLocked} onChange={(event) => { if (event.target.value) void openChapter(event.target.value) }}>
               {!chapter && <option value="">选择章节</option>}{book.chapters.map((item) => <option key={item.id} value={item.id}>第 {item.position + 1} 章 · {item.title}</option>)}
             </select>
           </div> : <div className={styles.breadcrumb}>
@@ -1542,21 +1555,21 @@ export function App({ api }: Props) {
             </select>
           </label>}
           {writingVisible && chapter && <span className={styles.chapterCount}>{session.session.characterCount.toLocaleString()}{chapter.targetCharacters !== null ? ` / ${chapter.targetCharacters.toLocaleString()}` : ' 字'}</span>}
-          {writingVisible && <button type="button" className={styles.modelPicker} aria-label="选择模型" disabled={busy || bookRecoveryLocked} onClick={() => switchWriteAside('ai')} title="打开共写面板选择模型"><StudioIcon name="spark" size={16} /><span>选择模型</span><StudioIcon name="down" size={14} /></button>}
-          <StellarTooltip><button className={styles.iconButton} type="button" title="通知与任务" aria-label={`通知与任务${currentNotices.some((item) => !seenNotices.has(item.id)) ? '，有未读提示' : ''}`} disabled={hasBlockingDialog || commandOpen || session.session.composing} onClick={() => setTaskCenterOpen(true)}><StudioIcon name="bell" size={20} />{currentNotices.some((item) => !seenNotices.has(item.id)) && <i className={styles.unreadDot} />}</button></StellarTooltip>
-          <StellarTooltip><button className={styles.iconButton} type="button" aria-label="搜索命令与章节" aria-keyshortcuts="Control+k Meta+k" disabled={busy || hasBlockingDialog || bookRecoveryLocked} onClick={() => { setNavigationOpen(false); setCommandOpen(true) }} title="搜索命令与章节 · Ctrl+K"><StudioIcon name="search" size={20} /></button></StellarTooltip>
+          {writingVisible && <button type="button" className={styles.modelPicker} aria-label="选择模型" disabled={busy || bookRecoveryLocked} onClick={() => switchWriteAside('ai')} title={workspaceLockedReason ?? '打开共写面板选择模型'}><StudioIcon name="spark" size={16} /><span>选择模型</span><StudioIcon name="down" size={14} /></button>}
+          <StellarTooltip><button className={styles.iconButton} type="button" title={hasBlockingDialog ? '请先关闭当前对话框' : commandOpen ? '请先关闭搜索与命令' : composingReason ?? '通知与任务'} aria-label={`通知与任务${currentNotices.some((item) => !seenNotices.has(item.id)) ? '，有未读提示' : ''}`} disabled={hasBlockingDialog || commandOpen || session.session.composing} onClick={() => setTaskCenterOpen(true)}><StudioIcon name="bell" size={20} />{currentNotices.some((item) => !seenNotices.has(item.id)) && <i className={styles.unreadDot} />}</button></StellarTooltip>
+          <StellarTooltip><button className={styles.iconButton} type="button" aria-label="搜索命令与章节" aria-keyshortcuts="Control+k Meta+k" disabled={busy || hasBlockingDialog || bookRecoveryLocked} onClick={() => { setNavigationOpen(false); setCommandOpen(true) }} title={workspaceLockedReason ?? (hasBlockingDialog ? '请先关闭当前对话框' : '搜索命令与章节 · Ctrl+K')}><StudioIcon name="search" size={20} /></button></StellarTooltip>
           {studioView === 'write' && !isCanvasView && chapter && <>
             <div className={focused ? styles.standaloneSave : styles.saveActions} role="group" aria-label={focused ? '章节保存' : '章节保存与工具'}>{saveAction}{!focused && writingTools}</div>
-            <StellarTooltip><button className={`${styles.iconButton} ${styles.focusButton}`} type="button" aria-label="专注写作" aria-pressed={focused} title="专注写作 · Ctrl+Shift+Enter" onClick={() => setFocused(!focused)} disabled={session.session.composing || (busy && !focused)}>
+            <StellarTooltip><button className={`${styles.iconButton} ${styles.focusButton}`} type="button" aria-label="专注写作" aria-pressed={focused} title={composingReason ?? (busy && !focused ? busyReason : undefined) ?? (focused ? '退出专注写作 · Ctrl+Shift+Enter' : '专注写作 · Ctrl+Shift+Enter')} onClick={() => setFocused(!focused)} disabled={session.session.composing || (busy && !focused)}>
               <StudioIcon name="focus" size={20} />
             </button></StellarTooltip>
           </>}
           {studioView === 'write' && !isCanvasView && book ? focused ? <>
-            <button className={styles.button} type="button" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}><StudioIcon name="settings" size={14} />外观</button>
-            <button className={styles.button} type="button" onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={14} />恢复</button>
+            <button className={styles.button} type="button" title={workspaceLockedReason ?? savingReason ?? composingReason} aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked || session.session.saving || session.session.composing}><StudioIcon name="settings" size={14} />外观</button>
+            <button className={styles.button} type="button" title={recoveryActionReason} onClick={() => openRecovery()} disabled={!api || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}><StudioIcon name="history" size={14} />恢复</button>
           </> : !chapter && writingTools : <>
             <span className={styles.localBadge}><span className={styles.statusDot} />{workspace.rootPath ? '仅本机 · 已连接' : '仅本机'}</span>
-            <StellarTooltip><button className={styles.profileButton} type="button" aria-label="外观与显示偏好" title="工作室配色与稿纸偏好" aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked}><StudioIcon name="user" size={20} /></button></StellarTooltip>
+            <StellarTooltip><button className={styles.profileButton} type="button" aria-label="外观与显示偏好" title={workspaceLockedReason ?? '工作室配色与稿纸偏好'} aria-haspopup="dialog" onClick={() => showDialog({ kind: 'preferences' })} disabled={busy || bookRecoveryLocked}><StudioIcon name="user" size={20} /></button></StellarTooltip>
           </>}
           <StellarTooltip><button className={styles.sidebarToggle} type="button" title={sidebarCollapsed ? '显示导航栏' : '隐藏导航栏'} aria-label={sidebarCollapsed ? '显示导航栏' : '隐藏导航栏'} aria-expanded={!sidebarCollapsed} aria-controls="studio-sidebar" onClick={() => setSidebarCollapsed((value) => !value)}><StudioIcon name="sidebar" size={18} /></button></StellarTooltip>
         </div>
@@ -1766,10 +1779,10 @@ export function App({ api }: Props) {
     </main>
     <footer className={styles.statusbar} aria-label="工作室状态">
       <span className={`${styles.saveState} ${session.session.error ? styles.saveError : session.session.dirty || session.session.saving || session.session.composing ? styles.savePending : ''}`} role="status"><span className={styles.statusDot} />{chapter ? saveLabel(session.session) : workspace.rootPath ? '本地作品库已连接' : '未选择作品库'}</span>
-      <button type="button" disabled={!api || busy || bookRecoveryLocked} onClick={() => book ? showDialog({ kind: 'aiMemoryTasks' }) : startBook('newBook')} title="查看逐章整理任务"><StudioIcon name="spark" size={14} /> 整理任务</button>
+      <button type="button" disabled={!api || busy || bookRecoveryLocked} onClick={() => book ? showDialog({ kind: 'aiMemoryTasks' }) : startBook('newBook')} title={!api ? '本地服务未连接' : workspaceLockedReason ?? '查看逐章整理任务'}><StudioIcon name="spark" size={14} /> 整理任务</button>
       <span>{chapter ? `${session.session.characterCount.toLocaleString()} 字 · ${statusLabels[chapter.status]}` : `${workspace.books.length} 部作品 · 本机存储`}</span>
       {focused && <button type="button" onClick={() => setFocused(false)} title="退出专注 · Esc"><StudioIcon name="focus" size={16} />退出专注</button>}
-      {chapter && <button type="button" aria-label="保存当前章节" title="保存 · Ctrl+S" onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}><StudioIcon name="save" size={16} /></button>}
+      {chapter && <StellarTooltip><button className={styles.saveButton} type="button" aria-label="保存当前章节" title={saveHint} aria-busy={session.session.saving} onClick={() => void session.flush()} disabled={busy || !session.session.dirty || session.session.saving || session.session.composing}><StudioIcon name="save" size={16} /></button></StellarTooltip>}
     </footer>
     <nav className={styles.mobileTabs} aria-label="主要页面">
       <button type="button" aria-current={!isCanvasView && studioView === 'home' ? 'page' : undefined} onClick={() => void showHome()} disabled={busy || bookRecoveryLocked}><StudioIcon name="home" size={21} /><span>工作台</span></button>
