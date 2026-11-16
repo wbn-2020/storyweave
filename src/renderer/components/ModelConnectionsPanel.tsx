@@ -197,16 +197,16 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
         <p>清除的是后续请求可复用的内存记录；已发出的模型请求仍按原流程完成或取消。连接测试仅读取模型列表，不发送正文。</p></details></div>
     <span className={styles.securityEmblem} aria-hidden="true"><StudioIcon name="shield" size={88} /><StudioIcon name="spark" size={30} /></span>
   </aside>
-  return <Dialog title={<span className={styles.pageTitle}>模型路由中心<small>智能调度 · 高效协同 · 稳定可靠</small></span>} onClose={onClose} busy={tool.locked} wide>
-    <div className={styles.panel}>
-      <div className={styles.toolbar}>
+  return <Dialog className={styles.page} title={<span className={styles.pageTitle}>模型路由中心<small>智能调度 · 高效协同 · 稳定可靠</small></span>} onClose={onClose} busy={tool.locked} wide
+    toolbar={<div className={styles.toolbar}>
         <div className={styles.tabs} aria-label="连接范围">
           <button type="button" aria-pressed={scope === 'studio'} disabled={tool.locked} onClick={() => changeScope('studio')}>工作室 · 开书模型</button>
           {book && <button type="button" aria-pressed={scope === 'book'} disabled={tool.locked} onClick={() => changeScope('book')}>《{book.book.title}》</button>}
         </div>
         <div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked || tool.dirty || guard.current.presets} onClick={() => void reload()}>刷新</button>
           <button className={styles.primaryButton} type="button" disabled={!loaded || tool.locked || tool.dirty || guard.current.presets || readOnly} onClick={() => edit()}><StudioIcon name="plus" />新增连接</button></div>
-      </div>
+      </div>}>
+    <div className={styles.panel}>
       {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
       {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
       {tool.busy && <p className={styles.muted} role="status">正在读取或保存连接…</p>}

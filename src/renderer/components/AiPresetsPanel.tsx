@@ -48,6 +48,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const [showArchived, setShowArchived] = useState(false)
   const [discard, setDiscard] = useState(false)
   const [defaultConfirmed, setDefaultConfirmed] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [syncState, setSyncState] = useState<'idle' | 'needed' | 'busy'>('idle')
   const [syncError, setSyncError] = useState<AppError | null>(null)
   const syncRef = useRef(false)
@@ -163,10 +164,12 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     try {
       const input = parseSaveAiPresetInput(draft)
       setSubmitted(input); setPreserved(null); setDiscard(false)
+      setSaving(true)
       const success = await tool.write(AI_PRESETS_COMMANDS.save, () => api.saveAiPreset(input),
         (value) => isAiPresetSaveReceipt(value, input), saved, input.fields.archived ? '预设已归档，历史仍保留。' : '预设已保存。')
       if (success) await synchronize()
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请检查任务预设内容后重试。') }
+    finally { setSaving(false) }
   }
   async function checkReceipt() { if (await tool.checkReceipt()) await synchronize() }
   async function compareLatest() {
@@ -297,7 +300,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
         {replacingDefault && <label className={styles.check}><input type="checkbox" checked={defaultConfirmed} onChange={(event) => setDefaultConfirmed(event.target.checked)} />确认替换“{oldDefault?.title}”的默认状态；两份预设都保留。</label>}
         <label className={styles.check}><input type="checkbox" checked={draft.fields.archived} onChange={(event) => change({ archived: event.target.checked, defaultForTask: event.target.checked ? false : draft.fields.defaultForTask })} />归档此预设（保留内容与历史）</label>
       </fieldset>
-      <div className={styles.actions}><button className={styles.primaryButton} type="submit" disabled={blocked || !tool.dirty || replacingDefault && !defaultConfirmed} title={replacingDefault && !defaultConfirmed ? '请先确认默认预设替换' : undefined}>保存预设</button>
+      <div className={styles.actions}><button className={styles.primaryButton} type="submit" aria-busy={saving} disabled={blocked || !tool.dirty || replacingDefault && !defaultConfirmed} title={replacingDefault && !defaultConfirmed ? '请先确认默认预设替换' : !tool.dirty ? '预设内容尚未修改' : undefined}>{saving ? '正在保存…' : '保存预设'}</button>
         <button type="button" className={styles.button} disabled={tool.locked || syncState !== 'idle'} onClick={() => void compareLatest()}>读取最新版本作比较</button>
         <button type="button" className={styles.button} disabled={tool.locked || syncState !== 'idle'} onClick={closeDraft}>{discard ? '确认放弃当前更改' : tool.dirty ? '放弃更改' : '关闭编辑'}</button></div>
       {discard && <p className={styles.warning}>再次点击将放弃本次未保存的编辑，已有预设不受影响。</p>}
