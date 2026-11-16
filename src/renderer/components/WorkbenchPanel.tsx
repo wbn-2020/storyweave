@@ -106,12 +106,21 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   const [showAi, setShowAi] = useState(false)
   const [replacement, setReplacement] = useState<ReviewReplacement | null>(null)
   const editorRef = useRef<HTMLFormElement>(null)
+  const editorOpenerRef = useRef<HTMLElement | null>(null)
+  const editorFieldRef = useRef<HTMLElement | null>(null)
+  const keepEditingRef = useRef<HTMLButtonElement>(null)
+  const receiptButtonRef = useRef<HTMLButtonElement>(null)
+  const previousBusy = useRef(false)
   const replacementRef = useRef<HTMLElement>(null)
   const [date, setDate] = useState(localDate)
   const [period, setPeriod] = useState<'day' | 'week'>('day')
   const externalChange = Boolean(snapshot && book.book.revision > snapshot.bookRevision)
   const readonly = Boolean(book.book.archivedAt || snapshot?.archived)
   const blocked = tool.locked || syncRequired || externalChange || readonly || !snapshot || snapshot.requiresUpgrade
+  const blockedReason = disabled ? '主窗口正在处理操作，请稍候。' : tool.busy ? '正在处理创作资料，请稍候。'
+    : tool.pending ? '保存结果尚未确认，请先核对原请求。' : syncRequired ? '写入已确认，请先重试同步作品目录。'
+      : externalChange ? '作品已有更新，请先处理当前输入并刷新资料。' : readonly ? '作品已归档，恢复作品后可编辑。'
+        : !snapshot ? '创作资料尚待读取。' : snapshot.requiresUpgrade ? '请先备份并升级作品。' : undefined
   const currentChapter = chapter?.bookId === bookId ? chapter : null
   const visibleChapters = catalog.chapters.filter((item) => `${item.title} ${item.goal} ${item.viewpoint}`.includes(search.trim()))
   const planningChapter = catalog.chapters.find((item) => item.id === planningChapterId)
@@ -134,6 +143,18 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   }, [bookId, disabled])
   useEffect(() => () => { initialRead.current = true }, [])
   useEffect(() => { if (editingKey) { editorRef.current?.scrollIntoView({ block: 'nearest' }); editorRef.current?.focus({ preventScroll: true }) } }, [editingKey])
+  useEffect(() => { if (discard) keepEditingRef.current?.focus() }, [discard])
+  useEffect(() => {
+    const finished = previousBusy.current && !tool.busy
+    previousBusy.current = tool.busy
+    if (!finished || !draft || discard) return
+    requestAnimationFrame(() => {
+      if (document.querySelector('dialog:modal') || document.activeElement !== document.body) return
+      // 保存按钮禁用时浏览器会清走焦点；失败回原字段，未知回执则先核对原请求。
+      if (tool.pending) (receiptButtonRef.current ?? editorRef.current)?.focus()
+      else restoreEditorFocus(true)
+    })
+  }, [tool.busy, tool.pending, draft, discard])
   useEffect(() => {
     if (replacement) { replacementRef.current?.scrollIntoView({ block: 'nearest' }); replacementRef.current?.focus({ preventScroll: true }) }
   }, [replacement?.issue.id])
@@ -202,13 +223,27 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   }
   function edit(next: Draft, initialDirty = false) {
     if (blocked || !canSwitch()) return false
+    editorOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    editorFieldRef.current = null
     setDraft(next); setReplacement(null); setDiscard(false); tool.setDirty(initialDirty); tool.setError(null); tool.setNotice(null)
     return true
+  }
+  function restoreEditorFocus(continueEditing: boolean) {
+    // 确认按钮卸载后再恢复焦点，避免键盘回到页面顶部；后开的模态仍优先持有焦点。
+    requestAnimationFrame(() => {
+      if (document.querySelector('dialog:modal')) return
+      const field = editorFieldRef.current
+      const opener = editorOpenerRef.current
+      const target = continueEditing ? field?.isConnected ? field : editorRef.current
+        : opener?.isConnected ? opener : document.getElementById(`${prefix}-${tab}`)
+      if (target && !target.matches(':disabled')) target.focus()
+    })
   }
   function dropDraft() {
     if (tool.locked) return
     if (tool.dirty && !discard) { setDiscard(true); return }
     setDraft(null); setDiscard(false); tool.setDirty(false); tool.setError(null)
+    restoreEditorFocus(false)
   }
   function saved(value: WorkbenchSnapshot) {
     setSnapshot(value)
@@ -270,7 +305,7 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
       .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
     return <button type="button" id={`${prefix}-${tab}-scene-${item.id}`} className={styles.dragHandle}
       disabled={blocked || tool.dirty || item.archived || ordered.length < 2} draggable={!blocked && !tool.dirty && !item.archived && ordered.length > 1}
-      aria-label={`调整场景《${item.title}》顺序`} title="拖动调整顺序；Alt + 上下方向键移动" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+      aria-label={`调整场景《${item.title}》顺序`} title={blockedReason ?? (tool.dirty ? '请先保存或放弃当前更改，再调整顺序。' : item.archived ? '归档场景保留原顺序，恢复后可调整。' : ordered.length < 2 ? '本章至少有两张未归档场景卡时可调整顺序。' : '拖动调整顺序；Alt + 上下方向键移动')} aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
       onDragStart={(event) => {
         if (blocked || !canSwitch() || !snapshot) { event.preventDefault(); return }
         draggedScene.current = { id: item.id, chapterId: item.chapterId, bookRevision: snapshot.bookRevision }
@@ -351,6 +386,7 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   async function reloadAfterWrite() {
     // 已确认写入后先同步目录版本；同步失败只重读，不能重复提交已成功的写入。
     await reload()
+    if (!syncRef.current) restoreEditorFocus(false)
   }
   async function checkWriteReceipt() {
     // await 后 pending/dirty/busy 的 ref 已清理；不经过仍由 syncRef 保护的切换门禁。
@@ -446,7 +482,7 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   return <section className={styles.panel} aria-label="创作工具" aria-busy={tool.busy}>
     <div className={styles.pageActions}>
       <h2>{tab === 'review' ? '审稿与正文批注' : '章节规划与场景卡'}</h2>
-      <button type="button" className={styles.iconButton} disabled={tool.locked || tool.dirty} title={syncRequired ? '重试同步' : '刷新资料'} aria-label={syncRequired ? '重试同步' : '刷新资料'} onClick={() => void reload()}><StudioIcon name="refresh" size={20} /></button>
+      <button type="button" className={styles.iconButton} disabled={tool.locked || tool.dirty} title={tool.locked ? blockedReason : tool.dirty ? '请先保存或放弃当前更改，再刷新资料。' : syncRequired ? '重试同步' : '刷新资料'} aria-label={syncRequired ? '重试同步' : '刷新资料'} onClick={() => void reload()}><StudioIcon name="refresh" size={20} /></button>
       {onClose && <button type="button" className={styles.iconButton} disabled={tool.locked || syncRequired} title="返回作品" aria-label="返回作品" onClick={() => { if (canSwitch()) onClose() }}><StudioIcon name="arrow" size={20} style={{ transform: 'rotate(180deg)' }} /></button>}
     </div>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
@@ -454,7 +490,7 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
     {tool.readFailure && <div className={styles.warning}><p>原读取尚待核对，当前表单和所选问题保留。</p>
       {tool.readFailure.requestId && <button type="button" className={styles.button} disabled={disabled || tool.busy} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>}</div>}
     {tool.pending && <div className={styles.warning}><p>保存结果尚未确认。当前表单已保留，请勿重新提交。</p>
-      {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy}
+      {tool.pending.error.requestId ? <button ref={receiptButtonRef} type="button" className={styles.button} disabled={tool.busy}
         onClick={() => void checkWriteReceipt()}>核对原请求</button>
         : <p>没有可查询的请求编号，请通过主窗口恢复流程核对。</p>}
       {onRecover && <><label className={styles.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存所需内容，可以离开本面板进行恢复</label><button type="button" className={styles.button} disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}
@@ -486,18 +522,22 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
                   <th scope="row"><button type="button" className={styles.chapterTitle} title={`${catalog.volumes.find((volume) => volume.id === item.volumeId)?.title ?? '未分卷'} · ${item.title}`} disabled={tool.locked || syncRequired} onClick={() => { if (canSwitch()) setPlanningChapterId(item.id) }}>第 {item.position + 1} 章 {item.title}</button></th>
                   <td title={item.goal.trim() ? item.goal : '尚未填写章节目标'}><span className={styles.cellText} data-empty={!item.goal.trim()}>{item.goal.trim() ? item.goal : '计划缺失'}</span></td><td title={item.viewpoint}><span className={styles.cellText}>{item.viewpoint || '未指定'}</span></td><td><span className={styles.statusChip} data-state={item.status}>{item.status === 'review' ? '待复核' : statusLabels[item.status]}</span></td>
                   <td className={styles.number} title={`${item.characterCount.toLocaleString()} / ${item.targetCharacters?.toLocaleString() ?? '未设定'}`}>{item.characterCount.toLocaleString()} / {item.targetCharacters?.toLocaleString() ?? '未设定'}</td>
-                  <td><div className={styles.actions}><button className={styles.iconButton} type="button" title="编辑章节规划" aria-label={`编辑《${item.title}》的章节规划`} disabled={blocked} onClick={() => editChapter(item)}><StudioIcon name="pen" size={16} /></button>
+                  <td><div className={styles.actions}><button className={styles.iconButton} type="button" title={blockedReason ?? '编辑章节规划'} aria-label={`编辑《${item.title}》的章节规划`} disabled={blocked} onClick={() => editChapter(item)}><StudioIcon name="pen" size={16} /></button>
                     <button className={styles.iconButton} type="button" title="进入本章写作" aria-label={`进入《${item.title}》写作`} disabled={tool.locked || syncRequired} onClick={() => { if (canSwitch()) onNavigate(item.id) }}><StudioIcon name="arrow" size={16} /></button></div></td></tr>)}{!visibleChapters.length && <tr><td colSpan={6}><div className={styles.empty}><p>没有符合条件的章节。</p><button type="button" className={styles.button} onClick={() => setSearch('')}>清空搜索</button></div></td></tr>}</tbody>
-              </table></div>}</div><aside className={styles.sceneAside} aria-label="本章场景卡"><h4><span><StudioIcon name="grid" size={20} />场景卡</span><small>{planningChapter?.title ?? '未归属章节'}</small></h4>
+              </table></div>}</div><aside className={styles.sceneAside} aria-label="本章场景卡"><h4><span><StudioIcon name="grid" size={20} />场景卡</span><small title={planningChapter?.title}>{planningChapter?.title ?? '未归属章节'}</small></h4>
                 {planningScenes.slice(0, 3).map((item, index) => <article key={item.id} data-scene-id={item.id} data-drop-target={dropSceneId === item.id} onDragOver={(event) => { sceneDropTarget(event, item) }} onDrop={(event) => dropScene(event, item)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropSceneId(null) }}>
                   <div className={styles.sceneSymbol} data-tone={index % 3} aria-hidden="true"><StudioIcon name={index % 3 === 0 ? 'compass' : index % 3 === 1 ? 'notes' : 'spark'} size={32} /></div>
-                  <div className={styles.sceneInfo}><header><button type="button" className={styles.sceneTitle} disabled={blocked} title="编辑场景" onClick={() => editScene(item)}>{item.title}</button><span className={styles.statusChip} data-state={item.stale ? 'review' : item.status}>{item.stale ? '待复核' : sceneStatuses[item.status]}</span>{sceneHandle(item)}</header>
-                    <dl><div><dt>目标</dt><dd>{item.goal || '待补充'}</dd></div><div><dt>冲突</dt><dd>{item.conflict || '待补充'}</dd></div><div><dt>结束变化</dt><dd>{item.outcome || '待补充'}</dd></div></dl>
-                    <p>人物：{item.characterIds.length ? item.characterIds.map((id) => snapshot.sceneLabels[id] ?? '关联资料待读取').join('、') : '尚未关联'}<br />地点：{item.locationId ? snapshot.sceneLabels[item.locationId] ?? '关联资料待读取' : '尚未关联'}<br />故事时间：{item.storyTime || '未填写'}<br />情节线：{item.plotline || '未填写'}</p>
+                  <div className={styles.sceneInfo}><header><button type="button" className={styles.sceneTitle} disabled={blocked} title={blockedReason ?? item.title} onClick={() => editScene(item)}>{item.title}</button><span className={styles.statusChip} data-state={item.stale ? 'review' : item.status}>{item.stale ? '待复核' : sceneStatuses[item.status]}</span>{sceneHandle(item)}</header>
+                    <dl><div><dt>目标</dt><dd title={item.goal}>{item.goal || '待补充'}</dd></div><div><dt>冲突</dt><dd title={item.conflict}>{item.conflict || '待补充'}</dd></div><div><dt>结束变化</dt><dd title={item.outcome}>{item.outcome || '待补充'}</dd></div></dl>
+                    <p className={styles.sceneMeta}>{[
+                      `人物：${item.characterIds.length ? item.characterIds.map((id) => snapshot.sceneLabels[id] ?? '关联资料待读取').join('、') : '尚未关联'}`,
+                      `地点：${item.locationId ? snapshot.sceneLabels[item.locationId] ?? '关联资料待读取' : '尚未关联'}`,
+                      `故事时间：${item.storyTime || '未填写'}`, `情节线：${item.plotline || '未填写'}`,
+                    ].map((text, field) => <span key={field} title={text}>{text}</span>)}</p>
                   </div>
                 </article>)}
                 {!planningScenes.length && <div className={styles.empty}><StudioIcon name="layers" size={32} /><p>尚无场景。创建第一张场景卡。</p></div>}
-                <button className={styles.addScene} type="button" disabled={blocked} onClick={() => editScene(undefined, undefined, planningChapter?.id ?? null)}><StudioIcon name="plus" size={20} />添加场景</button>
+                <button className={styles.addScene} type="button" disabled={blocked} title={blockedReason} onClick={() => editScene(undefined, undefined, planningChapter?.id ?? null)}><StudioIcon name="plus" size={20} />添加场景</button>
                 {planningScenes.length > 3 && <button type="button" className={styles.button} disabled={tool.locked} onClick={() => selectTab('scenes')}>查看全部 {planningScenes.length} 张场景卡</button>}
                 <p className={styles.muted}>场景顺序是计划顺序，调整场景不会移动正文。</p>
               </aside></div>
@@ -505,19 +545,19 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
             {tab === 'scenes' && <>
               <div className={styles.toolbar}><label>查找场景<input type="search" value={search} maxLength={200} onChange={(event) => setSearch(event.target.value)} /></label>
                 <label className={styles.check}><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />显示已归档</label>
-                <button className={styles.primaryButton} type="button" disabled={blocked} onClick={() => editScene()}>添加场景</button>
+                <button className={styles.primaryButton} type="button" disabled={blocked} title={blockedReason} onClick={() => editScene()}>添加场景</button>
                 <button className={styles.button} type="button" disabled={blocked} onClick={() => { if (canSwitch()) { setDraft(null); setShowAi((value) => !value) } }}>从 AI 规划载入</button></div>
               {showAi && <AiSuggestionPicker key="scene-plan" api={api} bookId={bookId} disabled={blocked || tool.dirty} planOnly onSelect={(run, text) => editScene(undefined, { run, text })} />}
               <p className={styles.muted}>场景顺序是计划顺序；调整场景卡不会移动正文。可以先写正文，再补场景卡和来源。</p>
               {scenes.length ? <ol className={styles.records}>{scenes.map((item) => <li key={item.id} data-scene-id={item.id} data-drop-target={dropSceneId === item.id} onDragOver={(event) => { sceneDropTarget(event, item) }} onDrop={(event) => dropScene(event, item)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropSceneId(null) }}><div className={styles.recordHeading}><div><strong>{item.position}. {item.title}</strong>
                 <p className={styles.muted}>{catalog.chapters.find((entry) => entry.id === item.chapterId)?.title ?? '未归属章节'} · {sceneStatuses[item.status]}{item.archived ? ' · 已归档' : ''}{item.stale ? ' · 正文基线已改变' : ''}</p></div>
-                <div className={styles.sceneActions}>{sceneHandle(item)}<button className={styles.button} type="button" disabled={blocked} onClick={() => editScene(item)}>编辑场景</button></div></div>
+                <div className={styles.sceneActions}>{sceneHandle(item)}<button className={styles.button} type="button" disabled={blocked} title={blockedReason} onClick={() => editScene(item)}>编辑场景</button></div></div>
                 {(item.goal || item.conflict || item.outcome) && <dl className={styles.summary}><div><dt>目标</dt><dd>{item.goal || '待补充'}</dd></div><div><dt>冲突</dt><dd>{item.conflict || '待补充'}</dd></div><div><dt>结束变化</dt><dd>{item.outcome || '待补充'}</dd></div></dl>}
                 <p className={styles.muted}>{[item.viewpoint && `视角：${item.viewpoint}`, item.storyTime && `故事时间：${item.storyTime}`, item.plotline && `情节线：${item.plotline}`].filter(Boolean).join(' · ')}</p></li>)}</ol>
                 : <div className={styles.empty}><h4>{search || includeArchived ? '没有符合条件的场景' : '把一个转折写成场景'}</h4><p>从角色想要什么、遇到什么阻碍、结束时改变了什么开始。章节和正文关联都可以稍后补上。</p><button className={styles.button} type="button" disabled={blocked} onClick={() => editScene()}>创建第一张场景卡</button></div>}
             </>}
             {tab === 'brief' && <>
-              <div className={styles.toolbar}><p className={styles.muted}>创作约定随作品保存。AI 实际使用哪些约定，以发送前的上下文预览为准。</p><button className={styles.primaryButton} type="button" disabled={blocked} onClick={() => edit({ kind: 'brief', input: { ...mutation(), brief: { ...snapshot.brief } } })}>编辑创作约定</button></div>
+              <div className={styles.toolbar}><p className={styles.muted}>创作约定随作品保存。AI 实际使用哪些约定，以发送前的上下文预览为准。</p><button className={styles.primaryButton} type="button" disabled={blocked} title={blockedReason} onClick={() => edit({ kind: 'brief', input: { ...mutation(), brief: { ...snapshot.brief } } })}>编辑创作约定</button></div>
               <dl className={styles.brief}>{([['premise', '故事前提'], ['style', '风格约定'], ['narrator', '叙述人称'], ['tense', '叙述时态'], ['rules', '不可违背的规则']] as const).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{snapshot.brief[key] || '尚未填写'}</dd></div>)}</dl>
             </>}
             {tab === 'review' && <>
@@ -621,8 +661,8 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
             )}
             {tab === 'activity' && <>
               <div className={styles.toolbar}><label>查看日期<input type="date" min={activityStartDate()} max={localDate()} value={date} onChange={(event) => { if (event.target.value && event.target.validity.valid) setDate(event.target.value) }} /></label><label>统计范围<select value={period} onChange={(event) => setPeriod(event.target.value as 'day' | 'week')}><option value="day">当日</option><option value="week">所在周（周一起）</option></select></label>
-                <button className={styles.primaryButton} type="button" disabled={blocked} onClick={() => edit({ kind: 'session', input: { ...mutation(), id: crypto.randomUUID(), date, minutes: 0, revisedChapterId: null } })}>手工记录写作时段</button>
-                <button className={styles.button} type="button" disabled={blocked} onClick={() => editGoal()}>添加目标</button></div>
+                <button className={styles.primaryButton} type="button" disabled={blocked} title={blockedReason} onClick={() => edit({ kind: 'session', input: { ...mutation(), id: crypto.randomUUID(), date, minutes: 0, revisedChapterId: null } })}>手工记录写作时段</button>
+                <button className={styles.button} type="button" disabled={blocked} title={blockedReason} onClick={() => editGoal()}>添加目标</button></div>
               <ActivitySummary snapshot={snapshot} date={date} period={period} onEditGoal={editGoal} disabled={blocked} />
             </>}
             {replacement && <section ref={replacementRef} tabIndex={-1} className={styles.editor} aria-label="确认正文替换"><h4>把建议作为替换正文</h4><p className={styles.muted}>针对“{replacement.issue.title}”的 {replacement.issue.anchor.blockIds.length} 个连续段落。替换按纯文本写入新版本，旧稿仍可回看。</p>
@@ -634,15 +674,17 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
               <label className={styles.check}><input type="checkbox" checked={replacement.confirmed} disabled={blocked} onChange={(event) => setReplacement({ ...replacement, confirmed: event.target.checked })} />我已核对，建议内容是可直接写入小说的替换正文；分析性说明应保留在问题记录中。</label>
               <div className={styles.actions}><button type="button" className={styles.primaryButton} disabled={blocked || !replacement.confirmed || replacement.bookRevision !== snapshot.bookRevision} onClick={() => void applyReplacement()}>确认替换并进入待复核</button><button type="button" className={styles.button} disabled={tool.locked} onClick={() => setReplacement(null)}>取消替换</button></div>
             </section>}
-            {draft && <form ref={editorRef} tabIndex={-1} className={styles.editor} onSubmit={(event) => void submit(event)}>
+            {draft && <form ref={editorRef} tabIndex={-1} className={styles.editor} onSubmit={(event) => void submit(event)} onFocusCapture={(event) => {
+              if (event.target instanceof HTMLElement && event.target.matches('input,textarea,select')) editorFieldRef.current = event.target
+            }}>
               <div className={styles.heading}><h4>{draft.kind === 'chapter' ? '编辑章节规划' : draft.kind === 'brief' ? '编辑创作约定' : draft.kind === 'scene' ? '编辑场景卡' : draft.kind === 'reply' ? '回复批注' : draft.kind === 'issue' ? draft.annotation ? '添加正文批注' : '记录与处理审稿问题' : draft.kind === 'goal' ? '编辑写作目标' : '手工记录写作时段'}</h4><span className={styles.muted}>{tool.dirty ? '有未保存更改' : '尚未修改'}</span></div>
               {draft.kind === 'issue' && (editingIssue
                 ? <ReviewOriginalEvidence key={editingIssue.id} api={api} book={catalog} issue={editingIssue} currentAnchor={draft.input.fields.anchor} disabled={tool.locked} />
                 : <p className={styles.muted}>首次保存后，正文来源、证据与理由会保留为只读的原始依据。</p>)}
-              <fieldset disabled={blocked}>
+              <fieldset disabled={blocked} title={blockedReason}>
                 {draft.kind === 'chapter' && <ChapterFields input={draft.input} book={catalog} onChange={(input) => changed({ kind: 'chapter', input })} />}
                 {draft.kind === 'brief' && <div className={styles.fields}>{([['premise', '故事前提', 5000, '主角想要什么，又被什么阻碍？'], ['style', '风格约定', 5000, '语言、节奏、氛围与需要避免的写法'], ['narrator', '叙述人称', 500, '例如：第三人称限知'], ['tense', '叙述时态', 500, '例如：过去时'], ['rules', '不可违背的规则', 10000, '世界规则、人物边界和连续性约定']] as const).map(([key, label, max, placeholder]) => <label key={key}>{label}<textarea rows={key === 'narrator' || key === 'tense' ? 2 : 4} maxLength={max} placeholder={placeholder} value={draft.input.brief[key]} onChange={(event) => changed({ ...draft, input: { ...draft.input, brief: { ...draft.input.brief, [key]: event.target.value } } })} /></label>)}</div>}
-                {draft.kind === 'scene' && <SceneEditor api={api} book={catalog} chapter={currentChapter} fields={draft.input.fields} disabled={blocked} onChange={(fields) => changed({ ...draft, input: { ...draft.input, fields } })} />}
+                {draft.kind === 'scene' && <SceneEditor api={api} book={catalog} chapter={currentChapter} fields={draft.input.fields} labels={snapshot.sceneLabels} disabled={blocked} onChange={(fields) => changed({ ...draft, input: { ...draft.input, fields } })} />}
                 {draft.kind === 'issue' && (draft.annotation ? <div className={styles.fields}><blockquote>{draft.input.fields.evidence}</blockquote>
                   <label>批注内容<textarea autoFocus required rows={4} maxLength={10000} value={draft.input.fields.reason}
                     onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, reason: event.target.value } } })} /></label></div>
@@ -659,9 +701,9 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
                 </div>}
               </fieldset>
               {draft.input.expectedBookRevision !== snapshot.bookRevision && <p className={styles.warning}>表单来自较早的作品版本。输入已保留，请放弃更改并刷新后重新编辑。</p>}
-              <div className={styles.actions}><button className={styles.primaryButton} type="submit" aria-busy={tool.busy && !tool.pending} disabled={blocked || draft.input.expectedBookRevision !== snapshot.bookRevision}>{tool.busy ? '正在保存…' : draft.kind === 'reply' ? '保存回复' : draft.kind === 'issue' && draft.annotation ? '保存批注' : '保存'}</button>
+              <div className={styles.actions}><button className={styles.primaryButton} type="submit" aria-busy={tool.busy && !tool.pending} title={blockedReason ?? (draft.input.expectedBookRevision !== snapshot.bookRevision ? '表单来自较早版本，请先保留输入并刷新资料。' : undefined)} disabled={blocked || draft.input.expectedBookRevision !== snapshot.bookRevision}>{tool.busy ? '正在保存…' : draft.kind === 'reply' ? '保存回复' : draft.kind === 'issue' && draft.annotation ? '保存批注' : '保存'}</button>
                 <button className={styles.button} type="button" disabled={tool.locked} onClick={dropDraft}>{tool.dirty ? '放弃未保存更改' : '收起编辑'}</button></div>
-              {discard && <div className={styles.warning} role="alert"><p>确定放弃这份表单的未保存更改？已保存的内容会保留。</p><div className={styles.actions}><button className={styles.button} type="button" onClick={dropDraft}>确认放弃</button><button className={styles.button} type="button" onClick={() => setDiscard(false)}>继续编辑</button></div></div>}
+              {discard && <div className={styles.warning} role="alert"><p>确定放弃这份表单的未保存更改？已保存的内容会保留。</p><div className={styles.actions}><button className={styles.button} type="button" onClick={dropDraft}>确认放弃</button><button ref={keepEditingRef} className={styles.button} type="button" onClick={() => { setDiscard(false); restoreEditorFocus(true) }}>继续编辑</button></div></div>}
             </form>}
           </div>
         </>}
@@ -681,8 +723,8 @@ function GoalEditor({ fields, onChange }: { fields: WritingGoalFields; onChange:
   </div>
 }
 
-function SceneEditor({ api, book, chapter, fields, disabled, onChange }: {
-  api: StudioApi; book: BookSnapshot; chapter: ChapterSnapshot | null; fields: SceneFields; disabled: boolean; onChange: (value: SceneFields) => void
+function SceneEditor({ api, book, chapter, fields, labels, disabled, onChange }: {
+  api: StudioApi; book: BookSnapshot; chapter: ChapterSnapshot | null; fields: SceneFields; labels: WorkbenchSnapshot['sceneLabels']; disabled: boolean; onChange: (value: SceneFields) => void
 }) {
   return <div className={styles.fields}><div className={styles.fieldGrid}>
     <label>场景名称<input required maxLength={120} value={fields.title} onChange={(event) => onChange({ ...fields, title: event.target.value })} /></label>
@@ -694,15 +736,15 @@ function SceneEditor({ api, book, chapter, fields, disabled, onChange }: {
     <label>故事时间<input maxLength={1000} value={fields.storyTime} onChange={(event) => onChange({ ...fields, storyTime: event.target.value })} placeholder="可用相对时间，如第二天清晨" /></label>
     <label>情节线<input maxLength={500} value={fields.plotline} onChange={(event) => onChange({ ...fields, plotline: event.target.value })} /></label>
   </div>{([['goal', '角色目标'], ['conflict', '阻碍与冲突'], ['outcome', '结束时的变化']] as const).map(([key, label]) => <label key={key}>{label}<textarea rows={3} maxLength={10000} value={fields[key]} onChange={(event) => onChange({ ...fields, [key]: event.target.value })} /></label>)}
-    <EntityPicker api={api} bookId={book.book.id} kind="person" value={fields.characterIds} disabled={disabled} onChange={(characterIds) => onChange({ ...fields, characterIds })} />
-    <EntityPicker api={api} bookId={book.book.id} kind="place" value={fields.locationId ? [fields.locationId] : []} disabled={disabled} onChange={(ids) => onChange({ ...fields, locationId: ids[0] ?? null })} />
+    <EntityPicker api={api} bookId={book.book.id} kind="person" value={fields.characterIds} labels={labels} disabled={disabled} onChange={(characterIds) => onChange({ ...fields, characterIds })} />
+    <EntityPicker api={api} bookId={book.book.id} kind="place" value={fields.locationId ? [fields.locationId] : []} labels={labels} disabled={disabled} onChange={(ids) => onChange({ ...fields, locationId: ids[0] ?? null })} />
     <AnchorEditor value={fields.anchor} chapter={chapter} target={book.chapters.find((item) => item.id === fields.chapterId) ?? null} optional onChange={(anchor) => onChange({ ...fields, anchor })} />
     <label className={styles.check}><input type="checkbox" checked={fields.archived} onChange={(event) => onChange({ ...fields, archived: event.target.checked })} />归档场景卡（保留内容与来源）</label>
   </div>
 }
 
-function EntityPicker({ api, bookId, kind, value, disabled, onChange }: {
-  api: StudioApi; bookId: string; kind: 'person' | 'place'; value: string[]; disabled: boolean; onChange: (ids: string[]) => void
+function EntityPicker({ api, bookId, kind, value, labels, disabled, onChange }: {
+  api: StudioApi; bookId: string; kind: 'person' | 'place'; value: string[]; labels: WorkbenchSnapshot['sceneLabels']; disabled: boolean; onChange: (ids: string[]) => void
 }) {
   const [search, setSearch] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
@@ -728,7 +770,7 @@ function EntityPicker({ api, bookId, kind, value, disabled, onChange }: {
     setNames((previous) => ({ ...previous, ...Object.fromEntries(result.data.items.map((item) => [item.id, item.name])) }))
   }
   return <details className={styles.details}><summary>关联{kind === 'person' ? '人物' : '地点'} · 已选 {value.length}</summary>
-    {value.length > 0 && <ul className={styles.selection}>{value.map((id) => <li key={id}><span>{names[id] ?? `已关联条目 ${id}`}</span><button className={styles.button} type="button" disabled={locked} onClick={() => onChange(value.filter((item) => item !== id))}>取消关联</button></li>)}</ul>}
+    {value.length > 0 && <ul className={styles.selection}>{value.map((id) => <li key={id}><span>{names[id] ?? labels[id] ?? `已关联条目 ${id}`}</span><button className={styles.button} type="button" disabled={locked} onClick={() => onChange(value.filter((item) => item !== id))}>取消关联</button></li>)}</ul>}
     <div className={styles.toolbar}><label>{kind === 'person' ? '查找人物' : '查找地点'}<input type="search" maxLength={200} value={search} disabled={locked} onChange={(event) => setSearch(event.target.value)} /></label><button className={styles.button} type="button" disabled={locked} onClick={() => void load(search, 0)}>{loading ? '查找中…' : '查找已有条目'}</button></div>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {page && <><ul className={styles.selection}>{page.items.map((item) => <li key={item.id}><span>{item.name}<small>{item.summary.slice(0, 100)}</small></span><button className={styles.button} type="button" disabled={locked || value.includes(item.id) || (kind === 'person' && value.length >= 100)} onClick={() => onChange(kind === 'place' ? [item.id] : [...value, item.id])}>{value.includes(item.id) ? '已关联' : kind === 'place' && value.length ? '改用此地点' : '关联'}</button></li>)}</ul>{!page.items.length && <p className={styles.muted}>没有匹配的条目。可以先保存场景，再到资料库创建人物或地点。</p>}<div className={styles.actions}><button className={styles.button} type="button" disabled={locked || offset === 0} onClick={() => void load(appliedSearch, Math.max(0, offset - 20))}>上一页</button><span className={styles.muted}>共 {page.total} 项</span><button className={styles.button} type="button" disabled={locked || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) void load(appliedSearch, page.nextOffset) }}>下一页</button></div></>}
