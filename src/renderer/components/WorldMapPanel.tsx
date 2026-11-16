@@ -321,11 +321,14 @@ function WorldMapCanvas({ page, mode, layers, zoom, positions, disabled, selecte
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 })
   const [moving, setMoving] = useState<{ id: string; point: Point } | null>(null)
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [hitHalfSize, setHitHalfSize] = useState(16)
   const revealId = useRef<string | null>(null)
   const [visibleLabels, setVisibleLabels] = useState<Set<string>>(() => new Set())
   const arrowId = `world-map-arrow-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const viewWidth = WIDTH / zoom, viewHeight = HEIGHT / zoom
   const view = { x: WIDTH / 2 - viewWidth / 2 + pan.x, y: HEIGHT / 2 - viewHeight / 2 + pan.y }
+  // 缩小时事件之间及其与地点的透明命中区不得互相覆盖；空间足够时沿用原位置。
+  const eventSpacing = Math.max(40, hitHalfSize * 2), eventOffset = Math.max(52, hitHalfSize * 2)
   useEffect(() => { drag.current = null; setMoving(null); setFocusedId(null); setPan({ x: 0, y: 0 }) }, [mode, page])
   const points = useMemo(() => new Map(page.places.map((place, index) => {
     const saved = positions[place.id]?.[mode]
@@ -345,7 +348,12 @@ function WorldMapCanvas({ page, mode, layers, zoom, positions, disabled, selecte
     if (!svg) return
     function measure() {
       if (!svg) return
-      const margin = Number.parseFloat(getComputedStyle(svg).getPropertyValue('--space-1')) || 0
+      const style = getComputedStyle(svg)
+      const margin = Number.parseFloat(style.getPropertyValue('--space-1')) || 0
+      const compact = Number.parseFloat(style.getPropertyValue('--control-compact'))
+      const scale = svg.getScreenCTM()?.a
+      // SVG 单位随视口和缩放变化；只补偿透明命中区，保留地点、光晕与事件图形的原尺寸。
+      if (scale && compact > 0) setHitHalfSize(compact / scale / 2)
       const labels = [...svg.querySelectorAll<SVGGElement>('[data-place-id],[data-territory-id]')].flatMap((element) => {
         const text = element.querySelector('text'), point = element.querySelector(`.${styles.point}`)
         return text ? [{ id: element.dataset.placeId ?? `territory:${element.dataset.territoryId}`,
@@ -458,7 +466,7 @@ function WorldMapCanvas({ page, mode, layers, zoom, positions, disabled, selecte
     const located = Boolean(positions[place.id]?.[mode])
     return <>
       <title>{place.name} · {located ? '已定位' : '未定位'}</title>
-      <circle r={18} className={styles.hitArea} />
+      <circle r={Math.max(18, hitHalfSize)} className={styles.hitArea} />
       <foreignObject x={-36} y={-36} width={72} height={72} className={styles.nodeGlow} aria-hidden="true"><div /></foreignObject>
       {selectedId === place.id && <><circle r={25} className={styles.selectedRing} /><circle r={32} className={styles.outerRing} /></>}
       <circle r={selectedId === place.id ? 7 : located ? 4 : 6} className={styles.point} />
@@ -524,12 +532,12 @@ function WorldMapCanvas({ page, mode, layers, zoom, positions, disabled, selecte
         const point = points.get(active.id)!
         return <g key={event.id} data-map-event role="button" tabIndex={disabled || page.asOfChapterId && !event.source ? -1 : 0}
           aria-label={`地图事件：${event.name}`} aria-disabled={disabled || Boolean(page.asOfChapterId && !event.source)} className={styles.mapEvent}
-          transform={`translate(${point.x - 40 + index * 40} ${point.y + 52})`}
+          transform={`translate(${point.x + (index - 1) * eventSpacing} ${point.y + eventOffset})`}
           onClick={() => { if (!disabled && (!page.asOfChapterId || event.source)) onEvent(event) }}
           onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled && (!page.asOfChapterId || event.source)) { e.preventDefault(); onEvent(event) } }}>
           <title>{event.name}</title><path d="M 0 -9 L 9 0 L 0 9 L -9 0 Z" />
           <path d="M 0 -5 L 1.5 -1.5 L 5 0 L 1.5 1.5 L 0 5 L -1.5 1.5 L -5 0 L -1.5 -1.5 Z" className={styles.eventCore} aria-hidden="true" />
-          <rect x={-16} y={-16} width={32} height={32} className={styles.hitArea} />
+          <rect x={-Math.max(16, hitHalfSize)} y={-Math.max(16, hitHalfSize)} width={Math.max(16, hitHalfSize) * 2} height={Math.max(16, hitHalfSize) * 2} className={styles.hitArea} />
         </g>
       })}
     </svg>

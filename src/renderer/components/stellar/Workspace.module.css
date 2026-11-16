@@ -42,7 +42,7 @@
 .tabs button:hover:not(:disabled) { color: var(--color-ink); }
 .fields { display: grid; gap: var(--space-4); }
 .fieldGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-4); }
-.check { display: flex !important; flex-direction: row !important; align-items: center; gap: var(--space-2); }
+.check { display: flex !important; flex-direction: row !important; align-items: center; gap: var(--space-2); min-width: var(--control-compact); min-height: var(--control-compact); }
 .muted { color: var(--color-muted); font-size: var(--text-xs); font-weight: 400; line-height: 1.8; }
 .error,.warning,.notice { padding: var(--space-3) var(--space-4); margin-block: var(--space-3); border-radius: var(--radius-md); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .error { color: var(--color-danger); background: var(--color-danger-soft); }
