@@ -303,7 +303,7 @@ export function KnowledgePanel({ api, book, busy, initialKind, initialId, error,
 
   function mayLeave(): boolean {
     if (busy || pendingMessage || writeLock.current || readLock.current) return false
-    if (dirtyRef.current) { setMessage('此条目有未保存修改。请先保存，或点击“放弃本次修改”后再切换。'); return false }
+    if (dirtyRef.current) { setMessage(activeView === 'adjudication' ? '裁决尚未保存。请先保存，或点击“放弃本次裁决”并确认后再切换。' : '此条目有未保存修改。请先保存，或点击“放弃本次修改”后再切换。'); return false }
     return true
   }
 

@@ -1,0 +1,11 @@
+{
+  "source": "mist-lighthouse.png",
+  "sourceSha256": "098b2fdb7e5d1e1cfc03f6d26c30e057ff77319766d2d6f4182544fbf98e2d37",
+  "file": "mist-lighthouse-card.jpg",
+  "sha256": "4aa216090438d8612760fe7b5893ecb8a41c0663b733151b3ef8f86725f51239",
+  "width": 1536,
+  "height": 1024,
+  "bytes": 508322,
+  "transformation": "Same dimensions; RGB JPEG quality=93, subsampling=0; original PNG retained.",
+  "purpose": "StoryWeave synthetic-library media; maximum 2 MiB per item."
+}

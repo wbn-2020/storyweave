@@ -1,0 +1,11 @@
+{
+  "source": "star-chart-key.png",
+  "sourceSha256": "c8419fdcad6049cd6e3c01faf00bd616b95b9f522cb9b501a4ae04be3d42dbba",
+  "file": "star-chart-key-card.jpg",
+  "sha256": "2ed1d051a4a412003808f10ea5c7e89144f8591fe3ee0129c74c5560f8c80f7f",
+  "width": 1254,
+  "height": 1254,
+  "bytes": 712548,
+  "transformation": "Same dimensions; RGB JPEG quality=93, subsampling=0; original PNG retained.",
+  "purpose": "StoryWeave synthetic-library media; maximum 2 MiB per item."
+}

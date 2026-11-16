@@ -1,0 +1,15 @@
+{
+  "id": "linzhou-portrait",
+  "endpoint": "https://huantu.xyz/api/v1/images/generations",
+  "model": "ad-gpt-image-2",
+  "startedAt": "2026-11-16T12:39:55.0529785Z",
+  "httpStatus": 200,
+  "requestedSize": "1024x1536",
+  "requestedImages": 1,
+  "automaticRetries": 0,
+  "promptFile": "prompts.json",
+  "generated": false,
+  "errorCode": "upstream_error",
+  "errorType": "api_error",
+  "errorMessage": "AI 接口请求失败：provider temporary unavailable: Adobe 生成会话初始化失败，请稍后重试；服务端日志包含具体失败阶段"
+}

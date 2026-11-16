@@ -1,0 +1,14 @@
+{
+  "id": "linzhou-portrait",
+  "endpoint": "https://huantu.xyz/api/v1/images/generations",
+  "model": "gpt-image-2.6",
+  "startedAt": "2026-11-16T12:36:55.9200647Z",
+  "httpStatus": 200,
+  "requestedSize": "1024x1536",
+  "requestedImages": 1,
+  "automaticRetries": 0,
+  "promptFile": "prompts.json",
+  "generated": false,
+  "errorCode": "upstream_error",
+  "errorType": "api_error"
+}

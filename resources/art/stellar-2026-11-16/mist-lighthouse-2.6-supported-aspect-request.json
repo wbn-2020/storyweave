@@ -1,0 +1,23 @@
+{
+  "id": "mist-lighthouse",
+  "endpoint": "https://huantu.xyz/api/v1/images/generations",
+  "model": "gpt-image-2.6",
+  "startedAt": "2026-11-16T13:06:47.1520318Z",
+  "request": {
+    "model": "gpt-image-2.6",
+    "prompt": "Use case: illustration-story. Asset type: a finished original location illustration for a Chinese science-fantasy novel. Subject: the Mist-Sea Lighthouse (雾海灯塔), an old stone lighthouse built on a sea cliff. The stone tower, doorway, steps, weathered masonry, lantern chamber and cliff must be clearly legible; the lighthouse is the unmistakable main subject. A turquoise sea below and thin white coastal mist, a few faint stars in a blue dawn sky. Style: detailed premium painted Chinese science-fantasy concept art, cyan light and restrained violet atmosphere, consistent with a celestial blue novel studio. Composition: landscape 3:2, entire lighthouse and cliff edge visible, keep the tower in the middle safe area for a 2:1 crop. Balanced exposure, readable stone textures, full-bleed artwork. No characters, no words, no letters, no typography, no logo, no watermark, no frame, no interface, no cards, no screenshots, no collage.",
+    "n": 1,
+    "size": "1200x800",
+    "response_format": "b64_json"
+  },
+  "contractSource": "https://huantu.xyz/api-docs",
+  "resolutionSource": "https://huantu.xyz/_next/static/chunks/1zbch1sagvit5.js",
+  "aspectEvidence": "实际错误回包支持 16:9、1:1、3:2、3:4、4:3、9:16；2:3 虽在公开设置中列出，实际请求被拒绝。",
+  "automaticRetries": 0,
+  "generated": true,
+  "httpStatus": 200,
+  "bytes": 2374857,
+  "sha256": "098b2fdb7e5d1e1cfc03f6d26c30e057ff77319766d2d6f4182544fbf98e2d37",
+  "file": "mist-lighthouse.png",
+  "finishedAt": "2026-11-16T13:08:44.2598706Z"
+}

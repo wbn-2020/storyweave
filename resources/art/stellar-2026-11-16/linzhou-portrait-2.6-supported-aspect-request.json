@@ -1,0 +1,23 @@
+{
+  "id": "linzhou-portrait",
+  "endpoint": "https://huantu.xyz/api/v1/images/generations",
+  "model": "gpt-image-2.6",
+  "startedAt": "2026-11-16T13:02:42.8638244Z",
+  "request": {
+    "model": "gpt-image-2.6",
+    "prompt": "Use case: illustration-story. Asset type: a finished original character portrait for a Chinese science-fantasy novel character card. Subject: Lin Zhou (林舟), an adult male lighthouse keeper, cautious and thoughtful, searching for the history of an old lighthouse. A single character, dark practical keeper's coat, calm attentive expression, three-quarter view, head and upper body fully visible, recognizable facial features, hands outside the frame. Scene: a small stone lighthouse and a turquoise sea under a softly starry sky, secondary and unobtrusive. Style: detailed premium Chinese science-fantasy anime illustration, refined painted shading, crisp readable silhouette, cyan rim light and restrained violet highlights, consistent with a celestial blue novel studio. Composition: vertical portrait, character centered with clear margin above the hair and at both shoulders, face in the upper third, suitable for 5:6 and square crops without cutting the face. Clear visible face, balanced exposure, full-bleed artwork. No text, no letters, no logos, no watermark, no borders, no cards, no application or website UI, no screenshots, no collage.",
+    "n": 1,
+    "size": "768x1024",
+    "response_format": "b64_json"
+  },
+  "contractSource": "https://huantu.xyz/api-docs",
+  "resolutionSource": "https://huantu.xyz/_next/static/chunks/1zbch1sagvit5.js",
+  "aspectEvidence": "实际错误回包支持 16:9、1:1、3:2、3:4、4:3、9:16；2:3 虽在公开设置中列出，实际请求被拒绝。",
+  "automaticRetries": 0,
+  "generated": true,
+  "httpStatus": 200,
+  "bytes": 2238047,
+  "sha256": "924c48cac0298962f5e910b347871f1caadd54cb9d71efe57691d8320f57d3c5",
+  "file": "linzhou-portrait.png",
+  "finishedAt": "2026-11-16T13:03:52.2374007Z"
+}

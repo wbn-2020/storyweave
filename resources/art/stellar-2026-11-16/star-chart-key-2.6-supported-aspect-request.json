@@ -1,0 +1,23 @@
+{
+  "id": "star-chart-key",
+  "endpoint": "https://huantu.xyz/api/v1/images/generations",
+  "model": "gpt-image-2.6",
+  "startedAt": "2026-11-16T13:10:55.3893039Z",
+  "request": {
+    "model": "gpt-image-2.6",
+    "prompt": "Use case: illustration-story. Asset type: a finished original prop illustration for a Chinese science-fantasy novel. Subject: one brass star-chart key (星图钥匙), an old physical brass key found at the copper doorway of a lighthouse. The circular bow has a delicate engraved star-chart motif; the shaft and teeth are mechanically plausible and clearly visible. Place the single complete key diagonally on a weathered stone ledge near a softly suggested copper door, with a faint cyan reflection from the sea. Style: detailed premium painted Chinese science-fantasy concept art, warm authentic brass contrasted with cool celestial blue, restrained violet accents, consistent with a celestial blue novel studio. Composition: square close-up still life, complete key in the center safe area with generous edge margins, sharp material detail and balanced exposure. No hands, no people, no extra keys, no words, no letters, no labels, no typography, no logos, no watermark, no frame, no interface, no screenshot, no collage.",
+    "n": 1,
+    "size": "1024x1024",
+    "response_format": "b64_json"
+  },
+  "contractSource": "https://huantu.xyz/api-docs",
+  "resolutionSource": "https://huantu.xyz/_next/static/chunks/1zbch1sagvit5.js",
+  "aspectEvidence": "实际错误回包支持 16:9、1:1、3:2、3:4、4:3、9:16；2:3 虽在公开设置中列出，实际请求被拒绝。",
+  "automaticRetries": 0,
+  "generated": true,
+  "httpStatus": 200,
+  "bytes": 2936459,
+  "sha256": "c8419fdcad6049cd6e3c01faf00bd616b95b9f522cb9b501a4ae04be3d42dbba",
+  "file": "star-chart-key.png",
+  "finishedAt": "2026-11-16T13:12:54.5756367Z"
+}

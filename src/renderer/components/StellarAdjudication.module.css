@@ -34,16 +34,21 @@
 .confirmation > button { justify-self: end; }
 .draftActions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--space-3); margin-block: var(--space-4); }
 .draftActions > span { color: var(--color-warning); font-size: var(--text-xs); }
+.discardConfirmation { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--color-warning); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.discardConfirmation > p { color: var(--color-ink-secondary); font-size: var(--text-sm); line-height: 1.8; overflow-wrap: anywhere; }
+.discardConfirmation .draftActions { margin: 0; }
+.panel .saving { width: 14px; height: 14px; }
+.panel button[aria-busy='true'] { cursor: progress; }
 .history { min-width: 0; border-top: 1px solid var(--color-line); padding-top: var(--space-5); }
 .history ol { list-style: none; margin: var(--space-3) 0; padding: 0; }
 .history li { padding-block: var(--space-3); border-bottom: 1px solid var(--color-line); }
-.history summary { cursor: pointer; overflow-wrap: anywhere; }
+.history summary { min-height: 32px; align-content: center; cursor: pointer; overflow-wrap: anywhere; }
 .history summary > :is(strong,time,span) { margin-inline-end: var(--space-3); }
 .history summary strong { color: var(--color-accent-2); font-weight: 500; font-size: var(--text-sm); }
 .history summary :is(time,span) { font-size: var(--text-xs); color: var(--color-muted); }
 .historyEvidence { margin-block: var(--space-4); }
 .historyEvidence strong { display: block; color: var(--color-muted); font-size: var(--text-xs); margin-bottom: var(--space-2); overflow-wrap: anywhere; }
 .history .note { margin-block: var(--space-3); }
-.panel :is(button,input,select,textarea,summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.panel :is(button,input,select,textarea,summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 @container (max-width:600px) { .comparison,.fieldPreview,.historyEvidence { grid-template-columns: minmax(0,1fr); gap: var(--space-5); } .versus { position: static; transform: none; justify-self: center; grid-row: 2; } .evidence[data-side='B'] { grid-row: 3; } .decisions { grid-template-columns: minmax(0,1fr); } .evidence { padding: var(--space-4); } }
 @media(forced-colors:active) { .decisions .decision { color: ButtonText; border-color: ButtonText; } .decisions .decision[aria-pressed='true'] { color: HighlightText; background: Highlight; outline-color: Highlight; } .evidence { background: Canvas; border-color: CanvasText; } .fieldPreview > div:last-child p { color: CanvasText; } }

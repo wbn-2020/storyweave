@@ -1,0 +1,50 @@
+{
+  "checkedOn": "2026-11-16",
+  "endpoint": "https://huantu.xyz/api/v1/images/generations",
+  "model": "gpt-image-2.6",
+  "documentation": "https://huantu.xyz/api-docs",
+  "publicConfiguration": "https://huantu.xyz/api/settings",
+  "publicClientSource": "https://huantu.xyz/_next/static/chunks/1zbch1sagvit5.js",
+  "method": "POST",
+  "contentType": "application/json",
+  "authentication": "Bearer; credential kept in process memory, never recorded",
+  "requestFields": ["model", "prompt", "n", "size", "response_format"],
+  "n": 1,
+  "response_format": "b64_json",
+  "advertisedResolutionTiers": ["1k"],
+  "advertisedAspectRatios": ["16:9", "1:1", "21:9", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16"],
+  "runtimeSupportedAspectRatiosFromError": ["16:9", "1:1", "3:2", "3:4", "4:3", "9:16"],
+  "runtimeError": "AI 接口请求失败：Unsupported aspect_ratio for this parameter combination. Supported values: 16:9, 1:1, 3:2, 3:4, 4:3, 9:16.",
+  "failedRequestReceipt": "linzhou-portrait-2.6-verified-request.json",
+  "verifiedRequests": [
+    {
+      "asset": "linzhou-portrait",
+      "size": "768x1024",
+      "returnedWidth": 1086,
+      "returnedHeight": 1448,
+      "receipt": "linzhou-portrait-2.6-supported-aspect-request.json"
+    },
+    {
+      "asset": "mist-lighthouse",
+      "size": "1200x800",
+      "returnedWidth": 1536,
+      "returnedHeight": 1024,
+      "receipt": "mist-lighthouse-2.6-supported-aspect-request.json"
+    },
+    {
+      "asset": "star-chart-key",
+      "size": "1024x1024",
+      "returnedWidth": 1254,
+      "returnedHeight": 1254,
+      "receipt": "star-chart-key-2.6-supported-aspect-request.json"
+    }
+  ],
+  "boundaries": [
+    "Public configuration and runtime rejection disagree about 2:3; use the actual response for this request combination.",
+    "Successful requests preserve aspect ratio but do not return the exact requested pixel dimensions.",
+    "HTTP 200 alone is not success; inspect error and decode the image.",
+    "Original PNG files are retained; separate same-dimension JPEG files fit the existing 2 MiB library limit.",
+    "Artwork is for the named synthetic story; do not automatically attach it to unrelated works.",
+    "No automatic generation retries or automatic model fallback."
+  ]
+}

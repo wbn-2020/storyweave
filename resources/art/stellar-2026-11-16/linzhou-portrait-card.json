@@ -1,0 +1,11 @@
+{
+  "source": "linzhou-portrait.png",
+  "sourceSha256": "924c48cac0298962f5e910b347871f1caadd54cb9d71efe57691d8320f57d3c5",
+  "file": "linzhou-portrait-card.jpg",
+  "sha256": "eef179ac666b0beda269a2e5fdb3a1d34158af5861ce3ea7e064da5e681b072e",
+  "width": 1086,
+  "height": 1448,
+  "bytes": 464319,
+  "transformation": "Same dimensions; RGB JPEG quality=93, subsampling=0; original PNG retained.",
+  "purpose": "StoryWeave synthetic-library media; maximum 2 MiB per item."
+}

@@ -1,0 +1,35 @@
+{
+  "purpose": "StoryWeave 星穹合成作品的正式插画素材。禁止使用界面截图替代；不自动绑定其他作品或人物。",
+  "model": "gpt-image-2.6",
+  "assets": [
+    {
+      "id": "linzhou-portrait",
+      "file": "linzhou-portrait.png",
+      "size": "768x1024",
+      "originalPlannedSize": "1024x1536",
+      "aspectRatio": "3:4",
+      "returnedSize": "1086x1448",
+      "libraryFile": "linzhou-portrait-card.jpg",
+      "prompt": "Use case: illustration-story. Asset type: a finished original character portrait for a Chinese science-fantasy novel character card. Subject: Lin Zhou (林舟), an adult male lighthouse keeper, cautious and thoughtful, searching for the history of an old lighthouse. A single character, dark practical keeper's coat, calm attentive expression, three-quarter view, head and upper body fully visible, recognizable facial features, hands outside the frame. Scene: a small stone lighthouse and a turquoise sea under a softly starry sky, secondary and unobtrusive. Style: detailed premium Chinese science-fantasy anime illustration, refined painted shading, crisp readable silhouette, cyan rim light and restrained violet highlights, consistent with a celestial blue novel studio. Composition: vertical portrait, character centered with clear margin above the hair and at both shoulders, face in the upper third, suitable for 5:6 and square crops without cutting the face. Clear visible face, balanced exposure, full-bleed artwork. No text, no letters, no logos, no watermark, no borders, no cards, no application or website UI, no screenshots, no collage."
+    },
+    {
+      "id": "mist-lighthouse",
+      "file": "mist-lighthouse.png",
+      "size": "1200x800",
+      "originalPlannedSize": "1536x1024",
+      "aspectRatio": "3:2",
+      "returnedSize": "1536x1024",
+      "libraryFile": "mist-lighthouse-card.jpg",
+      "prompt": "Use case: illustration-story. Asset type: a finished original location illustration for a Chinese science-fantasy novel. Subject: the Mist-Sea Lighthouse (雾海灯塔), an old stone lighthouse built on a sea cliff. The stone tower, doorway, steps, weathered masonry, lantern chamber and cliff must be clearly legible; the lighthouse is the unmistakable main subject. A turquoise sea below and thin white coastal mist, a few faint stars in a blue dawn sky. Style: detailed premium painted Chinese science-fantasy concept art, cyan light and restrained violet atmosphere, consistent with a celestial blue novel studio. Composition: landscape 3:2, entire lighthouse and cliff edge visible, keep the tower in the middle safe area for a 2:1 crop. Balanced exposure, readable stone textures, full-bleed artwork. No characters, no words, no letters, no typography, no logo, no watermark, no frame, no interface, no cards, no screenshots, no collage."
+    },
+    {
+      "id": "star-chart-key",
+      "file": "star-chart-key.png",
+      "size": "1024x1024",
+      "aspectRatio": "1:1",
+      "returnedSize": "1254x1254",
+      "libraryFile": "star-chart-key-card.jpg",
+      "prompt": "Use case: illustration-story. Asset type: a finished original prop illustration for a Chinese science-fantasy novel. Subject: one brass star-chart key (星图钥匙), an old physical brass key found at the copper doorway of a lighthouse. The circular bow has a delicate engraved star-chart motif; the shaft and teeth are mechanically plausible and clearly visible. Place the single complete key diagonally on a weathered stone ledge near a softly suggested copper door, with a faint cyan reflection from the sea. Style: detailed premium painted Chinese science-fantasy concept art, warm authentic brass contrasted with cool celestial blue, restrained violet accents, consistent with a celestial blue novel studio. Composition: square close-up still life, complete key in the center safe area with generous edge margins, sharp material detail and balanced exposure. No hands, no people, no extra keys, no words, no letters, no labels, no typography, no logos, no watermark, no frame, no interface, no screenshot, no collage."
+    }
+  ]
+}
