@@ -262,8 +262,8 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
           <div><dt>用量未知或不完整</dt><dd>{snapshot.usage.unknownUsageRuns.toLocaleString()}</dd></div></dl>
         <p className={styles.muted}>输入未知 {snapshot.usage.unknownInputRuns.toLocaleString()} 次，输出未知 {snapshot.usage.unknownOutputRuns.toLocaleString()} 次；两者可能重叠。token 合计仅包含已知部分；未知用量单独计数，不估算费用。</p>
         <p className={styles.muted}>运行次数包含开书与书内协作，以及进入生成流程后失败、中断和仍在生成的记录；未发送的预览不计入，不代表供应商的计费次数。</p>
-        </details>
         {routing && <p className={styles.muted}>{snapshot.usage.knownUsageRuns.toLocaleString()} 次用量完整，{snapshot.usage.unknownUsageRuns.toLocaleString()} 次用量未知或不完整；条形与占比仅按接口已返回的输入和输出合计。</p>}
+        </details>
       </section>
       {routing && routingNotice}
       </div>

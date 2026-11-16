@@ -53,11 +53,11 @@ export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, 
   }
 
   // 设置始终由父层即时应用；面板没有独立草稿，保存失败也不阻止关闭。
-  return <Dialog title="设置" wide busy={busy} onClose={onClose}>
+  return <Dialog className={styles.page} title="设置" wide busy={busy} onClose={onClose}>
     <div className={styles.panel}>
       <nav className={styles.navigation} aria-label="设置分组"><button type="button" aria-pressed={section === 'appearance'} onClick={() => setSection('appearance')}><StudioIcon name="palette" size={20} />外观与排版</button><button type="button" aria-pressed={section === 'storage'} onClick={() => setSection('storage')}><StudioIcon name="archive" size={20} />本地存储</button>{onModels && <button type="button" onClick={onModels} disabled={busy}><StudioIcon name="workflow" size={20} />模型连接</button>}</nav>
       <div className={styles.content} hidden={section !== 'appearance'}>
-      <section className={styles.themeSection} aria-labelledby={themeId}>
+      <section className={`${styles.themeSection} ${styles.themeOptions}`} aria-labelledby={themeId}>
         <h3 id={themeId} className={styles.sectionTitle}>主题</h3>
         <div className={styles.themeGrid} role="group" aria-labelledby={themeId}>
           {primaryThemes.map(themeChoice)}
@@ -83,11 +83,13 @@ export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, 
         <h4><StudioIcon name="warning" size={18} />显示偏好提示</h4><p role="alert">{warning}</p>
         <button type="button" className={shared.button} disabled={busy} onClick={onRetrySave}>保存当前显示偏好</button>
       </section>}
+      <footer className={styles.footer}>
       <p id={helpId} className={styles.help}>{warning ? '当前显示仍可使用，可重新保存偏好。' : '更改即时应用，自动保存到本机。'}</p>
       <div className={styles.actions}>
         <button type="button" className={shared.button} disabled={busy} onClick={onReset}>恢复默认</button>
         <button type="button" className={shared.primaryButton} disabled={busy} onClick={onClose}>完成设置</button>
       </div>
+      </footer>
       </div>
       <section className={styles.storage} hidden={section !== 'storage'}><h3 className={styles.sectionTitle}>本地作品库</h3><p>{workspacePath ?? '尚未选择作品库'}</p><div className={styles.actions}>{onChooseWorkspace && <button type="button" className={shared.button} disabled={busy} onClick={onChooseWorkspace}>切换目录</button>}{onBackup && <button type="button" className={shared.button} disabled={busy} onClick={onBackup}>作品备份与恢复</button>}{onRecovery && <button type="button" className={shared.button} disabled={busy} onClick={onRecovery}>草稿与服务恢复</button>}</div><div className={styles.storageRow}><StudioIcon name="check" size={20} /><strong>正文自动保存</strong><span>{saveStatus ?? '未打开章节'}</span></div></section>
       <section className={styles.previewSection} aria-labelledby={previewId}>

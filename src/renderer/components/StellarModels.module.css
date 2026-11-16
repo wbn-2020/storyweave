@@ -1,9 +1,9 @@
 .panel { composes: panel from './stellar/Workspace.module.css'; container-type: inline-size; }
-.page > header { flex-wrap: wrap; gap: var(--space-3); }
+.page > header { flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-2); }
 /* 范围工具与标题同处页眉；此页仍保留可见标题，不使用通用工具页的隐藏标题规则。 */
 .page > header > :first-child { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
 .pageTitle { display: block; }
-.pageTitle small { display: block; margin-top: var(--space-2); color: var(--color-muted); font: 400 var(--text-md)/1.6 var(--font-ui); }
+.pageTitle small { display: block; margin-top: var(--space-1); color: var(--color-muted); font: 400 var(--text-sm)/1.6 var(--font-ui); }
 .toolbar { composes: toolbar from './stellar/Workspace.module.css'; flex: 1 1 560px; }
 .tabs { composes: tabs from './stellar/Workspace.module.css'; }
 /* 组合类的共享规则可能后载入，页面范围保证原定的紧凑间距始终生效。 */
@@ -22,17 +22,17 @@
 .editor fieldset { margin-block: var(--space-4); display: grid; gap: var(--space-4); }
 .fieldGrid { composes: fieldGrid from './stellar/Workspace.module.css'; }
 .check { composes: check from './stellar/Workspace.module.css'; }
-.connections { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: start; gap: var(--space-4); margin-block: var(--space-4) var(--space-5); }
-.connection { --connection-ink: var(--color-accent-2); --connection-haze: var(--stellar-ai-haze); position: relative; display: grid; grid-template-columns: minmax(0,1.3fr) minmax(104px,1fr); column-gap: var(--space-4); row-gap: var(--space-2); min-width: 0; min-height: 186px; padding: var(--space-6) var(--space-4) var(--space-3); border: 1px solid color-mix(in srgb,var(--connection-ink) 52%,var(--color-line)); border-radius: var(--radius-xl); background: linear-gradient(150deg,var(--connection-haze),var(--bg-surface) 65%); }
+.connections { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: start; gap: var(--space-4); margin-block: var(--space-2) var(--space-3); }
+.connection { --connection-ink: var(--color-accent-2); --connection-haze: var(--stellar-ai-haze); position: relative; display: grid; grid-template-columns: minmax(0,1.3fr) minmax(104px,1fr); column-gap: var(--space-4); row-gap: var(--space-1); min-width: 0; min-height: 160px; padding: var(--space-5) var(--space-4) var(--space-2); border: 1px solid color-mix(in srgb,var(--connection-ink) 52%,var(--color-line)); border-radius: var(--radius-xl); background: linear-gradient(150deg,var(--connection-haze),var(--bg-surface) 65%); }
 .connection:nth-child(3n) { --connection-ink: var(--color-accent); --connection-haze: var(--color-accent-soft); }
 .connection[data-default='true'] { --connection-ink: var(--color-warning); --connection-haze: var(--color-warning-soft); border-color: var(--color-warning); }
-.connection header { display: flex; align-items: flex-start; gap: var(--space-3); grid-column: 1; grid-row: 1; min-width: 0; padding-block: var(--space-2); }.connection header > div { min-width: 0; }.connection header :is(h3,p) { overflow-wrap: anywhere; }
+.connection header { display: flex; align-items: flex-start; gap: var(--space-3); grid-column: 1; grid-row: 1; min-width: 0; padding-block: var(--space-1); }.connection header > div { min-width: 0; }.connection header :is(h3,p) { overflow-wrap: anywhere; }
 .connection header h3 { font-size: var(--text-lg); line-height: 1.4; }
 .connectionEmblem { display: grid; place-items: center; flex: 0 0 48px; height: 56px; color: var(--connection-ink); }
 .connection header p { color: var(--color-ink-secondary); margin-top: var(--space-2); font-size: var(--text-sm); }
-.connectionMetrics { display: grid; grid-column: 2; grid-row: 1; align-content: start; gap: var(--space-1); margin: 0; padding-left: var(--space-4); border-left: 1px solid var(--color-line-strong); }
+.connectionMetrics { display: grid; grid-column: 2; grid-row: 1; align-content: start; margin: 0; padding-left: var(--space-4); border-left: 1px solid var(--color-line-strong); }
 .connectionMetrics dt { font-size: var(--text-sm); color: var(--color-muted); }
-.connectionMetrics dd { margin: var(--space-1) 0 0; font: 500 20px/1.4 var(--font-num); overflow-wrap: anywhere; }
+.connectionMetrics dd { margin: var(--space-1) 0 0; font: 500 20px/1.2 var(--font-num); overflow-wrap: anywhere; }
 .latency dt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .latency dd { display: flex; align-items: baseline; gap: var(--space-2); font-size: var(--text-xs); white-space: normal; }
 .latency i { display: inline-block; flex: 0 0 var(--space-2); width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--color-faint); }
@@ -49,7 +49,7 @@
 .probeStatus[data-state='succeeded'] { color: var(--color-success); }
 .probeStatus[data-state='failed'] { color: var(--color-danger); }
 .tag { position: absolute; top: var(--space-2); right: var(--space-4); display: inline-flex; align-items: center; gap: var(--space-1); color: var(--color-warning); font-size: var(--text-xs); white-space: nowrap; }.tag svg { fill: currentColor; }
-.securityNote { display: flex; min-width: 0; gap: var(--space-3); align-items: center; padding: var(--space-5); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: var(--bg-surface); color: var(--color-ink-secondary); }
+.securityNote { display: flex; min-width: 0; gap: var(--space-3); align-items: center; padding: var(--space-4); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: var(--bg-surface); color: var(--color-ink-secondary); }
 .securityNote > svg { flex-shrink: 0; color: var(--color-accent-2); }.securityNote > div { min-width: 0; }
 .securityNote h3 { font-size: var(--text-md); line-height: 1.6; }.securityNote p { color: var(--color-muted); font-size: var(--text-xs); margin-top: var(--space-2); }
 .securityNote details { color: var(--color-muted); font-size: var(--text-xs); margin-top: var(--space-2); }

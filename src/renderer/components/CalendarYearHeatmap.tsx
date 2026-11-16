@@ -120,6 +120,7 @@ export function CalendarYearHeatmap({ api, bookId, bookRevision, month, today, d
       <div className={styles.heatmapScroll} tabIndex={0} role="region" aria-label="全年每日新增字数表">
         <table className={styles.heatmap}>
           <caption className={styles.visuallyHidden}>{year} 年每日新增字数，颜色不扣除删除量</caption>
+          <colgroup><col className={styles.monthColumn} /><col span={31} /></colgroup>
           <thead className={styles.visuallyHidden}><tr><th scope="col">月份</th>{Array.from({ length: 31 }, (_, index) => <th scope="col" key={index}>{index + 1}</th>)}</tr></thead>
           <tbody>{months.map((item) => <tr key={item} data-current={item === month}>
             <th scope="row">{Number(item.slice(5))} 月</th>{Array.from({ length: 31 }, (_, index) => {

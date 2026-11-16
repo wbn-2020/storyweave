@@ -99,10 +99,12 @@
 .compactCells .heatCell { aspect-ratio: 1; height: auto; border-radius: 2px; }
 .compactMonths { display: flex; justify-content: space-between; gap: var(--space-1); font-size: 10px; color: var(--color-muted); }
 .compactScope { margin-top: var(--space-3); color: var(--color-muted); font-size: var(--text-xs); }
-.heatmapScroll { overflow: auto; margin-block: var(--space-3); }
+/* 隐藏表头与日期说明的绝对定位须留在本地滚动区，不能越出窄屏文档。 */
+.heatmapScroll { position: relative; overflow: auto; margin-block: var(--space-3); }
 .heatmap { border-collapse: separate; border-spacing: var(--space-1); width: 100%; min-width: 560px; table-layout: fixed; font: var(--text-xs)/1.2 var(--font-num); }
+.monthColumn { width: var(--space-10); }
 .heatmap th { color: var(--color-muted); font-weight: 400; padding: 0; }
-.heatmap th:first-child { position: sticky; left: 0; width: var(--space-10); background: var(--bg-surface); text-align: left; }.heatmap tr[data-current='true'] > th { color: var(--color-accent); }
+.heatmap th:first-child { position: sticky; left: 0; background: var(--bg-surface); text-align: left; white-space: nowrap; }.heatmap tr[data-current='true'] > th { color: var(--color-accent); }
 .heatmap td { padding: 0; height: var(--space-4); }
 .heatmap .heatCell { height: var(--space-4); }
 /* 图例与实际热力格共用五档颜色，渐变只说明强弱，不改变原统计阈值。 */
