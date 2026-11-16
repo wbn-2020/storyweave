@@ -139,7 +139,15 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
     </li>
   }
   return <dialog ref={dialog} className={styles.drawer} aria-labelledby={headingId}
-    onCancel={(event) => { event.preventDefault(); if (confirmStop && !stopping) setConfirmStop(null); else onClose() }}>
+    onKeyDown={(event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault(); event.stopPropagation()
+      if (event.repeat || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+      if (confirmStop && !stopping) setConfirmStop(null)
+      else onClose()
+    }}
+    onClose={(event) => { if (event.target === event.currentTarget && !event.currentTarget.open) onClose() }}
+    onCancel={(event) => { event.preventDefault(); event.stopPropagation(); if (confirmStop && !stopping) setConfirmStop(null); else onClose() }}>
     <h2 id={headingId} className={styles.visuallyHidden}>通知与任务</h2>
     <header className={styles.heading}><div className={styles.tabs} role="tablist" aria-label="通知任务视图" onKeyDown={(event) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || confirmStop) return

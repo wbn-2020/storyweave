@@ -83,6 +83,11 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
   }
   return <dialog ref={dialog} className={styles.palette} aria-labelledby={heading}
     onKeyDown={(event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation()
+        if (!event.repeat && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) onClose()
+        return
+      }
       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
       // 原生模态会阻止 App 的全局快捷键；打开后的开关由面板自身接续处理。
       if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
@@ -90,7 +95,8 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
         if (!event.repeat) onClose()
       }
     }}
-    onCancel={(event) => { event.preventDefault(); onClose() }} onClick={(event) => {
+    onClose={(event) => { if (event.target === event.currentTarget && !event.currentTarget.open) onClose() }}
+    onCancel={(event) => { event.preventDefault(); event.stopPropagation(); onClose() }} onClick={(event) => {
       if (event.target !== event.currentTarget) return
       const bounds = event.currentTarget.getBoundingClientRect()
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose()

@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useState, type FormEvent } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import type { BookSummary, ChapterSnapshot, ExportBookInput, UpdateBookInput, UpdateChapterInput, VolumeSummary } from '../../contracts/api'
 import { Dialog } from './Dialog'
 import styles from '../StellarShared.module.css'
@@ -98,9 +98,21 @@ function DetailsRecovery({ message, checking, onCheck, onRecover, content }: Det
 }
 
 function DetailsActions({ confirmClose, onKeepEditing, onDirtyChange, ...common }: DetailsCommon & { label: string; disabled?: boolean; disabledReason?: string }) {
+  const keepEditing = useRef<HTMLButtonElement>(null)
+  const form = useRef<HTMLFormElement | null>(null)
+  useLayoutEffect(() => {
+    if (confirmClose) {
+      form.current = keepEditing.current?.form ?? null
+      keepEditing.current?.focus({ preventScroll: true })
+    } else if (form.current) {
+      // 确认区被替换后原按钮已移除，将焦点交回仍保留草稿的表单。
+      if (form.current.isConnected) form.current.querySelector<HTMLElement>('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)')?.focus({ preventScroll: true })
+      form.current = null
+    }
+  }, [confirmClose])
   if (!confirmClose) return <Actions {...common} />
   return <section role="alert"><p className={styles.helpText}>资料有未保存修改。请选择保存后关闭、放弃修改，或取消关闭继续编辑。关闭窗口请在处理后再次操作。</p><div className={styles.formActions}>
-    <button type="button" className={styles.button} disabled={common.busy} title={common.busy ? '正在保存资料，请稍候再取消关闭' : undefined} onClick={onKeepEditing}>取消关闭</button>
+    <button ref={keepEditing} type="button" className={styles.button} disabled={common.busy} title={common.busy ? '正在保存资料，请稍候再取消关闭' : undefined} onClick={onKeepEditing}>取消关闭</button>
     <button type="button" className={styles.button} disabled={common.busy} title={common.busy ? '正在保存资料，请稍候再放弃修改' : undefined} onClick={() => { onDirtyChange(false); common.onClose() }}>放弃修改并关闭</button>
     <button type="submit" className={styles.primaryButton} disabled={common.busy || common.disabled} title={common.busy ? '正在保存资料，请勿重复提交' : common.disabled ? common.disabledReason : undefined} aria-busy={common.busy}>{common.busy ? '处理中…' : '保存并关闭'}</button>
   </div></section>

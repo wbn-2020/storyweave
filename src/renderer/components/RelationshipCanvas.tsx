@@ -372,7 +372,14 @@ export function RelationshipCanvas({ api, bookId, bookRevision, nodes, edges, se
         <span>起点：{endpoint(node, 'relation_from')} · 终点：{endpoint(node, 'relation_to')}{storyOrder === null ? '' : relationStatus(node) === 'active' ? ' · 此时有效' : relationStatus(node) === 'inactive' ? ' · 此时失效' : ' · 此时有效性未知'}{node.authorDecision === 'rejected' ? ' · 作者已否决' : ''}</span>
       </li>)}</ul> : <p className={styles.help}>当前页没有关系记录。可切换对象范围，或选两个知识实体新建关系。</p>}
     </details>
-    {choosing && <dialog ref={picker} className={styles.relationPicker} style={{ left: `clamp(var(--space-4), ${choosing.center.x - 168}px, calc(100dvw - 336px - var(--space-4)))`, top: `clamp(var(--space-4), ${choosing.center.y - 168}px, calc(100dvh - 336px - var(--space-4)))` }} aria-label={`选择${choosing.from.title}与${choosing.to.title}的关系类型`} onCancel={(event) => { event.preventDefault(); setChoosing(null) }}>
+    {choosing && <dialog ref={picker} className={styles.relationPicker} style={{ left: `clamp(var(--space-4), ${choosing.center.x - 168}px, calc(100dvw - 336px - var(--space-4)))`, top: `clamp(var(--space-4), ${choosing.center.y - 168}px, calc(100dvh - 336px - var(--space-4)))` }} aria-label={`选择${choosing.from.title}与${choosing.to.title}的关系类型`}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || event.defaultPrevented) return
+        event.preventDefault(); event.stopPropagation()
+        if (!event.repeat && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) setChoosing(null)
+      }}
+      onClose={(event) => { if (event.target === event.currentTarget && !event.currentTarget.open) setChoosing(null) }}
+      onCancel={(event) => { event.preventDefault(); event.stopPropagation(); setChoosing(null) }}>
       <div className={styles.pickerWheel}><svg viewBox="0 0 336 336" aria-hidden="true"><circle cx={168} cy={168} r={166} /><circle cx={168} cy={168} r={58} />{relationChoices.map((item, index) => { const angle = -Math.PI / 2 + (index - .5) / 7 * Math.PI * 2; return <path key={item.label} d={`M${168 + Math.cos(angle) * 58} ${168 + Math.sin(angle) * 58} L${168 + Math.cos(angle) * 166} ${168 + Math.sin(angle) * 166}`} /> })}</svg>
         {relationChoices.map((item, index) => { const angle = -Math.PI / 2 + index / 7 * Math.PI * 2; return <button type="button" key={item.label} data-tone={item.tone} style={{ left: `${50 + Math.cos(angle) * 100 / 3}%`, top: `${50 + Math.sin(angle) * 100 / 3}%` }} onClick={() => { const choice = choosing; setChoosing(null); if (!disabled && !picking) onConnect?.(choice.from.id, choice.to.id, item.label === '其他' ? undefined : item.label) }}><StudioIcon name={item.icon} size={24} /><span>{item.label}</span></button> })}
         <button type="button" className={styles.pickerClose} aria-label="取消建立关系" title="取消" onClick={() => setChoosing(null)}><StudioIcon name="spark" size={40} /></button>
