@@ -15,7 +15,7 @@
 .panel .newEvent { margin-left: auto; padding: var(--space-3) var(--space-5); color: var(--color-accent); border-color: var(--color-accent); background: var(--color-accent-soft); }
 .tracks { padding-block: var(--space-3) !important; border-bottom: 1px solid var(--color-line) !important; }
 .tracks > div { display: flex; gap: var(--space-5); flex-wrap: wrap; }
-.tracks label { flex-direction: row; align-items: center; min-height: var(--control-compact); }
+.panel .tracks label { flex-direction: row; align-items: center; min-width: var(--control-compact); min-height: var(--control-compact); }
 .filters { display: grid; grid-template-columns: minmax(0,1.5fr) repeat(2,minmax(0,1fr)); align-items: end; gap: var(--space-4); margin-block: var(--space-4); }
 .search { display: flex; align-items: end; gap: var(--space-2); min-width: 0; }.search label { flex: 1; }
 .layout { display: grid; grid-template-columns: minmax(0,1fr) 280px; gap: var(--space-4); align-items: start; }

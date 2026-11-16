@@ -48,7 +48,10 @@ export function NewBookDialog({ busy, error, onSubmit, onImport, onClose, onDirt
       {step === 2 && <section className={wizard.preview} aria-label="作品建立预览"><StudioIcon name="books" size={32} /><h3>{title}</h3><dl><dt>第一章</dt><dd>{firstChapterTitle}</dd><dt>起点</dt><dd>{mode === 'seed' ? '故事种子' : '空白正文'}</dd>{mode === 'seed' && <><dt>主角</dt><dd>{protagonist || '待定'}</dd><dt>愿望</dt><dd>{desire || '待定'}</dd><dt>阻力</dt><dd>{obstacle || '待定'}</dd></>}</dl></section>}
       {error && <p role="alert">{error}</p>}
       {pendingRecovery && <div><p role="alert">{pendingRecovery.message}</p><button type="button" className={styles.button} onClick={pendingRecovery.onCheck} disabled={pendingRecovery.checking}>核对原请求</button><label>复制新作品表单留存<textarea readOnly rows={7} value={formSnapshot} /></label><label><input type="checkbox" checked={preserved} onChange={(event) => setPreservedSnapshot(event.target.checked ? formSnapshot : null)} />已留存表单，重连后先核对作品书架，避免重复建立</label><button type="button" className={styles.button} disabled={!preserved || pendingRecovery.checking} onClick={pendingRecovery.onRecover}>进入恢复</button></div>}
-      {confirmClose ? <div className={styles.formActions}><span>离开将放弃这份尚未建立的作品表单。</span><button type="button" className={styles.button} onClick={() => { setConfirmClose(false); onKeepEditing() }}>继续填写</button><button type="button" className={styles.button} onClick={() => { callback.current(false); onClose() }} disabled={busy}>放弃表单并关闭</button></div>
+      {confirmClose ? <div className={styles.formActions}><span>离开将放弃这份尚未建立的作品表单。</span><button type="button" className={styles.button} onClick={(event) => {
+        // 切回操作区可能把当前 DOM 节点复用为提交按钮，须先阻止本次点击的默认提交。
+        event.preventDefault(); setConfirmClose(false); onKeepEditing()
+      }}>继续填写</button><button type="button" className={styles.button} onClick={() => { callback.current(false); onClose() }} disabled={busy}>放弃表单并关闭</button></div>
         : <div className={wizard.actions}><button type="button" className={styles.button} onClick={step ? () => setStep(step - 1) : close} disabled={busy}>{step ? '上一步' : '取消'}</button><button type="submit" className={styles.primaryButton} disabled={busy || !title.trim() || !firstChapterTitle.trim()}>{busy ? '正在建立…' : step === 2 ? '建立并开始写作' : '下一步'}<StudioIcon name="arrow" size={16} /></button></div>}
     </form>
   </Dialog>

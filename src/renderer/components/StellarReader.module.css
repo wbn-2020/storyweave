@@ -19,8 +19,9 @@
 .appearance > summary > span { font-size: 20px; }
 .appearance[open] > summary { background: var(--color-accent-soft); color: var(--color-accent); }
 .settings { position: absolute; top: calc(100% + var(--space-2)); right: 0; z-index: var(--z-dropdown); display: grid; gap: var(--space-4); width: min(320px,calc(100dvw - var(--space-8))); max-height: calc(100dvh - var(--topbar-height) - var(--space-8)); overflow: auto; overscroll-behavior: contain; padding: var(--space-5); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); color: var(--color-ink); background: var(--bg-surface); box-shadow: var(--shadow-md); }
-.panel .settings label { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-4); }
-.panel .settings select { width: 120px; min-height: var(--control-height); }
+.panel .settings label { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-4); min-height: var(--control-compact); }
+/* 覆盖共享输入规则的宽度优先级，保留 Aa 菜单原有的标签与 120px 选择器两列。 */
+.panel .appearance .settings label > select { width: 120px; min-height: var(--control-height); }
 .panel .settings .annotationSwitch { appearance: auto; flex-shrink: 0; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; accent-color: var(--color-accent); cursor: pointer; }
 .annotationStatus { display: grid; gap: var(--space-2); font-size: var(--text-xs); line-height: 1.8; overflow-wrap: anywhere; }
 .annotationStatus > p { color: var(--color-muted); }
