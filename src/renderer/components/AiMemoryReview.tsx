@@ -92,6 +92,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
   const confirmationTrigger = useRef<HTMLElement | null>(null)
   const wasConfirming = useRef(false)
   const submitLock = useRef(false)
+  const ignoredDrafts = useRef(new Map<number, AiMemoryDraft>())
   const headingId = useId(), confirmationId = useId(), validationId = useId()
   const drawerMode = ['succeeded', 'adopted'].includes(run.state)
   useEffect(() => {
@@ -194,10 +195,21 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
     onChange(drafts.map((draft): AiMemoryDraft => {
       if (draft.sourceIndex !== sourceIndex) return draft
       const existing = action === 'link' || action === 'revise'
-      if (existing && draft.targetSnapshot) return { ...draft, selected: true, action,
-        fields: action === 'link' ? draft.targetSnapshot : { ...draft.fields, authorDecision: 'adopted', freshness: 'current' } }
+      // 忽略只是一项待提交决定；保留此前完整草稿，撤销或切回时不丢作者改判与目标。
+      if (action === 'ignore') ignoredDrafts.current.set(sourceIndex, draft)
+      const previous = draft.action === 'ignore' ? ignoredDrafts.current.get(sourceIndex) ?? draft : draft
+      if (existing && previous.targetSnapshot) return { ...previous, selected: true, action,
+        fields: action === 'link' ? previous.targetSnapshot : { ...previous.fields, authorDecision: 'adopted', freshness: 'current' } }
+      if (action === 'create' && previous.action !== 'link' && previous.action !== 'revise') return { ...previous, selected: true, action }
       return { ...original, selected: true, action }
     }))
+  }
+  function undoIgnore(sourceIndex: number) {
+    if (!editable) return
+    const previous = ignoredDrafts.current.get(sourceIndex)
+    if (!previous) return
+    onChange(drafts.map((draft) => draft.sourceIndex === sourceIndex ? previous : draft))
+    ignoredDrafts.current.delete(sourceIndex)
   }
   function chooseTarget(sourceIndex: number, target: KnowledgeItemDetail) {
     if (!editable || target.bookId !== run.bookId || target.knowledgeRevision !== run.context.knowledgeRevision) return
@@ -240,7 +252,9 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
               <StudioIcon name={icon} size={20} /><span>{actionLabels[action]}</span>
             </button>)}</div>
           </fieldset>}
-          {draft.action === 'ignore' && <p className={archive.ignoreNotice}><StudioIcon name="info" size={20} />忽略只记录审阅历史，确认归档前不会保存。</p>}
+          {draft.action === 'ignore' && <div className={archive.ignoreNotice}><StudioIcon name="info" size={20} /><span>忽略只记录审阅历史，确认归档前不会保存。</span>
+            {ignoredDrafts.current.has(sourceIndex) && <button type="button" className={shared.button} disabled={!editable} onClick={() => undoIgnore(sourceIndex)}><StudioIcon name="undo" size={18} />撤销忽略</button>}
+          </div>}
           {existing && <>
             <p className={styles.note}>原提议：{item.name} · {natureLabels[item.nature]}<br />{item.summary}</p>
             <AiMemoryTargetPicker key={`${run.id}:${sourceIndex}:${draft.action}`} api={api} bookId={run.bookId}
@@ -310,9 +324,16 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
         <StudioIcon name="spark" />{run.state === 'adopted' ? '查看本章归档记录' : '审阅本章记忆候选'}
       </button>
       {open && createPortal(<dialog ref={dialog} className={archive.drawer} aria-labelledby={headingId}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+          // 连续 Esc 的原生 cancel 可能不可取消，按键阶段先处理确认层，避免抽屉与开关状态脱节。
+          event.preventDefault(); event.stopPropagation()
+          if (!submitLock.current) confirmation ? keepReviewing() : requestClose()
+        }}
+        onClose={() => { setConfirmation(null); setOpen(false) }}
         onCancel={(event) => { event.preventDefault(); event.stopPropagation(); if (!submitLock.current) confirmation ? keepReviewing() : requestClose() }}>
         <header className={archive.header} inert={confirmation !== null}><StudioIcon name="spark" size={28} /><h2 id={headingId} tabIndex={-1} title={`${run.context.chapterTitle} · 本章记忆归档`}>{run.context.chapterTitle} · 本章记忆归档</h2>
-          <button type="button" data-archive-close className={archive.closeButton} disabled={submitting} aria-label="收起本章记忆归档" title="收起本章记忆归档" onClick={requestClose}><StudioIcon name="close" size={24} /></button>
+          <button type="button" data-archive-close className={archive.closeButton} disabled={submitting} aria-label="收起本章记忆归档" title={submitting ? '正在保存作者决定，请稍候再收起' : '收起本章记忆归档'} onClick={requestClose}><StudioIcon name="close" size={24} /></button>
         </header>
         {error && <p className={archive.error} role="alert">{error}</p>}
         {decisionError && decisionError !== error && <p id={validationId} className={archive.error} role="status">{decisionError}</p>}
@@ -329,9 +350,9 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
           </div>
         </section>}
         <footer className={archive.footer} inert={confirmation !== null}>
-          {run.state === 'succeeded' ? <button type="button" className={archive.archiveButton} disabled={Boolean(archiveReason) || confirmation !== null} title={archiveReason}
+          {run.state === 'succeeded' ? <button type="button" className={archive.archiveButton} aria-busy={submitting} disabled={Boolean(archiveReason) || confirmation !== null} title={archiveReason}
             aria-describedby={decisionError && decisionError !== error ? validationId : undefined}
-            onClick={() => requestConfirmation('adopt')}><StudioIcon name="spark" size={20} />{submitting ? '正在归档…' : '确认归档'}</button>
+            onClick={() => requestConfirmation('adopt')}>{submitting ? <span className={`${shared.spinner} ${archive.saving}`} aria-hidden="true" /> : <StudioIcon name="spark" size={20} />}{submitting ? '正在归档…' : '确认归档'}</button>
             : <button type="button" className={archive.archiveButton} onClick={requestClose}><StudioIcon name="check" size={20} />完成</button>}
           <span><StudioIcon name="info" size={16} />{run.state === 'adopted' ? '已保留采用时的快照' : '确认前不会改写设定'}</span>
         </footer>
