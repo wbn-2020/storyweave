@@ -45,6 +45,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   const [isDefault, setDefault] = useState(false)
   const [defaultConfirmed, setDefaultConfirmed] = useState(false)
   const [discard, setDiscard] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [preserved, setPreserved] = useState<string | null>(null)
   const [probes, setProbes] = useState<Record<string, ProbeState>>({})
   const probeRequests = useRef(new Map<string, string>())
@@ -149,7 +150,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   function changeScope(value: typeof scope) {
     if (value === scope) return
     if (!tool.canLeave() || guard.current.presets) { tool.setError('请先处理当前连接或预设修改。'); return }
-    setDraft(null); setSecret(''); setLoaded(false); setScope(value)
+    setDraft(null); setSecret(''); setLoaded(false); tool.setNotice(null); tool.setError(null); setScope(value)
   }
   function edit(connection?: AiConnection) {
     if (!loaded || tool.locked || tool.hasChanges() || guard.current.presets || readOnly) return
@@ -160,7 +161,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   }
   function change(value: Partial<AiConnectionConfig>) {
     if (!draft || tool.locked) return
-    setDraft({ ...draft, ...value }); tool.setDirty(true); setPreserved(null)
+    setDraft({ ...draft, ...value }); tool.setDirty(true); setPreserved(null); setDiscard(false)
   }
   async function save(event?: FormEvent): Promise<boolean> {
     event?.preventDefault()
@@ -170,6 +171,8 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
       const nextVersion = expectedVersion === null ? 0 : expectedVersion + 1
       const input = { connection, expectedVersion, ...(secret ? { apiKey: secret } : {}) }
       const accept = () => { setDraft(null); setSecret(''); setDiscard(false) }
+      // 放弃确认只针对当时的输入；开始保存后旧确认失效，失败留稿仍须重新确认。
+      setDiscard(false); setSaving(true)
       if (scope === 'studio') return await tool.write('generation.connection.save', () => api.configureStudioAiConnection({ ...input, isDefault }),
         (value) => value.id === connection.id && value.version === nextVersion && sameFields(fieldsOf(value), connection) && value.isDefault === isDefault,
         (value) => {
@@ -178,6 +181,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
         }, '连接配置已保存。可刷新查看本次会话密钥状态。')
       return false
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请检查连接名称、接口地址和模型参数。'); return false }
+    finally { setSaving(false) }
   }
   async function syncBook(snapshot: AiPresetsSnapshot) {
     if (!book) return
@@ -226,14 +230,15 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
           <label>连接名称<input autoFocus required value={draft.name} onChange={(event) => change({ name: event.target.value })} /></label>
           <label>模型名称<input required value={draft.model} onChange={(event) => change({ model: event.target.value })} /></label>
           <label>接口地址<input required type="url" value={draft.baseUrl} onChange={(event) => change({ baseUrl: event.target.value })} /></label>
-          <label>本次会话密钥<input type="password" autoComplete="new-password" maxLength={8192} value={secret} onChange={(event) => { setSecret(event.target.value); tool.setDirty(true) }} placeholder="留空保留当前会话密钥" /></label>
+          <label>本次会话密钥<input type="password" autoComplete="new-password" maxLength={8192} value={secret} onChange={(event) => { setSecret(event.target.value); setDiscard(false); setPreserved(null); tool.setDirty(true) }} placeholder="留空保留当前会话密钥" /></label>
           <label>上下文窗口<input type="number" min={1} required value={draft.contextWindow} onChange={(event) => change({ contextWindow: Number(event.target.value) })} /></label>
           <label>最大输出 tokens<input type="number" min={1} required value={draft.maxOutputTokens} onChange={(event) => change({ maxOutputTokens: Number(event.target.value) })} /></label>
         </div>
-          {scope === 'studio' && <label className={styles.check}><input type="checkbox" checked={isDefault} onChange={(event) => { setDefault(event.target.checked); setDefaultConfirmed(false); tool.setDirty(true) }} />设为开书默认连接</label>}
+          {scope === 'studio' && <label className={styles.check}><input type="checkbox" checked={isDefault} onChange={(event) => { setDefault(event.target.checked); setDefaultConfirmed(false); setDiscard(false); setPreserved(null); tool.setDirty(true) }} />设为开书默认连接</label>}
           {changedDefault && <label className={styles.check}><input type="checkbox" checked={defaultConfirmed} onChange={(event) => setDefaultConfirmed(event.target.checked)} />确认替换“{oldDefault?.name}”的默认状态</label>}
         </fieldset>
-        <div className={styles.actions}><button type="submit" className={styles.primaryButton} disabled={tool.locked || !tool.dirty || changedDefault && !defaultConfirmed}>保存连接</button>
+        <div className={styles.actions}><button type="submit" className={styles.primaryButton} aria-busy={saving} disabled={tool.locked || !tool.dirty || changedDefault && !defaultConfirmed}
+          title={changedDefault && !defaultConfirmed ? '请先确认替换默认连接' : !tool.dirty ? '连接配置尚未修改' : undefined}>{saving ? '正在保存…' : '保存连接'}</button>
           <button type="button" className={styles.button} disabled={tool.locked} onClick={() => {
             if (tool.hasChanges() && !discard) { setDiscard(true); return }
             setDraft(null); setSecret(''); setDiscard(false); tool.setDirty(false)
@@ -251,7 +256,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
         <div className={styles.actions}>
           <button className={styles.button} type="button" disabled={tool.busy} onClick={leave.keepEditing}>{leave.source === 'window' ? '返回保存' : '继续编辑'}</button>
           <button className={styles.button} type="button" disabled={tool.locked} onClick={leave.discardAndLeave}>放弃修改并离开</button>
-          {leave.source !== 'window' && <button className={styles.primaryButton} type="button" disabled={tool.locked || readOnly || changedDefault && !defaultConfirmed}
+          {leave.source !== 'window' && <button className={styles.primaryButton} type="button" aria-busy={saving} disabled={tool.locked || readOnly || changedDefault && !defaultConfirmed}
             title={changedDefault && !defaultConfirmed ? '请先返回确认默认连接替换' : undefined}
             onClick={() => void save().then((saved) => { if (saved) leave.savedAndLeave() })}>保存连接并离开</button>}
         </div>
