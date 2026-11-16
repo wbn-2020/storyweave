@@ -41,10 +41,6 @@
 .domainRail nav { border: 0; padding: 0; flex-wrap: nowrap; background: transparent; gap: var(--space-1); }
 .domainRail nav > button { padding: var(--space-1) var(--space-2); font-size: var(--text-xs); border-radius: var(--radius-pill); border: 1px solid var(--color-line); min-height: var(--control-compact); }
 .domainRail nav small, .domainRail nav > span { display: none; }
-.bookNav { display: flex; flex-shrink: 0; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-1) var(--space-5); border-bottom: 1px solid var(--color-line); background: var(--bg-subtle); overflow-x: auto; }
-.bookNav button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-muted); padding: var(--space-1) var(--space-3); white-space: nowrap; }
-.bookNav button[aria-current='page'] { color: var(--color-accent); background: var(--color-accent-soft); }
-.bookNav select { margin-left: auto; width: 160px; min-width: 140px; min-height: var(--control-compact); font-size: var(--text-xs); padding: var(--space-1) var(--space-2); }
 .sidebarToggle, .iconButton { display: inline-grid; place-items: center; width: var(--control-compact); height: var(--control-compact); padding: 0; border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--color-muted); flex-shrink: 0; }
 .sidebarToggle:hover, .iconButton:hover:not(:disabled) { background: var(--bg-raised); color: var(--color-accent); }
 .button, .primaryButton, .aiEntry { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-compact); padding: var(--space-1) var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--color-ink-secondary); font-size: var(--text-xs); }
@@ -201,8 +197,6 @@
   .breadcrumb .crumb, .crumbSlash, .topbar .localBadge, .topbar .topbarSave, .topbar .focusButton { display: none; }
   .topbarPage { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
   .topActions { gap: var(--space-1); }
-  .bookNav { padding-inline: var(--space-2); }
-  .bookNav > button:nth-of-type(n+3) { display: none; }
   .chapterActions { padding-inline: var(--space-2); }
   .chapterActions > .actionRow { gap: var(--space-1); }
   .chapterActions .button, .chapterActions .aiEntry { padding-inline: var(--space-2); }

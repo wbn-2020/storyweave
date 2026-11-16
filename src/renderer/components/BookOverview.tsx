@@ -26,7 +26,7 @@ const destinationDescriptions = ['开始创作你的故事', '规划故事结构
 
 export function BookOverview({ api, scope, book, snapshot, reading, error, busy, onNavigate, onChapter, onDomain, onReload }: {
   api?: StudioApi; scope?: string; book: BookSnapshot; snapshot: LivingSnapshot | null; busy: boolean
-  onNavigate: (destination: BookDestination) => void; onChapter: (id: string) => void
+  onNavigate: (destination: BookDestination, targetId?: string) => void; onChapter: (id: string) => void
   reading: boolean; error: string | null; onDomain: (domain: CreativeDomain) => void; onReload: () => void
 }) {
   const words = book.chapters.reduce((n, item) => n + item.characterCount, 0)
@@ -37,8 +37,8 @@ export function BookOverview({ api, scope, book, snapshot, reading, error, busy,
   const stale = currentSnapshot?.outlines.filter((item) => item.stale) ?? []
   const reviews = book.chapters.filter((item) => item.status === 'review')
   const pending = [
-    ...stale.map((item) => ({ id: `outline:${item.id}`, title: item.fields.title, detail: '大纲依赖已变化，待复核', destination: 'living' as const, tone: 'warning' })),
-    ...reviews.map((item) => ({ id: `review:${item.id}`, title: item.title, detail: '审稿待处理', destination: 'workbench' as const, tone: 'accent' })),
+    ...stale.map((item) => ({ id: `outline:${item.id}`, targetId: item.id, title: item.fields.title, detail: '大纲依赖已变化，待复核', destination: 'living' as const, tone: 'warning' })),
+    ...reviews.map((item) => ({ id: `review:${item.id}`, targetId: item.id, title: item.title, detail: '审稿待处理', destination: 'workbench' as const, tone: 'accent' })),
   ]
   const pendingStatus = reading ? '正在核对创作状态，当前仅列出已读取章节中的审稿待办。'
     : error ? `创作状态读取未完成：${error} 当前仅列出已读取章节中的审稿待办。`
@@ -58,7 +58,7 @@ export function BookOverview({ api, scope, book, snapshot, reading, error, busy,
       </section>
       <div className={styles.destinations}>{BOOK_DESTINATIONS.slice(0, 4).map((item, index) => <button className={styles.destination} key={item.id} type="button" disabled={busy} onClick={() => onNavigate(item.id)}><StudioIcon name={item.icon} size={48} /><strong>{item.label}</strong><span>{destinationDescriptions[index]}</span><StudioIcon name="chevron" size={20} /></button>)}</div>
       <aside className={styles.overviewQueue} aria-label="待处理事项"><h2><StudioIcon name="spark" size={20} />待处理<span className={ui.chip} aria-label={currentSnapshot ? `已读取的大纲与章节审稿待办 ${pending.length} 项` : `已知章节审稿待办 ${reviews.length} 项，大纲待办未确认`}>{currentSnapshot ? pending.length : pending.length ? `已知 ${pending.length}` : '待核对'}</span></h2><ul className={styles.overviewQueueList}>
-        {pending.slice(0, 4).map((item) => <li key={item.id}><button type="button" disabled={busy} onClick={() => onNavigate(item.destination)}><i data-tone={item.tone} /><span><strong>{item.title}</strong><small>{item.detail}</small></span><StudioIcon name="chevron" size={20} /></button></li>)}
+        {pending.slice(0, 4).map((item) => <li key={item.id}><button type="button" disabled={busy} onClick={() => onNavigate(item.destination, item.targetId)}><i data-tone={item.tone} /><span><strong>{item.title}</strong><small>{item.detail}</small></span><StudioIcon name="chevron" size={20} /></button></li>)}
       </ul>{pendingStatus ? <div className={styles.overviewQueueStatus} data-tone={!reading && error ? 'danger' : undefined} role={!reading && error ? 'alert' : 'status'}>
         <p>{pendingStatus}</p>
         {!reading && !error && snapshot?.requiresUpgrade

@@ -677,11 +677,27 @@ export function App({ api }: Props) {
     })
   }
 
-  function navigateBook(destination: BookDestination) {
+  function navigateBook(destination: BookDestination, targetId?: string) {
     if (!book) return
     if (destination === 'write') { resumeWriting(); return }
     if (destination === 'bookDetails') { showDialog({ kind: 'bookDetails', book: book.book }); return }
     if (destination === 'world') { showDialog({ kind: 'galaxy', view: 'world' }); return }
+    if (destination === 'living' && targetId) { showDialog({ kind: 'living', initialId: targetId }); return }
+    if (destination === 'workbench' && targetId) {
+      if (!api || !book.chapters.some((item) => item.id === targetId)) return
+      const bookId = book.book.id
+      void changeView(async () => {
+        const result = await request(() => api.readChapter({ bookId, chapterId: targetId }))
+        if (!result.ok) { setMessage(result.error.message); return }
+        if (result.data.bookId !== bookId || result.data.id !== targetId || result.data.bookRevision !== bookRef.current?.book.revision) {
+          setMessage('待办对应章节或作品版本已变化，请刷新总览后重新核对。'); return
+        }
+        // 待办显式指定审稿章节，避免沿用上次写作章节准备另一章的审稿。
+        if (session.getCurrent().chapter?.revisionId !== result.data.revisionId) session.load(result.data)
+        setModal({ kind: 'workbench', tab: 'review' })
+      })
+      return
+    }
     showDialog({ kind: destination })
   }
 
@@ -1357,7 +1373,7 @@ export function App({ api }: Props) {
   const worldMapVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'world'
   const matrixVisible = isCanvasView && modal?.kind === 'galaxy' && modal.view === 'matrix'
   const bookMediaVisible = isCanvasView && modal?.kind === 'media' && modal.scenePlaceId === undefined
-  const compactBookCanvas = worldMapVisible || matrixVisible || bookMediaVisible || isCanvasView && (modal?.kind === 'weave' || modal?.kind === 'abilities' || modal?.kind === 'export' || modal?.kind === 'history' || modal?.kind === 'calendar')
+  const bookToolsVisible = Boolean(book && modal?.kind !== 'preferences' && modal?.kind !== 'models' && modal?.kind !== 'bookRecovery' && (studioView === 'book' || isCanvasView))
   const headerInfo = worldMapVisible ? { title: '世界星域地图', subtitle: '世界地点与已登记航道' }
     : matrixVisible ? { title: '章节出场矩阵', subtitle: '实体与章节的已登记出场' }
     : modal?.kind === 'media' && modal.scenePlaceId ? { title: '地点场景图', subtitle: '地点关联与图片版本' }
@@ -1517,7 +1533,7 @@ export function App({ api }: Props) {
         </div>}
         {book && !matrixVisible && !bookMediaVisible && modal?.kind !== 'weave' && modal?.kind !== 'export' && modal?.kind !== 'history' && modal?.kind !== 'calendar' && studioView !== 'home' && (studioView !== 'book' || isCanvasView) && <div className={styles.domainRail}><CreativeSpine snapshot={creative.snapshot} reading={creative.reading} error={creative.error} disabled={busy || bookRecoveryLocked || hasBlockingDialog} onNavigate={openCreativeDomain} onReload={creative.reload} /></div>}
         <div className={styles.topActions}>
-          {compactBookCanvas && book && <label className={styles.canvasTools} title="更多作品工具"><StudioIcon name="more" size={20} />
+          {bookToolsVisible && book && <label className={styles.canvasTools} title="更多作品工具"><StudioIcon name="more" size={20} />
             <select aria-label="更多作品工具" value="" disabled={busy || bookRecoveryLocked} onChange={(event) => {
               if (event.target.value === 'overview') void openBookOverview(book.book.id)
               else if (event.target.value) navigateBook(event.target.value as BookDestination)
@@ -1546,11 +1562,6 @@ export function App({ api }: Props) {
         </div>
       </header>
     <main className={`${styles.main} ${studioView !== 'write' || isCanvasView ? styles.homeMain : ''}`}>
-      {book && !compactBookCanvas && modal?.kind !== 'preferences' && modal?.kind !== 'models' && modal?.kind !== 'bookRecovery' && (studioView === 'book' || isCanvasView) && <nav className={styles.bookNav} aria-label="作品内导航">
-        <button type="button" aria-current={!isCanvasView && studioView === 'book' ? 'page' : undefined} disabled={busy || bookRecoveryLocked} onClick={() => void openBookOverview(book.book.id)}>总览</button>
-        {BOOK_DESTINATIONS.slice(0, 4).map((item) => <button key={item.id} type="button" aria-current={activeCanvasKey === item.id ? 'page' : undefined} disabled={busy || bookRecoveryLocked} onClick={() => navigateBook(item.id)}>{item.label}</button>)}
-        <select aria-label="更多作品工具" value="" disabled={busy || bookRecoveryLocked} onChange={(event) => { if (event.target.value) navigateBook(event.target.value as BookDestination) }}><option value="">更多作品工具</option>{BOOK_DESTINATIONS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
-      </nav>}
       {message && !hasBlockingDialog && <div className={styles.notice} role="alert"><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
       {display.warning && !hasBlockingDialog && <div className={styles.notice} role="status"><span>{display.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={display.retrySave}>保存当前显示偏好</button></div>}
       {pendingMessage && <div className={styles.notice} role="alert"><span>{pendingMessage}</span><button className={styles.receiptButton} type="button" onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
