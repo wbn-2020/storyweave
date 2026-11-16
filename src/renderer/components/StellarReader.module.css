@@ -74,15 +74,17 @@
 .prose { font-family: var(--font-manuscript); white-space: pre-wrap; overflow-wrap: anywhere; }
 .prose[data-annotations='true'] { margin-inline-start: var(--space-8); }
 .annotatedBlock { position: relative; min-width: 0; }
-.annotatedBlock[data-annotated='true']::before { content: ""; position: absolute; inset-inline-start: calc(-1 * var(--space-12)); inset-block: var(--space-2); width: 3px; border-radius: var(--radius-pill); background: var(--paper-focus); }
+.annotatedBlock[data-annotated='true']::before { content: ""; position: absolute; inset-inline-start: calc(-1 * var(--space-8)); inset-block: var(--space-2); width: 3px; border-radius: var(--radius-pill); background: var(--color-accent-2); }
 .annotation { position: relative; white-space: normal; text-indent: 0; }
-.panel .annotation > summary { position: absolute; inset-inline-start: calc(-1 * var(--space-8)); inset-block-start: 0; display: flex; align-items: center; justify-content: center; width: var(--control-compact); min-height: var(--control-compact); list-style: none; border-radius: var(--radius-md); color: var(--paper-focus); cursor: pointer; }
+.annotation.annotation > summary { position: absolute; inset-inline-start: calc(-1 * var(--space-8)); inset-block-start: 0; display: flex; align-items: center; justify-content: center; width: var(--control-compact); min-height: var(--control-compact); list-style: none; border-radius: var(--radius-md); color: var(--color-accent-2); cursor: pointer; }
 .annotation > summary::-webkit-details-marker { display: none; }
+.annotation > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .annotationDot { width: 9px; height: 9px; flex-shrink: 0; border: 1px solid currentColor; border-radius: var(--radius-pill); background: currentColor; }
 .annotation > summary:hover .annotationDot,.annotation[open] > summary .annotationDot { outline: 1px solid currentColor; outline-offset: 4px; }
-.annotationDetails { max-height: min(360px,50dvh); overflow: auto; overscroll-behavior: contain; padding: var(--space-4); margin-bottom: var(--space-4); border: 1px solid var(--paper-control-line); border-radius: var(--radius-md); color: var(--color-paper-ink); background: var(--paper-search-panel); font: var(--text-sm)/1.8 var(--font-ui); }
+.annotationDetails { position: fixed; inset: auto; z-index: var(--z-dropdown); width: min(420px,calc(100dvw - var(--space-8))); max-height: min(480px,60dvh); overflow: auto; overscroll-behavior: contain; padding: var(--space-4); margin: 0; border: 1px solid var(--paper-control-line); border-radius: var(--radius-lg); color: var(--color-paper-ink); background: var(--paper-search-panel); font: var(--text-sm)/1.8 var(--font-ui); box-shadow: var(--shadow-md); }
+.annotationDetails { --color-ink: var(--color-paper-ink); --color-ink-secondary: var(--paper-control-ink); --color-muted: var(--color-paper-muted); --color-line: var(--paper-line); --color-line-strong: var(--paper-control-line); --bg-subtle: var(--paper-input); border-color: color-mix(in srgb,var(--color-accent-2) 50%,var(--paper-control-line)); background: linear-gradient(var(--stellar-ai-haze),var(--stellar-ai-haze)),var(--paper-search-panel); }
 .annotationDetails > header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
-.panel .annotationDetails h4 { margin: 0; font: 600 var(--text-sm)/1.8 var(--font-ui); }
+.annotationDetails h4 { margin: 0; font: 600 var(--text-sm)/1.8 var(--font-ui); }
 .annotationDetails article + article { border-top: 1px solid var(--paper-line); padding-top: var(--space-3); margin-top: var(--space-3); }
 .annotationDetails dl { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
 .annotationDetails dt,.annotationMeta,.annotationDetails > footer { font-size: var(--text-xs); color: var(--color-paper-muted); }

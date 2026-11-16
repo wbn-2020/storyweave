@@ -9,6 +9,9 @@ import type { InspirationThumbnailMetadata } from './inspiration-thumbnail'
 export const WORKBENCH_SCHEMA_VERSION = 13
 export const MAX_SCENES = 2_000
 export const MAX_REVIEW_ISSUES = 2_000
+export const REVIEW_DISCUSSION_SCHEMA_VERSION = 27
+export const MAX_REVIEW_REPLIES = 100
+export const MAX_REVIEW_REPLY_LENGTH = 2_000
 // 字节预算按序列化后的 UTF-8 计算；保存与完整快照读取使用相同限制。
 export const MAX_WORKBENCH_FIELDS_BYTES = 256 * 1024
 export const MAX_WORKBENCH_SNAPSHOT_BYTES = 16 * 1024 * 1024
@@ -27,6 +30,7 @@ export const REVIEW_STATES = ['open', 'recheck', 'resolved', 'intentional', 'dis
 export interface ReviewApplication {
   chapterId: string; sourceRevisionId: string; revisionId: string; issueRevision: number
 }
+export interface ReviewReply { readonly id: string; readonly body: string; readonly createdAt: string }
 export interface ReviewIssueFields {
   title: string; kind: typeof REVIEW_KINDS[number]; status: typeof REVIEW_STATES[number]
   reason: string; evidence: string; suggestion: string; resolution: string; anchor: ManuscriptAnchor
@@ -36,6 +40,8 @@ export interface ReviewIssueFields {
   candidateSource?: ReviewCandidateSource
   /** 仅正文应用事务生成；手工保存只能原样保留，不能补写应用事实。 */
   readonly application?: ReviewApplication
+  /** 服务端追加的本机回复；普通编辑只保留，不得改写或删除历史。 */
+  readonly replies?: readonly ReviewReply[]
 }
 export interface ReviewIssue extends ReviewIssueFields {
   id: string; revision: number; updatedAt: string; stale: boolean
@@ -61,7 +67,7 @@ export interface WorkbenchSnapshot {
 export interface SaveBriefInput extends BookMutationInput { brief: WritingBrief }
 export interface SaveSceneInput extends BookMutationInput { id: string; expectedRevision: number; fields: SceneFields }
 export interface ReorderScenesInput extends BookMutationInput { chapterId: string | null; sceneIds: string[] }
-export interface SaveReviewIssueInput extends BookMutationInput { id: string; expectedRevision: number; fields: ReviewIssueFields }
+export interface SaveReviewIssueInput extends BookMutationInput { id: string; expectedRevision: number; fields: ReviewIssueFields; reply?: string }
 export interface ApplyReviewIssueInput extends BookMutationInput { id: string; expectedRevision: number; expectedRevisionId: string }
 export interface ApplyReviewIssueReceipt { workbench: WorkbenchSnapshot; chapter: ChapterSnapshot }
 export interface SaveWritingGoalInput extends BookMutationInput { id: string; expectedRevision: number; fields: WritingGoalFields }
@@ -157,7 +163,22 @@ export function parseReviewIssueFields(value: unknown): ReviewIssueFields {
     resolution: text(v.resolution, '处理说明'), anchor: parseManuscriptAnchor(v.anchor), aiRunId: nullableId(v.aiRunId),
     ...(v.replacement === undefined ? {} : { replacement: exactText(v.replacement, '替换正文', 20000) }),
     ...(v.candidateSource === undefined ? {} : { candidateSource: parseReviewCandidateSource(v.candidateSource) }),
-    ...(application ? { application } : {}) }
+    ...(application ? { application } : {}),
+    ...(v.replies === undefined ? {} : { replies: parseReviewReplies(v.replies) }) }
+}
+function parseReviewReplies(value: unknown): ReviewReply[] {
+  if (!Array.isArray(value) || value.length > MAX_REVIEW_REPLIES) throw new DomainError({ code: 'INVALID_INPUT', message: `每条批注最多 ${MAX_REVIEW_REPLIES} 条回复。` })
+  const replies = value.map((entry) => {
+    const v = object(entry)
+    const body = requiredText(v.body, '回复', MAX_REVIEW_REPLY_LENGTH)
+    if (typeof v.createdAt !== 'string' || !Number.isFinite(Date.parse(v.createdAt)) || new Date(v.createdAt).toISOString() !== v.createdAt) {
+      throw new DomainError({ code: 'INVALID_INPUT', message: '批注回复时间无效。' })
+    }
+    if (body.includes('\0')) throw new DomainError({ code: 'INVALID_INPUT', message: '回复含有无效字符。' })
+    return { id: id(v.id), body, createdAt: v.createdAt }
+  })
+  if (new Set(replies.map((reply) => reply.id)).size !== replies.length) throw new DomainError({ code: 'INVALID_INPUT', message: '批注回复编号不能重复。' })
+  return replies
 }
 export function parseWritingGoalFields(value: unknown): WritingGoalFields {
   const v = object(value)
@@ -173,7 +194,13 @@ export function parseReorderScenesInput(value: unknown): ReorderScenesInput {
   if (!sceneIds.length) throw new DomainError({ code: 'INVALID_INPUT', message: '请选择需要排序的场景。' })
   return { ...mutation(v), chapterId: nullableId(v.chapterId), sceneIds }
 }
-export function parseSaveReviewIssueInput(value: unknown): SaveReviewIssueInput { const v = object(value); return { ...mutation(v), ...identity(v), fields: parseReviewIssueFields(v.fields) } }
+export function parseSaveReviewIssueInput(value: unknown): SaveReviewIssueInput {
+  const v = object(value)
+  const reply = v.reply === undefined ? undefined : requiredText(v.reply, '回复', MAX_REVIEW_REPLY_LENGTH)
+  if (reply?.includes('\0')) throw new DomainError({ code: 'INVALID_INPUT', message: '回复含有无效字符。' })
+  return { ...mutation(v), ...identity(v), fields: parseReviewIssueFields(v.fields),
+    ...(reply === undefined ? {} : { reply }) }
+}
 export function parseApplyReviewIssueInput(value: unknown): ApplyReviewIssueInput { const v = object(value); return { ...mutation(v), ...identity(v), expectedRevisionId: id(v.expectedRevisionId) } }
 export function parseSaveWritingGoalInput(value: unknown): SaveWritingGoalInput { const v = object(value); return { ...mutation(v), ...identity(v), fields: parseWritingGoalFields(v.fields) } }
 export function parseLogWritingSessionInput(value: unknown): LogWritingSessionInput {

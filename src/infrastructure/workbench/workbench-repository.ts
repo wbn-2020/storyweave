@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3'
 import { DomainError, requiredId, requiredInteger, requiredText, type BookInput, type BookMutationInput } from '../../contracts/api'
 import { parseManuscript } from '../../contracts/manuscript'
 import {
-  MAX_REVIEW_ISSUES, MAX_SCENES, MAX_WORKBENCH_FIELDS_BYTES, MAX_WORKBENCH_SNAPSHOT_BYTES,
+  MAX_REVIEW_ISSUES, MAX_REVIEW_REPLIES, REVIEW_DISCUSSION_SCHEMA_VERSION, MAX_SCENES, MAX_WORKBENCH_FIELDS_BYTES, MAX_WORKBENCH_SNAPSHOT_BYTES,
   MAX_WORKBENCH_DOCUMENT_BYTES, MAX_WORKBENCH_ANCHOR_BYTES, WORKBENCH_SCHEMA_VERSION, parseLogWritingSessionInput, parseApplyReviewIssueInput,
   parseReviewIssueFields, reviewReplacement, parseSaveBriefInput, parseSaveReviewIssueInput, parseSaveSceneInput,
   parseSaveWritingGoalInput, parseSceneFields, parseWorkbenchBookInput, parseWritingBrief, parseWritingGoalFields, parseReorderScenesInput,
@@ -258,7 +258,8 @@ function readSnapshot(db: Database.Database, bookId: string, cache = anchorCache
 
 /** 恢复包在只读连接中校验作者可读取的领域数据；不能把合法 JSON 当作有效业务资料。 */
 export function validateWorkbenchDatabase(db: Database.Database, bookId: string): void {
-  if (Number(db.pragma('user_version', { simple: true })) < WORKBENCH_SCHEMA_VERSION) return
+  const schemaVersion = Number(db.pragma('user_version', { simple: true }))
+  if (schemaVersion < WORKBENCH_SCHEMA_VERSION) return
   const current = state(db, bookId)
   const cache = anchorCache()
   const snapshot = readSnapshot(db, bookId, cache)
@@ -276,6 +277,7 @@ export function validateWorkbenchDatabase(db: Database.Database, bookId: string)
     prepareAnchors(db, [fields.anchor], cache)(fields.anchor)
     if (fields.aiRunId && !db.prepare('SELECT id FROM ai_runs WHERE id = ? AND book_id = ?').get(fields.aiRunId, bookId)) return fail('审稿 AI 来源不存在。')
     checkReviewSource(db, bookId, fields)
+    if (fields.replies && schemaVersion < REVIEW_DISCUSSION_SCHEMA_VERSION) return fail('旧格式不能包含批注回复。')
   }
   for (const fields of snapshot.scenes) {
     requiredId(fields.id)
@@ -289,7 +291,9 @@ export function validateWorkbenchDatabase(db: Database.Database, bookId: string)
     checkReviewApplication(db, fields.id, fields.revision, parseReviewIssueFields(fields), verifiedApplications)
     const latest = db.prepare(`SELECT CASE WHEN length(CAST(fields_json AS BLOB)) <= ? THEN fields_json END AS fields_json
       FROM workbench_revisions WHERE kind = 'review' AND entity_id = ? AND revision = ?`).get(MAX_WORKBENCH_FIELDS_BYTES, fields.id, fields.revision) as { fields_json: string } | undefined
-    if (JSON.stringify(fields.application) !== JSON.stringify(parseReviewIssueFields(storedFields(latest?.fields_json)).application)) return fail('当前审稿记录的应用凭据与历史不一致。')
+    const latestFields = parseReviewIssueFields(storedFields(latest?.fields_json))
+    if (JSON.stringify(fields.application) !== JSON.stringify(latestFields.application)) return fail('当前审稿记录的应用凭据与历史不一致。')
+    if (JSON.stringify(fields.replies) !== JSON.stringify(latestFields.replies)) return fail('当前批注回复与历史不一致。')
     const indexed = db.prepare('SELECT chapter_id FROM review_issues WHERE id = ?').get(fields.id) as { chapter_id: string }
     if (indexed.chapter_id !== fields.anchor.chapterId) return fail('审稿目录与来源不一致。')
   }
@@ -311,6 +315,14 @@ export function validateWorkbenchDatabase(db: Database.Database, bookId: string)
       const issue = parseReviewIssueFields(fields)
       validateIssue(issue); checkReviewSource(db, bookId, issue, row.revision === 1)
       checkReviewApplication(db, row.entity_id, row.revision, issue, verifiedApplications)
+      if (row.revision === 1 && issue.replies?.length) return fail('首次批注不能包含伪造的回复。')
+      if (row.revision > 1) {
+        const prior = db.prepare(`SELECT CASE WHEN length(CAST(fields_json AS BLOB)) <= ? THEN fields_json END AS fields_json
+          FROM workbench_revisions WHERE kind = 'review' AND entity_id = ? AND revision = ?`).get(MAX_WORKBENCH_FIELDS_BYTES, row.entity_id, row.revision - 1) as { fields_json: string } | undefined
+        const before = parseReviewIssueFields(storedFields(prior?.fields_json)).replies ?? []
+        const after = issue.replies ?? []
+        if (after.length < before.length || after.length > before.length + 1 || before.some((reply, index) => JSON.stringify(reply) !== JSON.stringify(after[index]))) return fail('批注历史只能逐条追加回复。')
+      }
       if (row.revision > 1 && issue.application?.issueRevision !== row.revision) {
         const previous = db.prepare(`SELECT CASE WHEN length(CAST(fields_json AS BLOB)) <= ? THEN fields_json END AS fields_json
           FROM workbench_revisions WHERE kind = 'review' AND entity_id = ? AND revision = ?`).get(MAX_WORKBENCH_FIELDS_BYTES, row.entity_id, row.revision - 1) as { fields_json: string } | undefined
@@ -408,15 +420,20 @@ export class WorkbenchRepository {
       return this.write(data, (db, now) => {
         const chapter = db.prepare('SELECT current_revision_id FROM chapters WHERE id = ?').get(data.fields.anchor.chapterId) as { current_revision_id: string } | undefined
         if (!chapter) return fail('正文证据对应的章节不存在。', 'INVALID_INPUT')
-        if (chapter.current_revision_id !== data.fields.anchor.revisionId && data.fields.status === 'resolved') return fail('正文已变化，请先重新定位并复核问题，再标记已解决。', 'INVALID_INPUT')
         if (data.fields.aiRunId && !db.prepare('SELECT id FROM ai_runs WHERE id = ? AND book_id = ?').get(data.fields.aiRunId, data.bookId)) return fail('AI 建议不属于当前作品。', 'INVALID_INPUT')
         checkReviewSource(db, data.bookId, data.fields)
         const previous = db.prepare('SELECT fields_json FROM review_issues WHERE id = ?').get(data.id) as { fields_json: string } | undefined
         const original = previous ? parseReviewIssueFields(storedFields(previous.fields_json)) : null
+        // 追加回复不重新宣称旧结论仍有效；只有新标解决或改变定位时，才要求当前正文与依据一致。
+        const resolving = data.fields.status === 'resolved' && (original?.status !== 'resolved' || JSON.stringify(original.anchor) !== JSON.stringify(data.fields.anchor))
+        if (chapter.current_revision_id !== data.fields.anchor.revisionId && resolving) return fail('正文已变化，请先重新定位并复核问题，再标记已解决。', 'INVALID_INPUT')
+        if (data.fields.replies !== undefined && JSON.stringify(data.fields.replies) !== JSON.stringify(original?.replies)) return fail('批注回复只能通过回复操作追加。', 'INVALID_INPUT')
+        if (data.reply && (!original || Number(db.pragma('user_version', { simple: true })) < REVIEW_DISCUSSION_SCHEMA_VERSION)) return fail('请先保存批注并备份升级作品，再追加回复。', 'FORBIDDEN')
+        if (data.reply && (original?.replies?.length ?? 0) >= MAX_REVIEW_REPLIES) return fail(`每条批注最多 ${MAX_REVIEW_REPLIES} 条回复，已有内容保留。`, 'INVALID_INPUT')
         if (data.fields.application && JSON.stringify(data.fields.application) !== JSON.stringify(original?.application)) return fail('正文应用凭据只能由确认替换事务生成。', 'INVALID_INPUT')
         if (original && (original.candidateSource || data.fields.candidateSource) && (JSON.stringify(original.candidateSource) !== JSON.stringify(data.fields.candidateSource) || original.aiRunId !== data.fields.aiRunId)) return fail('首次登记的审稿候选来源不能被替换。', 'INVALID_INPUT')
         const source = data.fields.candidateSource
-        if (source?.item.requirement && data.fields.status === 'resolved') {
+        if (source?.item.requirement && resolving) {
           const requirement = source.item.requirement
           const outline = currentOutlineNodes(db, data.bookId).outlines.find((node) => node.id === requirement.outlineId)
           if (outline?.revisionId !== requirement.revisionId || outline?.stale) return fail('所引章纲要求已变化，请保留原建议，重新审阅新章纲后登记结论。', 'REVISION_CONFLICT')
@@ -432,7 +449,9 @@ export class WorkbenchRepository {
             .get(run.id, source.index) as { entity_id: string } | undefined
           if (prior) return fail('这一审稿建议已经登记，请在审稿清单中继续处理。', 'REVISION_CONFLICT')
         }
-        const fields = { ...data.fields, ...(original?.application ? { application: original.application } : {}) }
+        const fields = { ...data.fields, ...(original?.application ? { application: original.application } : {}),
+          ...(original?.replies ? { replies: original.replies } : {}),
+          ...(data.reply ? { replies: [...(original?.replies ?? []), { id: randomUUID(), body: data.reply, createdAt: now }] } : {}) }
         this.entity(db, 'review_issues', 'review', MAX_REVIEW_ISSUES, { ...data, fields }, now)
       })
     })

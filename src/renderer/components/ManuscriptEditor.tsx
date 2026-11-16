@@ -13,6 +13,7 @@ import paper from './PaperSurface.module.css'
 import type { WritingPosition } from '../writing-location'
 import { StudioIcon } from './StudioIcon'
 import { StellarTooltip } from './stellar/StellarTooltip'
+import { ManuscriptAnnotations, type ManuscriptAnnotationContext } from './ManuscriptAnnotations'
 
 interface Props {
   title: string
@@ -25,6 +26,8 @@ interface Props {
   initialPosition?: WritingPosition | null
   onPositionChange?: (position: WritingPosition) => void
   onSelectionAction?: (instruction: string, range: { firstBlockId: string; lastBlockId: string }) => void
+  onAnnotate?: (selection: { blockIds: string[]; quote: string }) => void
+  annotationContext?: ManuscriptAnnotationContext
   footer?: ReactNode
 }
 
@@ -46,7 +49,7 @@ function nativeTextSelection(view: EditorView): TextSelection | null {
   } catch { return null }
 }
 
-export function ManuscriptEditor({ title, document, disabled, readOnly = false, displayPreferences, onChange, onComposition, initialPosition, onPositionChange, onSelectionAction, footer }: Props) {
+export function ManuscriptEditor({ title, document, disabled, readOnly = false, displayPreferences, onChange, onComposition, initialPosition, onPositionChange, onSelectionAction, onAnnotate, annotationContext, footer }: Props) {
   const callbacks = useRef({ onChange, onComposition, onPositionChange })
   callbacks.current = { onChange, onComposition, onPositionChange }
   const openingPosition = useRef(initialPosition)
@@ -164,6 +167,9 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
       heading: currentEditor?.isActive('heading') ?? false,
       canUndo: currentEditor?.can().undo() ?? false,
       canRedo: currentEditor?.can().redo() ?? false,
+      canAnnotate: Boolean(currentEditor && (currentEditor.state.selection.empty
+        ? currentEditor.state.selection.$from.parent.textContent
+        : currentEditor.state.doc.textBetween(currentEditor.state.selection.from, currentEditor.state.selection.to, '\n')).trim()),
     }),
   })
 
@@ -179,7 +185,7 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
   useEffect(() => {
     const keyDown = (event: KeyboardEvent) => {
       if (!editor || editor.isDestroyed || event.defaultPrevented || disabledRef.current || composing.current || editor.view.composing || event.isComposing || event.keyCode === 229) return
-      if (event.key === 'Escape' && globalThis.document.querySelector('[data-stellar-tooltip]:popover-open')) return
+      if (event.key === 'Escape' && globalThis.document.querySelector('[data-stellar-tooltip]:popover-open, [data-reader-annotation][open]')) return
       if (globalThis.document.querySelector('dialog[open]')) return
       const target = event.target
       if (target instanceof HTMLElement && !container.current?.contains(target) && target.closest('input, textarea, select, [contenteditable="true"]')) return
@@ -215,7 +221,7 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
     }
     const dismiss = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || composing.current || editor.view.composing
-        || globalThis.document.querySelector('[data-stellar-tooltip]:popover-open')) return
+        || globalThis.document.querySelector('[data-stellar-tooltip]:popover-open, [data-reader-annotation][open]')) return
       if (event.key === 'Escape' && !event.defaultPrevented && !globalThis.document.querySelector('dialog[open]') && selectionTools.current) {
         event.preventDefault()
         // 捕获阶段可能早于原生 selectionchange；按眼前的 DOM 选区关闭，避免迟到同步重新展开。
@@ -261,6 +267,23 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
   }
 
   const editingDisabled = disabled || readOnly || compositionActive
+  function annotate() {
+    if (editingDisabled || composing.current || editor.view.composing || !onAnnotate) return
+    const selection = nativeTextSelection(editor.view)
+    const { from, to, empty } = selection ?? editor.state.selection
+    const ids: string[] = []
+    editor.state.doc.nodesBetween(from, to, (node, position) => {
+      if (node.isTextblock && (empty || from < position + 1 + node.content.size && to > position + 1) && typeof node.attrs.id === 'string') ids.push(node.attrs.id)
+      return !node.isTextblock
+    })
+    if (!ids.length) return
+    if (ids.length > 500) { setLocationNotice('一次批注最多关联 500 个段落，请缩小选区。'); return }
+    const node = editor.state.doc.resolve(from).parent
+    const quote = empty ? node.textContent : editor.state.doc.textBetween(from, to, '\n')
+    if (!quote.trim()) return
+    onAnnotate({ blockIds: ids, quote: quote.slice(0, 2000) })
+    setSelectionToolbar(null)
+  }
   function selectionAction(label: string) {
     if (editingDisabled || composing.current || editor.view.composing || editor.state.selection.empty || !onSelectionAction) return
     const { from, to } = editor.state.selection
@@ -279,6 +302,8 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
   return <div ref={container} className={`${styles.editor} ${paper.surface}`} data-paper-tone={displayPreferences.paperTone} style={displayPreferenceStyle(displayPreferences)}>
     <div className={styles.toolbar} role="toolbar" aria-label="正文格式">
       <div className={styles.toolGroup}>
+        {onAnnotate && <StellarTooltip><button type="button" disabled={editingDisabled || !active?.canAnnotate} title={active?.canAnnotate ? '添加正文批注' : '请将光标置于有文字的段落，或选中文字后添加批注。'} aria-label="添加正文批注"
+          onMouseDown={(event) => event.preventDefault()} onClick={annotate}><StudioIcon name="comment" size={20} /></button></StellarTooltip>}
         <StellarTooltip><button type="button" disabled={editingDisabled} aria-pressed={active?.bold ?? false}
           aria-label="加粗" title="加粗（Ctrl+B）" onClick={() => command(() => editor.chain().focus().toggleBold().run())}><b>B</b></button></StellarTooltip>
         <StellarTooltip><button type="button" disabled={editingDisabled} aria-pressed={active?.italic ?? false}
@@ -303,6 +328,8 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
     {readOnly && <p className={styles.readOnlyNote}>归档作品 · 只读</p>}
     {locationNotice && <p className={styles.searchHint} role="status">{locationNotice}</p>}
     <EditorContent editor={editor} className={styles.content} />
+    {annotationContext && <ManuscriptAnnotations key={`${annotationContext.bookId}:${annotationContext.bookRevision}:${annotationContext.revisionId}`}
+      {...annotationContext} editor={editor} host={container} disabled={disabled || compositionActive} readOnly={readOnly} />}
     <footer className={styles.paperFooter}>
       <div className={styles.footerInfo}>{footer ?? <span>{readOnly ? '归档作品 · 只读' : '工作稿'}</span>}</div>
       <div className={styles.toolGroup}>

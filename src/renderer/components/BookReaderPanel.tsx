@@ -4,7 +4,7 @@ import type { InlineNode } from '../../contracts/manuscript'
 import { DISPLAY_FONT_SIZES, DISPLAY_LINE_HEIGHTS, PAPER_TONE_LABELS, displayPreferenceStyle, type DisplayPreferences } from '../display-preferences'
 import { displayTime, request } from '../request'
 import { StudioIcon } from './StudioIcon'
-import { ReaderAnnotations, useReaderAnnotations } from './ReaderAnnotations'
+import { ReaderAnnotations, useReaderAnnotations, type AnnotationAction } from './ReaderAnnotations'
 import { paginateReaderDocument, type ReaderBlock, type ReaderPage } from './reader-pages'
 import shared from '../StellarShared.module.css'
 import paperStyles from './PaperSurface.module.css'
@@ -21,6 +21,7 @@ export interface BookReaderPanelProps {
   onPreferencesChange: (change: Partial<DisplayPreferences>) => void
   onRetryPreferencesSave: () => void
   onClose: () => void
+  onReviewIssue?: (issueId: string, action: AnnotationAction) => void
 }
 
 type Scope = 'working' | 'finalized'
@@ -66,7 +67,7 @@ export function BookReaderPanel(props: BookReaderPanelProps) {
   return <ReaderContent key={props.book.book.id} {...props} />
 }
 
-function ReaderContent({ api, book, initialChapterId, busy, error, displayPreferences, preferencesWarning, onPreferencesChange, onRetryPreferencesSave, onClose }: BookReaderPanelProps) {
+function ReaderContent({ api, book, initialChapterId, busy, error, displayPreferences, preferencesWarning, onPreferencesChange, onRetryPreferencesSave, onClose, onReviewIssue }: BookReaderPanelProps) {
   const bookId = book.book.id
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [scope, setScope] = useState<Scope>('working')
@@ -435,6 +436,7 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
                 {selected && <ReaderAnnotations key={`${selected.id}:${loaded.selectedRevision.id}`}
                   snapshot={annotationsEnabled && annotations.state.kind === 'ready' ? annotations.state.snapshot : null}
                   chapterId={selected.id} revisionId={loaded.selectedRevision.id} pages={loaded.pages} pageIndex={pageIndex}
+                  onReviewIssue={onReviewIssue} disabled={blocked || Boolean(book.book.archivedAt)}
                   renderBlock={(block) => <PageBlock block={block} />} />}
               </>}
             </div>
