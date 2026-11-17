@@ -322,7 +322,8 @@ export function App({ api }: Props) {
   }
 
   async function mutate<K extends ServiceCommand>(command: K, run: () => Promise<Result<CommandMap[K]['output'] | null>>, apply: (value: CommandMap[K]['output']) => void | boolean | Promise<void | boolean>) {
-    const preserveForm = command === 'book.create' || command === 'book.update' || command === 'chapter.update' || command.startsWith('knowledge.') || command.startsWith('story.') || command.startsWith('memory.') || command.startsWith('ai.') || command.startsWith('notes.') || command.startsWith('workbench.') || command.startsWith('inspiration.')
+    // 导出回执待核对时保留清单与保存位置，补领原回执后仍在本页展示成品。
+    const preserveForm = command === 'book.create' || command === 'book.update' || command === 'book.export.commit' || command === 'chapter.update' || command.startsWith('knowledge.') || command.startsWith('story.') || command.startsWith('memory.') || command.startsWith('ai.') || command.startsWith('notes.') || command.startsWith('workbench.') || command.startsWith('inspiration.')
     const receive = async (response: CompletedRequest): Promise<boolean> => {
       if (response.command !== command) return false
       // command 已核对；映射类型的关联在跨回调处由这一处收窄保留。
@@ -1578,9 +1579,9 @@ export function App({ api }: Props) {
         </div>
       </header>
     <main className={`${styles.main} ${studioView !== 'write' || isCanvasView ? styles.homeMain : ''}`}>
-      {message && !hasBlockingDialog && <div className={`${styles.notice} ${messageState?.tone === 'success' ? styles.noticeSuccess : ''}`} role={messageState?.tone === 'success' ? 'status' : 'alert'}><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
+      {message && !hasBlockingDialog && modal?.kind !== 'export' && <div className={`${styles.notice} ${messageState?.tone === 'success' ? styles.noticeSuccess : ''}`} role={messageState?.tone === 'success' ? 'status' : 'alert'}><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
       {display.warning && !hasBlockingDialog && <div className={styles.notice} role="status"><span>{display.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={display.retrySave}>保存当前显示偏好</button></div>}
-      {pendingMessage && <div className={styles.notice} role="alert"><span>{pendingMessage}</span><button className={styles.receiptButton} type="button" onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
+      {pendingMessage && <div className={styles.notice} role="alert"><span>{modal?.kind === 'export' && message ? `${message} ` : ''}{pendingMessage}</span><button className={styles.receiptButton} type="button" aria-busy={checkingReceipt} onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
       {session.session.error && <StellarEmpty compact role="alert" heading="h2" icon={storageReason ? 'database' : 'warning'} hintIcon="refresh"
         tone={storageReason ? 'default' : ['REVISION_CONFLICT', 'REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(session.session.error.code) ? 'warning' : 'danger'}
         title={storageReason === 'disk-full' ? '磁盘空间不足' : storageReason === 'database-full' ? '数据库可用空间不足' : saveLabel(session.session)} description={session.session.error.message}
@@ -1622,7 +1623,7 @@ export function App({ api }: Props) {
           {modal?.kind === 'weave' && api && book && <WeaveSystemPanel key={`${workspace.rootPath}:${book.book.id}`} api={api} book={book} disabled={busy} onClose={closeModal}
             onChapter={(id) => void openChapter(id)} onBookChange={applyBook} onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard}
             onUnknown={(error) => setMessage(error.message)} onRecover={() => openRecovery(true)} />}
-          {modal?.kind === 'export' && book && api && <ExportBookPanel key={`${workspace.rootPath}:${book.book.id}`} api={api} workspaceScope={workspace.rootPath ?? undefined} receipt={exportReceipt} book={book} onExport={exportBook} onClose={closeModal} busy={busy} error={modalError} registerLeaveGuard={registerPanelLeaveGuard} />}
+          {modal?.kind === 'export' && book && api && <ExportBookPanel key={`${workspace.rootPath}:${book.book.id}`} api={api} workspaceScope={workspace.rootPath ?? undefined} receipt={exportReceipt} book={book} onExport={exportBook} onClose={closeModal} busy={busy} error={pendingMessage ? null : modalError} registerLeaveGuard={registerPanelLeaveGuard} />}
           {modal?.kind === 'history' && chapter && api && <RevisionHistory key={`${workspace.rootPath}:${chapter.bookId}:${chapter.id}`} api={api} chapter={chapter} archived={archived} onRestore={restoreRevision} onMerge={mergeSelectedRevision} onClose={closeModal} busy={busy} error={modalError} registerLeaveGuard={registerPanelLeaveGuard} />}
           {modal?.kind === 'forge' && book && api && <>
             <ForgePanel key={`${workspace.rootPath}:${book.book.id}:${modal.initialKind ?? 'cast'}:${modal.personId ?? ''}`} api={api} book={book} chapter={chapter} disabled={busy}

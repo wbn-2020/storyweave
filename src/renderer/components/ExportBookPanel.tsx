@@ -368,8 +368,9 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
   return <Dialog title="导出" wide className={`${appStyles.lightDialog} ${styles.dialog}`} busy={busy || exporting || choosingDirectory} error={error ?? readError} onClose={onClose}>
     <p className={styles.introduction}>将《{book.book.title}》导出为多种格式，便于分享与发布。</p>
     {pendingRead && <p className={styles.pending} role="status">预览请求尚未确认，暂时保留当前选择。
-      <button type="button" className={appStyles.button} disabled={checking || busy} onClick={() => void checkPending()}>{checking ? '查询中…' : '查询原请求结果'}</button>
+      <button type="button" className={appStyles.button} disabled={checking || busy} aria-busy={checking} onClick={() => void checkPending()}>{checking ? '查询中…' : '查询原请求结果'}</button>
     </p>}
+    <div className={styles.exportWorkspace} data-exported={Boolean(exported)}>
     {exported && <section className={styles.success} role="status" aria-label="导出成功">
       <span className={styles.successMark} aria-hidden="true"><StudioIcon name="check" size={48} /></span>
       <div className={styles.successHeading}><strong>已导出 {exported.chapterCount} 章</strong><p>{exported.characterCount.toLocaleString()} 字 · 作品版本 {exported.bookRevision}</p></div>
@@ -378,7 +379,6 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
     }}><StudioIcon name="folder" size={20} />打开所在文件夹</button>
       <dl className={styles.successPaths}><div><dt>成品</dt><dd>{exported.filePath}</dd></div><div><dt>版本清单</dt><dd>{exported.manifestPath}</dd></div></dl>
     </section>}
-    <div className={styles.exportWorkspace}>
       <section className={styles.chapterList} aria-labelledby={headingId}>
     <div className={styles.selectionBar}>
       <div className={styles.selectionHeading}><h3 id={headingId}>选择章节</h3><p>已选 {selectedIds.length.toLocaleString()} / {book.chapters.length.toLocaleString()} 章</p></div>
@@ -430,8 +430,9 @@ export function ExportBookPanel({ api, book, busy, error, onClose, onExport, wor
       <div className={styles.destinationField}><label htmlFor={`${headingId}-directory`}>保存位置</label>
         <div className={styles.directoryPicker}><StudioIcon name="folder" size={20} />
           <input id={`${headingId}-directory`} readOnly value={directory?.directoryPath ?? ''} title={directory?.directoryPath} disabled={blocked} placeholder="请选择保存文件夹" />
-          <button type="button" disabled={blocked} title="选择保存文件夹" aria-label={choosingDirectory ? '正在选择保存文件夹' : '选择保存文件夹'} onClick={() => void chooseDirectory()}><StudioIcon name="folder" size={20} /></button>
+          <button type="button" className={appStyles.button} disabled={blocked} aria-busy={choosingDirectory} title="选择保存文件夹" aria-label={choosingDirectory ? '正在选择保存文件夹' : '选择保存文件夹'} onClick={() => void chooseDirectory()}><StudioIcon name="folder" size={20} /></button>
         </div>
+        {directory && <small className={styles.directoryPath}>{directory.directoryPath}</small>}
       </div>
     </div>
     <details className={styles.advancedOptions}><summary>正文与排版选项</summary>
