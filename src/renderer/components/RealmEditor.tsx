@@ -51,8 +51,8 @@ export function RealmPersonPicker({ api, book, selected, maximum, disabled, onPi
 export function emptyCombatCharacter(personId: string): CombatCharacter {
   return { personId, realmId: null, stage: '', abilities: {}, totalPower: null, projectedPower: null, progress: [] }
 }
-export function RealmEditor({ api, book, fields, people, disabled, error, notice, onPerson, onChange, onSave, onCancel, onCompare, conflict, onContinue, onUseLatest }: {
-  api: StudioApi; book: BookSnapshot; fields: RealmState; people: { id: string; name: string }[]; disabled: boolean; error: string | null; notice: string | null
+export function RealmEditor({ api, book, fields, people, disabled, saving, comparing, error, notice, onPerson, onChange, onSave, onCancel, onCompare, conflict, onContinue, onUseLatest }: {
+  api: StudioApi; book: BookSnapshot; fields: RealmState; people: { id: string; name: string }[]; disabled: boolean; saving: boolean; comparing: boolean; error: string | null; notice: string | null
   onChange: (fields: RealmState) => void; onSave: () => void; onCancel: () => void; onCompare: () => void
   onPerson: (person: KnowledgeItemSummary) => void
   conflict: RealmSnapshot | null; onContinue: () => void; onUseLatest: () => void
@@ -73,8 +73,9 @@ export function RealmEditor({ api, book, fields, people, disabled, error, notice
   function condition(levelId: string, next: RealmCondition) {
     onChange({ ...fields, levels: fields.levels.map((level) => level.id === levelId ? { ...level, conditions: level.conditions.map((item) => item.id === next.id ? next : item) } : level) })
   }
-  function submit(event: FormEvent) { event.preventDefault(); onSave() }
-  return <form className={styles.editor} onSubmit={submit}>
+  function submit(event: FormEvent) { event.preventDefault(); if (!disabled && !conflict) onSave() }
+  return <form className={styles.editor} onSubmit={submit}
+    onInvalidCapture={(event) => { if (event.target instanceof HTMLElement) { const details = event.target.closest('details'); if (details) details.open = true } }}>
     <fieldset disabled={disabled}>
       <section className={styles.settingsSection}><h3>境界阶梯 · 从低到高</h3>
         {fields.levels.map((level, index) => <details key={level.id} className={styles.levelEditor} open={index === 0}>
@@ -130,8 +131,8 @@ export function RealmEditor({ api, book, fields, people, disabled, error, notice
     {notice && <p className={styles.notice} role="status">{notice}</p>}
     {conflict && <section className={styles.warning}><p>作品或境界版本已变化，当前输入保留。</p><details><summary>查看最新设定 · 境界版本 {conflict.revision}</summary><pre>{JSON.stringify(conflict.fields, null, 2)}</pre></details>
       <div className={styles.actions}><button className={styles.button} type="button" disabled={disabled} onClick={onContinue}>保留输入，以最新版本继续编辑</button><button className={styles.button} type="button" disabled={disabled} onClick={onUseLatest}>放弃输入并加载最新</button></div></section>}
-    <div className={styles.actions}><button className={styles.primaryButton} type="submit" disabled={disabled || Boolean(conflict)}><StudioIcon name="save" size={20} />保存设定</button>
-      <button className={styles.button} type="button" disabled={disabled} onClick={onCompare}>核对最新版本</button>
+    <div className={styles.actions}><button className={styles.primaryButton} type="submit" disabled={disabled || Boolean(conflict)} aria-busy={saving}><StudioIcon name="save" size={20} />保存设定</button>
+      <button className={styles.button} type="button" disabled={disabled} aria-busy={comparing} onClick={onCompare}>核对最新版本</button>
       <button className={styles.button} type="button" disabled={disabled} onClick={onCancel}>返回</button></div>
   </form>
 }

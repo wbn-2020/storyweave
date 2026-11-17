@@ -34,6 +34,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
   const [focus, setFocus] = useState('')
   const [picker, setPicker] = useState(false), [discardEditor, setDiscardEditor] = useState(false)
   const [simulation, setSimulation] = useState<RealmSimulation | null>(null), [simulating, setSimulating] = useState(false)
+  const [operation, setOperation] = useState<RealmAction['kind'] | 'compare' | null>(null)
   const [upgradeConfirmed, setUpgradeConfirmed] = useState(false)
   const [syncRequired, setSyncRequired] = useState(false), [preserved, setPreserved] = useState<string | null>(null)
   const snapshotRef = useRef(snapshot), bookRef = useRef(book), syncRef = useRef(false), selectedRef = useRef(selected)
@@ -121,6 +122,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
     const baseline = snapshotRef.current
     if (!baseline || tool.locked || syncRef.current || baseline.requiresUpgrade) return
     if (archived || stale) { tool.setError(archived ? '作品已归档，输入保留，不能写入。' : '作品已有新版本，请核对最新版本后继续编辑。'); return }
+    setOperation(action.kind)
     try {
       const input = parseRealmMutationInput({ bookId, expectedBookRevision: baseline.bookRevision, expectedRevision: baseline.revision, operationId: crypto.randomUUID(), action })
       const expected = applyRealmAction(baseline.fields, input.action)
@@ -133,6 +135,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
         action.kind === 'configure' ? '境界与战力设定已保存。' : '突破已登记，境界与资源变更已保存。')
       if (success) await reload()
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请核对境界设定后重试。') }
+    finally { setOperation(null) }
   }
   async function upgrade() {
     if (!snapshot?.requiresUpgrade || !upgradeConfirmed || tool.locked || archived) return
@@ -154,12 +157,13 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
   }
   async function compare() {
     if (tool.locked || !draft || syncRef.current) return
-    await tool.read(() => api.getRealm({ bookId }), (value) => {
+    setOperation('compare')
+    try { await tool.read(() => api.getRealm({ bookId }), (value) => {
       if (!isRealmSnapshot(value, bookId) || value.bookRevision < bookRef.current.book.revision || value.bookRevision < (snapshotRef.current?.bookRevision ?? 0)) throw new Error('Stale realm comparison')
       if (value.revision === snapshotRef.current?.revision && value.bookRevision === snapshotRef.current.bookRevision) {
         setConflict(null); tool.setNotice('基线与最新记录一致，当前输入保留。')
       } else setConflict(value)
-    })
+    }) } finally { setOperation(null) }
   }
   async function continueOnLatest() {
     if (!draft || !conflict || tool.locked || syncRef.current) return
@@ -256,7 +260,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
           <span className={styles.conditionStatus} aria-label={item.met ? '已满足' : item.available === null ? '未知' : '不足'}><StudioIcon name={item.met ? 'check' : item.available === null ? 'info' : 'minus'} size={20} /></span>
         </li>)}</ul>}
         {simulating && <div className={styles.simulationProgress} role="status"><span>正在核对突破条件…</span><progress aria-label="突破推演进行中" /></div>}
-        <div className={styles.simulationAction}><button type="button" className={styles.primaryButton} disabled={blocked || Boolean(unavailable) || insufficient} title={unavailable ?? (insufficient ? '条件不足或含未知项' : '推演下一境界')} onClick={() => void simulate()}><StudioIcon name="spark" size={28} />推演突破</button>
+        <div className={styles.simulationAction}><button type="button" className={styles.primaryButton} disabled={blocked || Boolean(unavailable) || insufficient} aria-busy={simulating && tool.busy} title={unavailable ?? (insufficient ? '条件不足或含未知项' : '推演下一境界')} onClick={() => void simulate()}><StudioIcon name="spark" size={28} />推演突破</button>
           {(unavailable || insufficient) && <p className={styles.note}>{unavailable ?? '条件不足或含未知项，请先核对设定。'}</p>}</div>
       </aside>
       <aside className={styles.balance} data-warning={stronger.length > 0}><StudioIcon name={stronger.length ? 'warning' : 'info'} size={32} /><div><h3>战力平衡提醒</h3>
@@ -270,7 +274,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
     {picker && !leave.confirming && modal('选择对比人物', <><RealmPersonPicker api={api} book={book} selected={selected} maximum={3} disabled={tool.locked} onPick={toggle} />
       <div className={styles.selectedPeople}>{characters.map((person) => <button className={styles.button} key={person.id} type="button" disabled={tool.locked} onClick={() => { setSelected((current) => current.filter((id) => id !== person.id)); setSimulation(null) }}>{person.name}<StudioIcon name="close" size={16} /></button>)}</div>
       <button className={styles.button} type="button" disabled={tool.locked} onClick={() => setPicker(false)}>完成</button></>, () => setPicker(false))}
-    {draft && !discardEditor && !tool.pending && !leave.confirming && modal('境界与战力设定', <RealmEditor api={api} book={book} fields={draft} people={[...people.values()]} disabled={tool.locked} error={tool.error} notice={tool.notice}
+    {draft && !discardEditor && !tool.pending && !leave.confirming && modal('境界与战力设定', <RealmEditor api={api} book={book} fields={draft} people={[...people.values()]} disabled={tool.locked} saving={tool.busy && operation === 'configure'} comparing={tool.busy && operation === 'compare'} error={tool.error} notice={tool.notice}
       onPerson={(person) => setKnown((current) => [...current.filter((item) => item.id !== person.id), person])}
       onChange={(value) => { setDraft(value); tool.setDirty(true); setSimulation(null) }} onSave={() => void mutate({ kind: 'configure', fields: draft })} onCancel={closeEditor}
       onCompare={() => void compare()} conflict={conflict} onContinue={() => void continueOnLatest()} onUseLatest={() => {
@@ -286,10 +290,10 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
       <ul>{validSimulation.checks.filter((item) => item.consume).map((item) => <li key={item.id}>{item.name}：{item.available?.toLocaleString()} → {(item.available! - item.required).toLocaleString()}</li>)}</ul>
       <p className={styles.note}>预期战力采用作者录入值；登记会清空当前小阶段和下一阶预期值，六维保持原记录。本屏资源独立于织星背包。</p>
       {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}<div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked} onClick={() => setSimulation(null)}>返回</button>
-        <button className={styles.primaryButton} type="button" disabled={blocked || !validSimulation.ready} onClick={() => void mutate({ kind: 'breakthrough', personId: validSimulation.personId })}>确认登记突破</button></div>
+        <button className={styles.primaryButton} type="button" disabled={blocked || !validSimulation.ready} aria-busy={tool.busy && operation === 'breakthrough'} onClick={() => void mutate({ kind: 'breakthrough', personId: validSimulation.personId })}>确认登记突破</button></div>
     </div>, () => { if (!tool.locked) setSimulation(null) })}
     {(tool.pending || syncRequired) && <section className={styles.warning}><p>{tool.pending ? '写入结果尚未确认，请先核对原请求。' : '写入已确认，作品目录尚未同步。可重新读取或留存记录后进入恢复。'}</p>
-      {tool.pending && <button className={styles.button} type="button" disabled={tool.busy || !tool.pending.error.requestId} onClick={() => void tool.checkReceipt().then((ok) => { if (ok) void reload() })}>核对原写入</button>}
+      {tool.pending && <button className={styles.button} type="button" disabled={tool.busy || !tool.pending.error.requestId} aria-busy={tool.busy} onClick={() => void tool.checkReceipt().then((ok) => { if (ok) void reload() })}>核对原写入</button>}
       <textarea aria-label="境界与战力恢复记录" readOnly rows={6} value={recoveryText} /><label className={styles.check}><input type="checkbox" checked={preserved === recoveryText} onChange={(event) => setPreserved(event.target.checked ? recoveryText : null)} />已留存当前输入与原操作编号</label>
       <button className={styles.button} type="button" disabled={tool.busy || preserved !== recoveryText} onClick={onRecover}>进入恢复</button></section>}
     {leave.confirming && modal('离开境界与战力？', <><p>境界设定有未保存修改。</p><div className={styles.actions}><button className={styles.button} type="button" onClick={leave.keepEditing}>{leave.source === 'window' ? '返回保存' : '继续编辑'}</button>

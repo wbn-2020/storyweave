@@ -15,8 +15,9 @@
 .toolbar > span { color: var(--color-muted); margin-left: var(--space-2); }
 .button { composes: button from './stellar/Workspace.module.css'; }
 .iconButton { composes: button from './stellar/Workspace.module.css'; width: var(--control-height); height: var(--control-height); flex: 0 0 auto; padding: var(--space-2); }
-.primaryButton { composes: primaryButton from './stellar/Workspace.module.css'; min-height: var(--space-12); border-color: var(--color-warning); color: var(--bg-deep); background: linear-gradient(115deg,var(--color-warning),color-mix(in srgb,var(--color-warning) 60%,var(--color-ink))); font-size: var(--text-lg); border-radius: var(--radius-xl); box-shadow: 0 0 16px var(--color-warning-soft); }
-.primaryButton:hover:not(:disabled) { background: var(--color-warning); }
+.primaryButton { composes: primaryButton from './stellar/Workspace.module.css'; }
+.panel .primaryButton { min-height: var(--space-12); border-color: var(--color-warning); color: var(--bg-deep); background: linear-gradient(115deg,var(--color-warning),color-mix(in srgb,var(--color-warning) 60%,var(--color-ink))); font-size: var(--text-lg); border-radius: var(--radius-xl); box-shadow: 0 0 16px var(--color-warning-soft); }
+.panel .primaryButton:hover:not(:disabled) { background: var(--color-warning); }
 .note { composes: muted from './stellar/Workspace.module.css'; }
 .error { composes: error from './stellar/Workspace.module.css'; }
 .notice { composes: notice from './stellar/Workspace.module.css'; }
@@ -139,7 +140,7 @@
   .profileButton { opacity: 0; pointer-events: none; transition: opacity var(--duration) var(--ease); }
   .character:is(:hover,:focus-within) .profileButton { opacity: 1; pointer-events: auto; }
 }
-@media(max-width:1439px) {
+@media (width < 1440px) {
   .ladder,.conditions { padding: var(--space-4); }
   .ladder li { gap: var(--space-3); }
   .realmMark { width: 56px; height: 64px; }
@@ -147,13 +148,13 @@
   .conditionSymbol { flex-basis: var(--space-10); width: var(--space-10); height: var(--space-10); }
   .conditions li { gap: var(--space-2); }
 }
-@media(max-width:1199px) {
+@media (width < 1200px) {
   .workspace { grid-template-columns: minmax(0,26fr) minmax(0,74fr); grid-template-areas: 'ladder comparison' 'ladder conditions' 'balance balance'; grid-template-rows: auto; }
   .conditions { min-height: 0; }
   .conditions ul { display: flex; flex-wrap: wrap; gap: var(--space-4); }
   .conditions li { flex: 1 1 160px; }
 }
-@media(max-width:999px) {
+@media (width < 1000px) {
   .workspace { grid-template-columns: minmax(0,1fr); grid-template-areas: 'ladder' 'comparison' 'conditions' 'balance'; }
   .ladder ol { flex-direction: row-reverse; overflow-x: auto; padding-bottom: var(--space-2); }
   .ladder li { flex: 0 0 180px; padding: var(--space-3); flex-direction: column; align-items: flex-start; }
@@ -161,7 +162,7 @@
   .ladder li::after,.ladderScene { display: none; }
   .current { right: var(--space-3); }
 }
-@media(max-width:699px) {
+@media (width < 700px) {
   .workspace { gap: var(--space-3); }
   .comparisons { grid-template-columns: repeat(3,minmax(196px,1fr)); overflow-x: auto; padding: var(--space-1) var(--space-1) var(--space-3); }
   .comparison { padding-inline: var(--space-2); }
