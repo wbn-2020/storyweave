@@ -5,9 +5,10 @@ import { measureStudyStyle, measureStudyStyleAnnotations } from '../study-style-
 import { STUDY_SENSE_LABELS } from '../../contracts/study-card'
 import styles from './StudyStyleMetrics.module.css'
 
-export function StudyStyleMetrics({ source, facts }: {
+export function StudyStyleMetrics({ source, facts, compact = false }: {
   source: CreativeResource | undefined
   facts: StyleCard
+  compact?: boolean
 }) {
   const measurement = useMemo(() => source ? measureStudyStyle(source.text) : null, [source?.text])
   const annotations = useMemo(() => source ? measureStudyStyleAnnotations(source.text, facts) : null, [source?.text, facts])
@@ -43,7 +44,7 @@ export function StudyStyleMetrics({ source, facts }: {
     ? `感官标注分布，共 ${annotations.total} 条。${annotations.senses.map((entry) => `${entry.label} ${entry.count} 条`).join('；')}。归类为模型判断，不代表全文真实感官比例。`
     : annotationUnavailable
 
-  return <div className={styles.metrics}>
+  return <div className={styles.metrics} data-compact={compact}>
     <div className={styles.grid}>
       <div className={styles.distribution}><figure>
         {curve && <svg className={styles.curve} viewBox="0 0 240 84" role="img" aria-label={curve.label}>
@@ -101,7 +102,7 @@ export function StudyStyleMetrics({ source, facts }: {
             </svg>
             <ul className={styles.senseLegend} aria-label="感官标注数量">{annotations.senses.map((entry) =>
               <li key={entry.sense}><i className={styles.sense} data-sense={entry.sense} aria-hidden="true" />{entry.label} {entry.count}</li>)}</ul>
-            <p className={styles.annotationNote}>模型标注 · {annotations.total} 条</p>
+            <p className={styles.annotationNote} data-summary>模型标注 · {annotations.total} 条</p>
           </> : <p className={styles.annotationNote}>{annotationUnavailable}</p>}
           <p className={styles.analysisText} tabIndex={0}>{facts.senses || '尚未提供感官分析'}</p>
         </dd></div>
@@ -110,7 +111,7 @@ export function StudyStyleMetrics({ source, facts }: {
             <ul className={styles.verbTags} aria-label="模型动词候选，按固定原文字面次数排序">{annotations.verbs.map((entry) =>
               <li key={entry.word} title={`${entry.word}：固定原文字面出现 ${entry.count} 次，词性为模型判断`}
                 aria-label={`${entry.word}，固定原文字面出现 ${entry.count} 次，模型动词候选`}>{entry.word}</li>)}</ul>
-            <p className={styles.annotationNote}>模型动词候选</p>
+            <p className={styles.annotationNote} data-summary>模型动词候选</p>
           </> : <p className={styles.annotationNote}>{annotationUnavailable === '未提供标注' ? '未提供动词候选' : annotationUnavailable}</p>}
           <p className={styles.analysisText} tabIndex={0}>{facts.diction || '尚未提供措辞分析'}</p>
         </dd></div>

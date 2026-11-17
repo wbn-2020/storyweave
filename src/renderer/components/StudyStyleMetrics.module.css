@@ -56,6 +56,27 @@
 .method summary { cursor: pointer; }
 .method p { margin: var(--space-2) 0 0; }
 .unavailable { display: grid; place-items: center; min-height: 132px; margin: 0; color: var(--color-muted); font-size: var(--text-xs); text-align: center; }
+/* 四卡首屏只展示统计摘要；完整分析和逐字证据继续保留在原审阅详情及统计口径中。 */
+@media (width >= 1000px) {
+  .metrics[data-compact='true'] .grid { grid-template-columns: minmax(0,1.2fr) minmax(88px,.8fr) minmax(0,1fr); gap: var(--space-3); }
+  .metrics[data-compact='true'] .curve { height: 48px; }
+  .metrics[data-compact='true'] .histogram { height: 76px; }
+  .metrics[data-compact='true'] .ring { height: 96px; width: 96px; }
+  .metrics[data-compact='true'] figcaption small { display: none; }
+  .metrics[data-compact='true'] .legend { margin-top: var(--space-1); }
+  .metrics[data-compact='true'] .unavailable { min-height: 124px; }
+  .metrics[data-compact='true'] .qualitative { grid-column: auto; grid-template-columns: minmax(0,1fr); border-left: 1px solid var(--color-line); border-top: 0; padding: 0 0 0 var(--space-3); gap: var(--space-2); margin-top: 0; }
+  .metrics[data-compact='true'] .qualitative > div + div { border-top: 1px solid var(--color-line); padding-top: var(--space-2); }
+  .metrics[data-compact='true'] .facts,.metrics[data-compact='true'] .analysisText { display: none; }
+  .metrics[data-compact='true'] .qualitative { display: grid; }
+  .metrics[data-compact='true'] .qualitative dd { margin-top: var(--space-1); }
+  .metrics[data-compact='true'] .verbTags { margin-top: var(--space-1); gap: var(--space-1); }
+  .metrics[data-compact='true'] .verbTags li { padding: var(--space-1) var(--space-2); }
+  .metrics[data-compact='true'] .senseLegend,.metrics[data-compact='true'] .annotationNote { margin-top: var(--space-1); }
+  .metrics[data-compact='true'] .annotationNote[data-summary] { display: none; }
+  .metrics[data-compact='true'] .method { margin-top: var(--space-1); line-height: 1.4; }
+  .metrics[data-compact='true'] .method summary { padding-block: var(--space-1); }
+}
 @container(max-width:639px) { .grid { grid-template-columns: minmax(0,1.2fr) minmax(110px,.8fr); }.qualitative { grid-column: 1/-1; grid-template-columns: repeat(2,minmax(0,1fr)); border-left: 0; border-top: 1px solid var(--color-line); padding: var(--space-3) 0 0; }.qualitative dd { max-height: 88px; }.qualitative .visualFacts { max-height: none; }.qualitative > div + div { border-top: 0; padding-top: 0; } }
 @container(max-width:479px) { .grid,.qualitative { grid-template-columns: minmax(0,1fr); }.qualitative { grid-column: auto; }.dialogue,.qualitative > div + div { padding-top: var(--space-3); border-top: 1px solid var(--color-line); } }
 @media(forced-colors:active) { .axis,.gridline { stroke: CanvasText; }.curveArea { fill: Canvas; }.curveLine { stroke: Highlight; }.bar,.tick,.value,.ringText { fill: CanvasText; }.ringBase,.unknownRing { stroke: GrayText; }.ringValue { stroke: Highlight; }.legend i { background: Highlight; }.legend span:last-child i { background: GrayText; }.qualitative,.dialogue,.qualitative > div + div { border-color: CanvasText; }.sense[data-sense] { fill: CanvasText; background: CanvasText; stroke: Canvas; }.verbTags li { border: 1px solid CanvasText; } }
