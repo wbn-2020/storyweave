@@ -28,10 +28,10 @@
 .dialog button[aria-busy='true'] { border-color: var(--color-line-strong); background: var(--bg-raised); color: var(--color-ink-secondary); }
 .sourceCaption { padding: var(--space-2) var(--space-6) 0; color: var(--color-paper-muted); font-size: var(--text-xs); }
 .manuscriptScroll { max-height: max(300px,calc(100dvh - 420px)); overflow: auto; scrollbar-gutter: stable; scroll-padding-block: var(--space-4); margin: var(--space-3) var(--space-6) var(--space-6); padding: var(--space-4) var(--space-6); border: 1px solid var(--color-line); border-left-color: var(--color-line-strong); border-radius: var(--radius-sm); background: color-mix(in srgb,var(--color-paper) 60%,transparent); }
-.manuscriptBlock { display: grid; grid-template-columns: minmax(0,1fr) 144px; gap: var(--space-5); padding-block: var(--space-4); }
-.manuscriptBlock > p { font: 18px/2 var(--font-ui); white-space: pre-wrap; color: var(--color-paper-ink); overflow-wrap: anywhere; }
+.manuscriptBlock { display: grid; grid-template-columns: minmax(0,1fr) 144px; gap: var(--space-5); align-items: start; padding-block: var(--space-2); }
+.manuscriptBlock > p { font: 18px/1.8 var(--font-ui); white-space: pre-wrap; color: var(--color-paper-ink); overflow-wrap: anywhere; }
 .manuscriptBlock mark { background: var(--color-accent-soft); color: var(--color-accent); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-.manuscriptBlock aside { display: grid; gap: var(--space-3); align-content: start; }
+.manuscriptBlock aside { display: grid; gap: var(--space-1); align-content: start; }
 /* 批注随标题自然增高，避免多条短批注用装饰留白撑开同一段正文。 */
 .annotation { --review-tone: var(--color-accent); position: relative; display: grid; grid-template-columns: var(--space-6) minmax(0,1fr); align-items: start; gap: var(--space-2); min-width: 0; min-height: var(--control-compact); padding: 0 0 var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-paper-muted); text-align: left; font-size: var(--text-sm); line-height: 1.7; overflow-wrap: anywhere; }
 .annotation::before { content: ''; position: absolute; top: var(--space-6); bottom: 0; left: calc(var(--space-3) - 1px); width: 1px; background: var(--review-tone); pointer-events: none; }
@@ -48,7 +48,12 @@
 .reader[data-lens='emotion'] { --reader-tone: var(--color-accent); --reader-haze: var(--color-accent-soft); }
 .reader header { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
 .dialog .reader header h4 { flex: 1; min-width: 0; font-size: 20px; line-height: 1.4; overflow-wrap: anywhere; }
-.readerSymbol { display: grid; place-items: center; width: calc(2 * var(--space-10)); height: calc(2 * var(--space-10)); flex-shrink: 0; border: 1px solid var(--reader-tone); border-radius: var(--radius-pill); background: var(--reader-haze); color: var(--reader-tone); box-shadow: inset 0 0 var(--space-4) var(--reader-haze); }
+.readerSymbol { display: grid; place-items: center; width: calc(2 * var(--space-10)); height: calc(2 * var(--space-10)); flex-shrink: 0; border: 1px solid var(--reader-tone); border-radius: var(--radius-pill); background: radial-gradient(circle at 35% 30%,color-mix(in srgb,var(--reader-tone) 24%,transparent),transparent 70%),var(--reader-haze); color: var(--reader-tone); box-shadow: inset 0 0 var(--space-5) var(--reader-haze); }
+/* 仅试读符印增加填充与光晕，共用工具图标继续遵循原有线稿样式。 */
+.readerSymbol > svg { filter: drop-shadow(0 0 var(--space-2) var(--reader-haze)); }
+.reader[data-lens='pace'] .readerSymbol path { fill: currentColor; stroke-width: 1; }
+.reader[data-lens='logic'] .readerSymbol path { fill: color-mix(in srgb,currentColor 24%,transparent); }
+.reader[data-lens='emotion'] .readerSymbol path { stroke-width: 2.5; }
 .readerScore { display: inline-flex; align-items: center; gap: var(--space-1); flex-shrink: 0; color: var(--color-warning); font: var(--text-lg)/1.5 var(--font-num); }
 .readerScore > svg { fill: currentColor; }
 .readerScore[data-unknown='true'] { color: var(--color-muted); }
@@ -90,10 +95,9 @@
   .dialog .manuscript header { min-height: calc(var(--space-12) + var(--space-4)); padding-block: var(--space-3); }
   .dialog .readers { padding: var(--space-4); }
   .dialog .readers > h3 { padding-bottom: var(--space-3); }
-  .dialog .reader { padding: var(--space-2); }
-  .dialog .reader header { margin-bottom: var(--space-1); }
-  .dialog .readerSymbol { width: calc(2 * var(--space-8) + var(--space-2)); height: calc(2 * var(--space-8) + var(--space-2)); }
-  .dialog .readerSymbol > svg { width: var(--space-10); height: var(--space-10); }
+  .dialog .reader { margin-top: var(--space-2); padding: var(--space-2); }
+  .dialog .reader header { margin-bottom: 0; }
+  .dialog .readerSymbol > svg { width: var(--space-12); height: var(--space-12); }
   .dialog .readerComment { padding: var(--space-2); font-size: var(--text-md); }
   .dialog .comments > div { gap: var(--space-1); }
   .dialog .locateButton { width: min(100%,220px); }
