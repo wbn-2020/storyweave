@@ -5,10 +5,10 @@ import { StudioIcon } from './StudioIcon'
 import styles from './StellarWeave.module.css'
 
 interface Props {
-  fields: WeaveState; book: BookSnapshot; disabled: boolean; error: string | null; notice: string | null; conflict: WeaveSnapshot | null
+  fields: WeaveState; book: BookSnapshot; disabled: boolean; saving: boolean; comparing: boolean; error: string | null; notice: string | null; conflict: WeaveSnapshot | null
   onChange: (fields: WeaveState) => void; onSave: () => void; onCancel: () => void; onCompare: () => void; onUseLatest: () => void
 }
-export function WeaveSystemEditor({ fields, book, disabled, error, notice, conflict, onChange, onSave, onCancel, onCompare, onUseLatest }: Props) {
+export function WeaveSystemEditor({ fields, book, disabled, saving, comparing, error, notice, conflict, onChange, onSave, onCancel, onCompare, onUseLatest }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   function update(patch: Partial<WeaveState>) { onChange({ ...fields, ...patch }) }
   function task(id: string, patch: Partial<WeaveTask>) { update({ tasks: fields.tasks.map((item) => item.id === id ? { ...item, ...patch } : item) }) }
@@ -81,7 +81,7 @@ export function WeaveSystemEditor({ fields, book, disabled, error, notice, confl
       <textarea rows={7} readOnly aria-label="最新系统设定" value={JSON.stringify(conflict.fields, null, 2)} />
       <button className={styles.button} type="button" disabled={disabled} onClick={onUseLatest}>放弃当前输入并载入最新版本</button></section>}
     <div className={styles.actions}><button className={styles.button} type="button" disabled={disabled} onClick={onCancel}>返回</button>
-      <button className={styles.button} type="button" disabled={disabled} onClick={onCompare}>读取最新版本进行比较</button>
-      <button className={styles.primaryButton} type="submit" disabled={disabled || Boolean(conflict)}>保存系统设定</button></div>
+      <button className={styles.button} type="button" disabled={disabled} aria-busy={comparing} onClick={onCompare}>读取最新版本进行比较</button>
+      <button className={styles.primaryButton} type="submit" disabled={disabled || Boolean(conflict)} aria-busy={saving}>保存系统设定</button></div>
   </form>
 }

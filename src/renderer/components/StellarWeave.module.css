@@ -14,8 +14,9 @@
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: var(--space-2); flex: 1; }
 .toolbar > span { color: var(--color-muted); }
 .button { composes: button from './stellar/Workspace.module.css'; }
-.primaryButton { composes: primaryButton from './stellar/Workspace.module.css'; color: var(--bg-deep); background: linear-gradient(120deg,var(--color-warning),color-mix(in srgb,var(--color-warning) 60%,var(--color-ink))); border-color: var(--color-warning); box-shadow: 0 0 24px var(--color-warning-soft); border-radius: var(--radius-pill); font-size: var(--text-lg); min-height: var(--space-12); }
-.primaryButton:hover:not(:disabled) { background: var(--color-warning); }
+.primaryButton { composes: primaryButton from './stellar/Workspace.module.css'; }
+.panel .primaryButton { color: var(--bg-deep); background: linear-gradient(120deg,var(--color-warning),color-mix(in srgb,var(--color-warning) 60%,var(--color-ink))); border-color: var(--color-warning); box-shadow: 0 0 24px var(--color-warning-soft); border-radius: var(--radius-pill); font-size: var(--text-lg); min-height: var(--space-12); }
+.panel .primaryButton:hover:not(:disabled) { background: var(--color-warning); }
 .iconButton { composes: button from './stellar/Workspace.module.css'; width: var(--control-height); height: var(--control-height); padding: var(--space-2); flex: 0 0 auto; }
 .actions { composes: actions from './stellar/Workspace.module.css'; }
 .fieldGrid { composes: fieldGrid from './stellar/Workspace.module.css'; }
@@ -51,7 +52,7 @@
 .progress::-webkit-progress-value { border-radius: var(--radius-pill); background: linear-gradient(90deg,var(--color-warning),color-mix(in srgb,var(--color-warning) 65%,var(--color-ink))); }
 .progress::-moz-progress-bar { border-radius: var(--radius-pill); background: var(--color-warning); }
 .steps { list-style: none; margin: var(--space-4) 0; padding: 0; display: grid; gap: var(--space-4); }
-.steps label { display: flex; flex-direction: row; align-items: center; gap: var(--space-3); position: relative; cursor: pointer; color: var(--color-ink-secondary); }
+.panel .steps label { display: flex; flex-direction: row; align-items: center; gap: var(--space-3); min-height: var(--control-compact); position: relative; cursor: pointer; color: var(--color-ink-secondary); }
 .steps label > input { position: absolute; inset: 0 auto auto 0; opacity: 0; }
 .stepMark,.completion { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; border: 2px solid var(--color-line-strong); border-radius: var(--radius-pill); color: var(--color-warning); }
 .steps label[data-done='true'] .stepMark,.completion[data-done='true'] { border-color: var(--color-warning); }
@@ -114,11 +115,11 @@
 .editorList { display: grid; gap: var(--space-3); margin-block: var(--space-3); }
 .editorRow { display: flex; align-items: flex-end; gap: var(--space-3); }
 .editorRow > label { flex: 1; }
-@media (max-width:1439px) {
+@media (width < 1440px) {
   .taskList summary { gap: var(--space-2); padding-inline: var(--space-2); }
   .taskIcon { width: var(--space-12); height: var(--space-12); }
 }
-@media (max-width:1199px) {
+@media (width < 1200px) {
   .systemBar { grid-template-columns: minmax(0,1fr) auto; }
   .systemTitle { grid-column: 1; }
   .systemBar dl { grid-column: 2; }
@@ -128,7 +129,7 @@
   .columns[data-sections='2'] > .right { grid-column: auto; display: flex; }
   .main { min-height: 460px; }
 }
-@media (max-width:699px) {
+@media (width < 1000px) {
   .columns,.columns[data-sections='2'],.right { grid-template-columns: minmax(0,1fr); }
   .main { min-height: 380px; }
   .footer { flex-wrap: wrap; }

@@ -43,6 +43,7 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
   const [upgradeConfirmed, setUpgradeConfirmed] = useState(false)
   const [preserved, setPreserved] = useState<string | null>(null)
   const [syncRequired, setSyncRequired] = useState(false)
+  const [operation, setOperation] = useState<WeaveAction['kind'] | 'compare' | null>(null)
   const snapshotRef = useRef(snapshot), bookRef = useRef(book), syncRef = useRef(false)
   const intended = useRef<WeaveMutationInput | null>(null)
   const needsRead = useRef(true)
@@ -109,6 +110,7 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
     const baseline = snapshotRef.current
     if (!baseline || tool.locked || syncRef.current || baseline.requiresUpgrade) return false
     if (stale || archived) { tool.setError(archived ? '作品已归档，当前输入保留，不能写入。' : '作品已有新版本，请先读取最新版本进行比较。'); return false }
+    setOperation(action.kind)
     try {
       const input = parseWeaveMutationInput({ bookId, expectedBookRevision: baseline.bookRevision, expectedRevision: baseline.revision, operationId: crypto.randomUUID(), action })
       const expected = applyWeaveAction(baseline.fields, input.action)
@@ -126,6 +128,7 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
       if (success) await reload()
       return success
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请核对系统设定后重试。'); return false }
+    finally { setOperation(null) }
   }
   async function upgrade() {
     if (!snapshot?.requiresUpgrade || !upgradeConfirmed || tool.locked || archived) return
@@ -143,13 +146,14 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
   function change(next: WeaveState) { if (!tool.locked) { setDraft(next); tool.setDirty(true); tool.setNotice(null) } }
   async function compare() {
     if (tool.locked || !draft || syncRef.current) return
-    await tool.read(() => api.getWeaveSystem({ bookId }), (value) => {
+    setOperation('compare')
+    try { await tool.read(() => api.getWeaveSystem({ bookId }), (value) => {
       if (!isWeaveSnapshot(value, bookId) || value.bookRevision < bookRef.current.book.revision || value.bookRevision < (snapshotRef.current?.bookRevision ?? 0)) throw new Error('Stale comparison')
       if (value.revision === snapshotRef.current?.revision && value.bookRevision === snapshotRef.current.bookRevision) {
         setConflict(null); tool.setNotice('最新版本与当前基线一致，输入保留，可以继续保存。'); return
       }
       setConflict(value)
-    })
+    }) } finally { setOperation(null) }
   }
   function step(task: WeaveTask, id: string, done: boolean) {
     if (!blocked) void mutate({ kind: 'step', taskId: task.id, stepId: id, done })
@@ -234,7 +238,7 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
       </div><button className={styles.refreshButton} type="button" disabled={blocked || fields.storyMinute >= MAX_WEAVE_MINUTE} onClick={startRefresh}><StudioIcon name="refresh" size={24} />刷新任务</button></footer>
       {fields.inventory.length > 0 && <details className={styles.inventory}><summary>已领取物品 · {fields.inventory.length} 种</summary><ul>{fields.inventory.map((item) => <li key={item.name}><span>{item.name}</span><strong>× {item.quantity}</strong></li>)}</ul></details>}
     </>}
-    {draft && !tool.pending && !leave.confirming && modal('系统设定', <WeaveSystemEditor fields={draft} book={book} disabled={tool.locked} onChange={change}
+    {draft && !tool.pending && !leave.confirming && modal('系统设定', <WeaveSystemEditor fields={draft} book={book} disabled={tool.locked} saving={tool.busy && operation === 'configure'} comparing={tool.busy && operation === 'compare'} onChange={change}
       error={tool.error} notice={tool.notice} onSave={() => void mutate({ kind: 'configure', fields: draft })} onCancel={() => { if (tool.hasChanges()) void onClose(); else setDraft(null) }}
       onCompare={() => void compare()} conflict={conflict} onUseLatest={() => {
         if (!conflict || tool.locked) return
@@ -245,13 +249,13 @@ export function WeaveSystemPanel({ api, book, disabled, onClose, onChapter, onBo
       <p>{confirmation.kind === 'claim' ? `领取「${confirmationTask?.title ?? ''}」的设定奖励。`
         : `兑换「${confirmationOffer?.name ?? ''}」，扣除 ${confirmationOffer?.price ?? 0} ${fields?.currency ?? ''}。`}</p>
       <p>变更写入当前作品的系统历史。</p>{tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
-      <div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked} onClick={() => setConfirmation(null)}>取消</button><button className={styles.primaryButton} type="button" disabled={blocked} onClick={() => void mutate(confirmation)}>确认</button></div>
+      <div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked} onClick={() => setConfirmation(null)}>取消</button><button className={styles.primaryButton} type="button" disabled={blocked} aria-busy={tool.busy && operation === confirmation.kind} onClick={() => void mutate(confirmation)}>确认</button></div>
     </>, () => { if (!tool.locked) setConfirmation(null) })}
     {refreshing && !tool.pending && modal('刷新任务', <form className={styles.editor} onSubmit={confirmRefresh}>
       <p>当前为{clock(fields?.storyMinute ?? 0)}。跨日将重置每日任务及未领取奖励；依据本书规则结算未完成天数和冷却。</p>
       <div className={styles.fieldGrid}><label>推进至剧情第几日<input type="number" min={1} max={Math.floor(MAX_WEAVE_MINUTE / 1440) + 1} required value={refreshDay} disabled={tool.locked} onChange={(event) => setRefreshDay(event.target.value)} /></label>
         <label>时刻<input type="time" required value={refreshTime} disabled={tool.locked} onChange={(event) => setRefreshTime(event.target.value)} /></label></div>
-      {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}<div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked} onClick={() => setRefreshing(false)}>取消</button><button className={styles.primaryButton} type="submit" disabled={blocked}>确认推进并刷新</button></div>
+      {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}<div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked} onClick={() => setRefreshing(false)}>取消</button><button className={styles.primaryButton} type="submit" disabled={blocked} aria-busy={tool.busy && operation === 'refresh'}>确认推进并刷新</button></div>
     </form>, () => { if (!tool.locked) setRefreshing(false) })}
     {(tool.pending || syncRequired) && <section className={styles.warning}><p>{tool.pending ? '原写入结果尚未确认，暂停重发、领取、兑换和离开。' : '写入已确认，作品目录尚未同步。可重新读取；同步失败时留存记录后进入恢复。'}</p>
       {tool.pending && <button className={styles.button} type="button" disabled={tool.busy || !tool.pending.error.requestId} onClick={() => void tool.checkReceipt().then((ok) => { if (ok) void reload() })}>核对原写入</button>}
