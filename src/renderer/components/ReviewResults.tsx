@@ -113,6 +113,10 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot | null>(null)
   const snapshotRef = useRef(snapshot)
   const [submitted, setSubmitted] = useState<SaveReviewIssueInput | null>(null)
+  const [saving, setSaving] = useState<{ index: number; status: 'open' | 'dismissed' | 'intentional' } | null>(null)
+  const [reading, setReading] = useState(false)
+  const [checking, setChecking] = useState<'read' | 'write' | 'sync' | null>(null)
+  const [synchronizing, setSynchronizing] = useState(false)
   const [sync, setSync] = useState(false)
   const [syncRequestId, setSyncRequestId] = useState<string | null>(null)
   const syncBusy = useRef(false)
@@ -140,10 +144,13 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
   useLayoutEffect(() => { if (expanded && selected !== null) revealIssue(selected) }, [expanded, selected])
   async function load() {
     if (tool.hasChanges() || tool.hasPending() || syncRef.current) return
-    await tool.read(() => api.getWorkbench({ bookId: source.bookId }), (value) => {
-      if (value.bookId !== source.bookId || value.bookRevision < bookRevision || !Array.isArray(value.issues)) throw new Error('Review snapshot mismatch')
-      snapshotRef.current = value; setSnapshot(value)
-    })
+    setReading(true)
+    try {
+      await tool.read(() => api.getWorkbench({ bookId: source.bookId }), (value) => {
+        if (value.bookId !== source.bookId || value.bookRevision < bookRevision || !Array.isArray(value.issues)) throw new Error('Review snapshot mismatch')
+        snapshotRef.current = value; setSnapshot(value)
+      })
+    } finally { setReading(false) }
   }
   function edit(index: number, patch: Partial<Pick<Draft, 'reason' | 'suggestion' | 'replacement'>>) {
     if (blocked || savedItem(index)) return
@@ -152,7 +159,7 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
   }
   async function synchronize(value = snapshotRef.current) {
     if (!value || !syncRef.current || syncRequestId || syncBusy.current) return
-    syncBusy.current = true
+    syncBusy.current = true; setSynchronizing(true)
     try {
       await onChanged(value)
       if (!mounted.current) return
@@ -162,16 +169,24 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
         if (error instanceof DomainError && error.detail.requestId) setSyncRequestId(error.detail.requestId)
         tool.setError(`问题写入已确认，作品信息仍待同步。${error instanceof DomainError ? error.detail.message : '请重试同步或留存后恢复。'}`)
       }
-    } finally { syncBusy.current = false }
+    } finally { syncBusy.current = false; if (mounted.current) setSynchronizing(false) }
   }
   async function checkSync() {
     if (!syncRequestId || syncBusy.current) return
-    await tool.read(() => api.getRequestStatus({ requestId: syncRequestId }), (value) => {
-      if (value.state !== 'completed') { tool.setError('原同步读取仍待核对。请稍后再查，或留存后进入恢复。'); return }
-      if (value.response.command !== 'knowledge.status' && value.response.command !== 'book.get') throw new Error('Sync request mismatch')
-      if (!value.response.result.ok && ['REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(value.response.result.error.code)) return
-      setSyncRequestId(null); tool.setNotice('原同步读取已结束，可重新同步作品信息。')
-    })
+    setChecking('sync')
+    try {
+      await tool.read(() => api.getRequestStatus({ requestId: syncRequestId }), (value) => {
+        if (value.state !== 'completed') { tool.setError('原同步读取仍待核对。请稍后再查，或留存后进入恢复。'); return }
+        if (value.response.command !== 'knowledge.status' && value.response.command !== 'book.get') throw new Error('Sync request mismatch')
+        if (!value.response.result.ok && ['REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(value.response.result.error.code)) return
+        setSyncRequestId(null); tool.setNotice('原同步读取已结束，可重新同步作品信息。')
+      })
+    } finally { setChecking(null) }
+  }
+  async function checkReceipt(kind: 'read' | 'write') {
+    setChecking(kind)
+    try { if (kind === 'read') await tool.checkReadReceipt(); else await tool.checkReceipt() }
+    finally { setChecking(null) }
   }
   async function save(index: number, status: 'open' | 'dismissed' | 'intentional') {
     if (blocked || !parsed.proposal || !snapshot || savedItem(index)) return
@@ -184,12 +199,14 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
           anchor: { chapterId: source.chapterId, revisionId: source.context.chapterRevisionId, blockIds: item.blockIds }, aiRunId: source.id,
           candidateSource: { version: 1, index, runVersion: source.version, contextHash: source.context.contextHash, item } } })
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请检查问题内容。'); return }
-    setSubmitted(input); setPreserved(false)
-    const success = await tool.write('workbench.issue', () => api.saveReviewIssue(input), (value) => {
-      const saved = value?.issues?.find((issue) => issue.id === input.id)
-      return value.bookId === input.bookId && value.bookRevision === input.expectedBookRevision + 1 && Boolean(saved && saved.revision === 1 && sameFields(saved, input.fields))
-    }, (value) => { snapshotRef.current = value; setSnapshot(value); syncRef.current = true; setSync(true) }, status === 'open' ? '已登记。可在审稿清单中查看差异并确认替换。' : '已保存作者决定，正文保持原样。')
-    if (success) await synchronize()
+    setSubmitted(input); setPreserved(false); setSaving({ index, status })
+    try {
+      const success = await tool.write('workbench.issue', () => api.saveReviewIssue(input), (value) => {
+        const saved = value?.issues?.find((issue) => issue.id === input.id)
+        return value.bookId === input.bookId && value.bookRevision === input.expectedBookRevision + 1 && Boolean(saved && saved.revision === 1 && sameFields(saved, input.fields))
+      }, (value) => { snapshotRef.current = value; setSnapshot(value); syncRef.current = true; setSync(true) }, status === 'open' ? '已登记。可在审稿清单中查看差异并确认替换。' : '已保存作者决定，正文保持原样。')
+      if (success) await synchronize()
+    } finally { if (mounted.current) setSaving(null) }
   }
   function discardEdits() {
     if (tool.locked || sync) return
@@ -227,26 +244,26 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
     && applicationTarget.anchor.blockIds.length > 0 && !applicationTarget.candidateSource?.item.requirement
   return <section className={ui.panel} aria-label="审稿候选逐项审阅" aria-busy={tool.busy}>
     <button type="button" className={ui.button} onClick={() => { needsRead.current = true; setExpanded(true) }}><StudioIcon name="read" />打开审稿试读</button>
-    {expanded && createPortal(<DialogDisplayContext.Provider value="modal"><Dialog title="审稿试读" className={`${ui.panel} ${styles.dialog}`} wide busy={tool.busy} onClose={() => setExpanded(false)}>
+    {expanded && createPortal(<DialogDisplayContext.Provider value="modal"><Dialog title="审稿试读" className={`${ui.panel} ${styles.dialog}`} wide busy={tool.busy || synchronizing} onClose={() => setExpanded(false)}>
     {parsed.error && <p className={ui.warning} role="alert">{parsed.error}</p>}
     {error && <p className={ui.error} role="alert">{error}</p>}
     {changedRun && <p className={ui.warning}>候选版本已变化，当前编辑仍保留。请先留存后重新打开结果。</p>}
     {tool.error && <p className={ui.error} role="alert">{tool.error}</p>}{tool.notice && <p className={ui.notice} role="status">{tool.notice}</p>}
     {tool.readFailure && <div className={ui.warning}><p>原读取尚待核对，当前稿件和审阅输入保留。</p>
-      {tool.readFailure.requestId && <button className={ui.button} type="button" disabled={disabled || tool.busy} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>}</div>}
-    {tool.pending && <div className={ui.warning}><p>登记结果尚未确认。请先查询原请求，当前表单和标识已保留。</p><button className={ui.button} type="button" disabled={tool.busy || !tool.pending.error.requestId} onClick={() => void tool.checkReceipt()}>核对原请求</button></div>}
-    {syncRequestId && <button className={ui.button} type="button" disabled={disabled || tool.busy} onClick={() => void checkSync()}>核对原同步读取</button>}
-    {sync && <button className={ui.button} type="button" disabled={disabled || tool.busy || Boolean(syncRequestId)} onClick={() => void synchronize()}>同步作品信息</button>}
+      {tool.readFailure.requestId && <button className={ui.button} type="button" disabled={disabled || tool.busy} aria-busy={checking === 'read'} onClick={() => void checkReceipt('read')}>核对原读取</button>}</div>}
+    {tool.pending && <div className={ui.warning}><p>登记结果尚未确认。请先查询原请求，当前表单和标识已保留。</p><button className={ui.button} type="button" disabled={tool.busy || !tool.pending.error.requestId} aria-busy={checking === 'write'} onClick={() => void checkReceipt('write')}>核对原请求</button></div>}
+    {syncRequestId && <button className={ui.button} type="button" disabled={disabled || tool.busy} aria-busy={checking === 'sync'} onClick={() => void checkSync()}>核对原同步读取</button>}
+    {sync && <button className={ui.button} type="button" disabled={disabled || tool.busy || synchronizing || Boolean(syncRequestId)} aria-busy={synchronizing} onClick={() => void synchronize()}>同步作品信息</button>}
     {snapshot && snapshot.bookRevision !== bookRevision && !sync && <p className={ui.warning}>作品版本已变化，当前编辑保留。请处理编辑后刷新，再登记。</p>}
-    <details className={styles.reviewTools}><summary>审阅记录与操作</summary><p className={ui.muted}>评分是模型对固定稿的主观意见。采纳先保存为待处理建议，核对差异并确认后才写入正文。</p>
-      <div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked || sync || tool.dirty} onClick={() => void load()}>刷新审稿清单</button>
-      {hasEdits(drafts) && <button className={ui.button} type="button" disabled={tool.locked || sync} onClick={discardEdits}>{discard ? '确认放弃未登记编辑' : '放弃未登记编辑'}</button>}</div></details>
-    {(tool.pending || tool.readFailure || sync || changedRun || hasEdits(drafts)) && <details className={ui.details}><summary>留存本次审阅内容</summary><textarea readOnly rows={8} value={JSON.stringify({ bookId: source.bookId, runId: source.id, runVersion: source.version, requestId: tool.pending?.error.requestId, readRequestId: tool.readFailure?.requestId, syncRequestId, input: submitted, drafts }, null, 2)} />
+    {(tool.pending || tool.readFailure || sync || changedRun || hasEdits(drafts)) && <details className={ui.details}><summary>留存本次审阅内容</summary><textarea aria-label="审稿输入与固定登记标识" readOnly rows={8} value={JSON.stringify({ bookId: source.bookId, runId: source.id, runVersion: source.version, requestId: tool.pending?.error.requestId, readRequestId: tool.readFailure?.requestId, syncRequestId, input: submitted, drafts }, null, 2)} />
       <label className={ui.check}><input type="checkbox" checked={preserved} onChange={(event) => setPreserved(event.target.checked)} />我已留存输入和登记标识</label><button className={ui.button} type="button" disabled={tool.busy || !preserved} onClick={onRecover}>进入恢复</button></details>}
     {parsed.proposal?.items.length === 0 && <p className={ui.empty}>本次没有可定位的建议。这不代表全书没有问题。</p>}
     <ReviewWorkspace source={source} proposal={parsed.proposal} state={parsed.error ? '结果待核对' : applications.length ? '建议已应用' : '已完成'}
       caption={`固定原稿 · ${parsed.proposal?.items.length ?? 0} 条建议${applications.length ? ` · ${applications.length} 条有正文应用记录（${applications.filter((issue) => issue.applicationCurrent).length} 条对应当前修订）` : ''}`}
       selected={selected} onFocusIssue={focusIssue} savedItem={savedItem} onBlockRef={(id, element) => { if (element) manuscriptBlocks.current.set(id, element); else manuscriptBlocks.current.delete(id) }} />
+    <details className={styles.reviewTools}><summary>审阅记录与操作</summary><p className={ui.muted}>评分是模型对固定稿的主观意见。采纳先保存为待处理建议，核对差异并确认后才写入正文。</p>
+      <div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked || sync || tool.dirty} aria-busy={reading} onClick={() => void load()}>刷新审稿清单</button>
+      {hasEdits(drafts) && <button className={ui.button} type="button" disabled={tool.locked || sync} onClick={discardEdits}>{discard ? '确认放弃未登记编辑' : '放弃未登记编辑'}</button>}</div></details>
     {parsed.proposal?.items.map((item, index) => {
       const draft = drafts[index]!, saved = savedItem(index)
       const original = item.blockIds.map((id) => source.context.chapterBlocks.find((block) => block.blockId === id)?.text ?? '').join('\n\n')
@@ -264,7 +281,7 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
         {draft.replacement.trim() && !item.requirement && !saved && <AiTextDiff originalText={original} suggestedText={draft.replacement} disabled={blocked} onAcceptText={(replacement) => edit(index, { replacement })} />}
         {saved ? <div className={ui.actions}><p className={ui.notice}>已登记：{decisionLabel(saved)}</p>
           {onOpenChecklist && <button type="button" className={ui.button} disabled={tool.locked || sync || hasEdits(drafts)} onClick={() => openDecision(saved.id)}>查看这条审稿决定</button>}</div>
-          : <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={blocked} onClick={() => void save(index, 'open')}>采纳建议</button><button className={ui.button} type="button" disabled={blocked} onClick={() => void save(index, 'dismissed')}>忽略建议</button><button className={ui.button} type="button" disabled={blocked} onClick={() => void save(index, 'intentional')}>这是刻意安排</button></div>}
+          : <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'open'} onClick={() => void save(index, 'open')}>采纳建议</button><button className={ui.button} type="button" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'dismissed'} onClick={() => void save(index, 'dismissed')}>忽略建议</button><button className={ui.button} type="button" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'intentional'} onClick={() => void save(index, 'intentional')}>这是刻意安排</button></div>}
       </details></article>
     })}
     <footer className={styles.footer}><span className={styles.decisionCount} data-decision="accepted"><StudioIcon name="check" />采纳 {decisions.filter((item) => !['dismissed', 'intentional'].includes(item.status)).length} 条</span><span className={styles.decisionCount} data-decision="dismissed"><StudioIcon name="close" />忽略 {decisions.filter((item) => item.status === 'dismissed').length} 条</span><span className={`${ui.muted} ${styles.disclaimer}`}><StudioIcon name="info" size={16} />模型建议，非事实判定</span>
