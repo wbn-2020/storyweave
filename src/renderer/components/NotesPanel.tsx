@@ -145,6 +145,8 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   const heading = useRef<HTMLHeadingElement>(null)
   const titleInput = useRef<HTMLInputElement>(null)
   const discardTrigger = useRef<HTMLButtonElement>(null)
+  const tagFiltersRef = useRef<HTMLDivElement>(null)
+  const restoreTagFocus = useRef(false)
   const thumbnailInput = useRef<HTMLInputElement>(null)
   const mounted = useRef(false)
   const initialReadStarted = useRef(false)
@@ -167,7 +169,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
   const ready = Boolean(status && !status.requiresUpgrade && status.schemaVersion >= NOTE_SCHEMA_VERSION)
   const supportsMaterial = Boolean(status && status.schemaVersion >= NOTE_MATERIAL_SCHEMA_VERSION)
   const supportsThumbnails = Boolean(status && status.schemaVersion >= NOTE_THUMBNAIL_SCHEMA_VERSION)
-  const tags = [...new Set([...(listing.tag ? [listing.tag] : []), ...(page?.items.flatMap((item) => item.material?.tags ?? []) ?? [])])].slice(0, 12)
+  const tags = [...new Set([...(listing.tag ? [listing.tag] : []), ...(page?.items.flatMap((item) => item.material?.tags ?? []) ?? [])])]
   const archived = Boolean(book.book.archivedAt || page?.archived || detail?.archived)
   const processing = busy || reading !== null || writing !== null || checkingRead || checkingReceipt
   const blocked = processing || Boolean(pendingRead || pendingMessage || writeIssue)
@@ -272,13 +274,14 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
       else failedRead(notes.error, 'notes.list')
     } finally { finishRead(ticket) }
   }
-  async function loadList(next: Listing, expected: Versions | null = null) {
+  async function loadList(next: Listing, expected: Versions | null = null, focusTag = false) {
     if (!ready || !mayLeave()) return
     let input: ListNotesInput
     try { input = listInput(next, expected) }
     catch (caught) { setMessage(caught instanceof DomainError ? caught.detail.message : '搜索条件无效，请检查后重试。'); return }
     const ticket = beginRead('list')
     if (ticket === null) return
+    restoreTagFocus.current = focusTag
     setListing(next); setPage(null); setNeedsRefresh(true); setPromotionOpen(false); setPromotionConfirmed(false)
     try {
       const result = await request(() => api.listNotes(input))
@@ -333,6 +336,15 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
     return () => { cancelled = true }
   }, [busy, pendingMessage, checkingReceipt])
   useEffect(() => { reportGuard() }, [busy, pendingMessage, checkingReceipt])
+  useEffect(() => {
+    if (!restoreTagFocus.current || processing) return
+    restoreTagFocus.current = false
+    // 筛选读取结束后，选项可能已移入首行；失败时不把焦点交给不存在的列表。
+    const group = tagFiltersRef.current
+    const more = group?.querySelector('details')
+    if (more) more.open = false
+    if (page) group?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus()
+  }, [processing, page])
   useEffect(() => {
     if (!initialNoteId || !page || blocked || openedInitialNote.current === initialNoteId
       || dirtyRef.current || quickRef.current || linkRef.current) return
@@ -474,7 +486,11 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
       operation = submitted.expectedNoteRevision === null
         ? { command: 'notes.create', input: parseCreateNoteInput(input) }
         : { command: 'notes.update', input: parseUpdateNoteInput({ ...input, expectedNoteRevision: submitted.expectedNoteRevision }) }
-    } catch (caught) { setMessage(caught instanceof DomainError ? caught.detail.message : '笔记内容无效，请检查后再保存。'); return }
+    } catch (caught) {
+      setMessage(caught instanceof DomainError ? caught.detail.message : '笔记内容无效，请检查后再保存。')
+      if (!submitted.fields.title.trim()) titleInput.current?.focus()
+      return
+    }
     writeLock.current = true; lastWrite.current = operation; setWriting(operation.command === 'notes.create' ? 'create' : 'update')
     setMessage(null); setNotice(null); setRecoveryConfirmed(false); reportGuard()
     try {
@@ -587,11 +603,11 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
       {pendingRead && <section className={styles.pending} aria-label="核对笔记读取">
         <h3>读取结果尚未确认</h3><p role="status">{readMessage}</p>
         <p className={styles.identity}>原请求：{pendingRead.command}{pendingRead.requestId ? ` · ${pendingRead.requestId}` : ' · 无可查询编号'}</p>
-        {pendingRead.requestId && <button type="button" className={shared.button} disabled={busy || checkingRead || checkingReceipt || Boolean(pendingMessage)} onClick={() => void checkReadReceipt()}>{checkingRead ? '正在查询…' : '查询原读取'}</button>}
+        {pendingRead.requestId && <button type="button" className={shared.button} aria-busy={checkingRead} disabled={busy || checkingRead || checkingReceipt || Boolean(pendingMessage)} onClick={() => void checkReadReceipt()}>{checkingRead ? '正在查询…' : '查询原读取'}</button>}
       </section>}
       {(pendingMessage || writeIssue) && <section className={styles.pending} aria-label="核对笔记写入">
         <h3>写入结果尚未确认</h3><p role="status">{pendingMessage || writeIssue}</p>
-        {pendingMessage && <button type="button" className={shared.button} disabled={checkingReceipt || checkingRead || writing !== null} onClick={onCheckReceipt}>{checkingReceipt ? '正在核对…' : '核对写入回执'}</button>}
+        {pendingMessage && <button type="button" className={shared.button} aria-busy={checkingReceipt} disabled={checkingReceipt || checkingRead || writing !== null} onClick={onCheckReceipt}>{checkingReceipt ? '正在核对…' : '核对写入回执'}</button>}
         <p>当前输入仍保留。请核对原操作，确认之前不会再次提交。</p>
       </section>}
       {reading === 'status' && <p className={styles.status} role="status">正在检查本书笔记状态…</p>}
@@ -601,7 +617,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
         <p>{ready ? '现有笔记可继续查看和编辑。启用缩略图及当前格式缺少的素材能力前' : '当前作品格式尚不支持独立笔记。启用时'}会先保存本书数据库的独立备份，再升级作品格式。</p>
         <p>旧版应用无法读取升级后的数据库。升级成功后会显示备份位置，请保留恢复副本。</p>
         <label className={shared.checkLabel}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我了解升级会修改本书数据库，并同意先备份后启用。</label>
-        <button type="button" className={shared.primaryButton} disabled={blocked || archived || !upgradeConfirmed} onClick={() => void upgrade()}>{writing === 'upgrade' ? '正在备份并启用…' : ready ? '备份并启用素材信息' : '备份并启用笔记'}</button>
+        <button type="button" className={shared.primaryButton} aria-busy={writing === 'upgrade'} disabled={blocked || archived || !upgradeConfirmed} onClick={() => void upgrade()}>{writing === 'upgrade' ? '正在备份并启用…' : ready ? '备份并启用素材信息' : '备份并启用笔记'}</button>
       </section>}
       {status?.backupPath && <p className={styles.identity}>升级前备份：{status.backupPath}</p>}
       {ready && <div className={styles.layout}>
@@ -625,10 +641,14 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
           {!page && reading !== 'list' && <p className={styles.status}>请刷新列表读取笔记。当前详情与编辑内容会保留。</p>}
           {page && <>
             <p className={styles.status}>{listing.category ? NOTE_CATEGORY_LABELS[listing.category] : '全部分类'} · {page.total} 条{listing.search ? ` · 搜索“${listing.search}”` : ''}{listing.tag ? ` · 标签“${listing.tag}”` : ''}</p>
-            {!!tags.length && <div className={materialStyles.tagFilters} aria-label="当前页标签及已选标签">
+            {!!tags.length && <div ref={tagFiltersRef} className={materialStyles.tagFilters} aria-label="当前页标签及已选标签">
               <button type="button" aria-pressed={!listing.tag} disabled={blocked} onClick={() => void loadList({ ...listing, tag: '', offset: 0 })}>全部标签</button>
-              {tags.map((tag) => <button key={tag} type="button" aria-pressed={listing.tag === tag} disabled={blocked}
+              {tags.slice(0, 4).map((tag) => <button key={tag} type="button" title={tag} aria-pressed={listing.tag === tag} disabled={blocked}
                 onClick={() => void loadList({ ...listing, tag: listing.tag === tag ? '' : tag, offset: 0 })}>{tag}</button>)}
+              {tags.length > 4 && <details className={materialStyles.moreTags}><summary>更多标签（{tags.length - 4}）</summary><div className={materialStyles.tagOptions}>
+                {tags.slice(4).map((tag) => <button key={tag} type="button" title={tag} aria-pressed={listing.tag === tag} disabled={blocked}
+                  onClick={() => void loadList({ ...listing, tag: listing.tag === tag ? '' : tag, offset: 0 }, null, true)}>{tag}</button>)}
+              </div></details>}
             </div>}
             {page.items.length === 0 && <div className={styles.listEmpty}><h3>{listing.search || listing.category || listing.tag ? '没有匹配的笔记' : '还没有笔记'}</h3><p>{listing.tag ? '可点击“全部标签”取消标签筛选，或调整搜索词与分类。' : listing.search || listing.category ? '调整搜索词后点击“搜索”，或切换左侧分类。' : '记下一个念头、一段素材，或一条写作方法。'}</p></div>}
             <ol className={styles.items}>{page.items.map((item) => <li key={item.id}>
@@ -637,7 +657,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
               <button type="button" disabled={blocked} aria-current={selectedId === item.id ? 'true' : undefined} onClick={() => void selectNote(item.id)}>
                 <span className={styles.itemMeta}>{NOTE_CATEGORY_LABELS[item.category]}{item.promotion ? ' · 已转为设定' : ''}{item.chapterIds?.length ? ` · 已关联 ${item.chapterIds.length} 章` : ''}</span>
                 <strong>{item.title}</strong><span className={styles.excerpt}>{item.excerpt || '尚无正文'}</span>
-                {!!item.material?.tags.length && <span className={materialStyles.tags}>{item.material.tags.map((tag) => <span key={tag}>{tag}</span>)}</span>}
+                {!!item.material?.tags.length && <span className={materialStyles.tags}>{item.material.tags.map((tag) => <span key={tag} title={tag}>{tag}</span>)}</span>}
               </button>
               </div>
               <div className={styles.cardFooter}>
@@ -689,7 +709,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
             </section>}
             <p className={styles.paperMeta}>编辑基线：作品版本 {draft.expectedBookRevision}{draft.expectedNoteRevision === null ? ' · 新笔记' : ` · 笔记版本 ${draft.expectedNoteRevision}`}</p>
             <div className={styles.actions}>
-              <button type="submit" className={`${shared.primaryButton} ${styles.saveButton}`} disabled={formLocked}>{writing === 'create' || writing === 'update' ? '正在保存…' : '保存笔记'}</button>
+              <button type="submit" className={`${shared.primaryButton} ${styles.saveButton}`} aria-busy={writing === 'create' || writing === 'update'} disabled={formLocked}>{writing === 'create' || writing === 'update' ? '正在保存…' : '保存笔记'}</button>
               <button ref={discardTrigger} type="button" className={shared.button} disabled={blocked}
                 onClick={() => { if (!operationBlocked()) { if (dirtyRef.current) setDiscardDraft(true); else discard() } }}>放弃本次修改</button>
             </div>
@@ -718,7 +738,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
                   {!linkDraft && <button type="button" className={shared.button} disabled={blocked || archived || needsRefresh || directoryChanged} onClick={() => startLinks(detail)}>选择 / 调整关联章节</button>}
                   {linkDraft && <form className={styles.editor} onSubmit={saveLinks}>
                     <NoteChapterPicker book={book} value={linkDraft.chapterIds} disabled={blocked || archived || directoryChanged} onChange={changeLinks} />
-                    <div className={styles.actions}><button className={`${shared.primaryButton} ${styles.saveButton}`} type="submit"
+                    <div className={styles.actions}><button className={`${shared.primaryButton} ${styles.saveButton}`} type="submit" aria-busy={writing === 'chapters'}
                       disabled={blocked || archived || needsRefresh || directoryChanged || sameNoteChapters(linkDraft.chapterIds, detail.chapterIds)
                         || linkDraft.chapterIds.some((id) => !book.chapters.some((chapter) => chapter.id === id))}>{writing === 'chapters' ? '正在保存…' : linkDraft.chapterIds.length ? '确认保存关联' : '确认解除全部关联'}</button>
                       <button className={shared.button} type="button" disabled={blocked} onClick={cancelLinks}>取消关联修改</button></div>
@@ -745,7 +765,7 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
               <div className={styles.promotionPreview}><h4>{detail.title}</h4><div className={styles.prose}>{detail.body.trim()}</div></div>
               <label className={shared.checkLabel}><input type="checkbox" checked={promotionConfirmed} disabled={blocked || archived || needsRefresh || !promotionKind} onChange={(event) => setPromotionConfirmed(event.target.checked)} />我已核对内容，确认将笔记版本 {detail.revision} 转为本书设定。</label>
               <div className={styles.actions}>
-                <button type="submit" className={`${shared.primaryButton} ${styles.saveButton}`} disabled={blocked || archived || needsRefresh || !promotionKind || !promotionConfirmed}>{writing === 'promote' ? '正在转为设定…' : '确认转为设定'}</button>
+                <button type="submit" className={`${shared.primaryButton} ${styles.saveButton}`} aria-busy={writing === 'promote'} disabled={blocked || archived || needsRefresh || !promotionKind || !promotionConfirmed}>{writing === 'promote' ? '正在转为设定…' : '确认转为设定'}</button>
                 <button type="button" className={shared.button} disabled={blocked} onClick={() => { setPromotionOpen(false); setPromotionConfirmed(false) }}>取消转换</button>
               </div>
             </form>}
@@ -755,10 +775,10 @@ function NotesContent({ api, book, initialNoteId, displayPreferences, busy, erro
               disabled={formLocked || !page} aria-describedby={quickCountId} placeholder="记录一闪而过的灵感…" onChange={(event) => changeQuick(event.target.value)} /></label>
               <span id={quickCountId} className={materialStyles.quickCount}>{quickBody.length} / 500</span></div>
             <button type="submit" className={`${shared.primaryButton} ${materialStyles.quickSave}`} disabled={formLocked || !page || !quickBody.trim()}><StudioIcon name="save" size={18} />保存到本书</button>
-            {quickBody && <button type="button" className={shared.button} disabled={blocked} onClick={() => setDiscardQuick(true)}>放弃本次记录</button>}
+            {quickBody && <button ref={discardTrigger} type="button" className={shared.button} disabled={blocked} onClick={() => setDiscardQuick(true)}>放弃本次记录</button>}
             {discardQuick && <div className={styles.paperNotice} role="alert"><p>确定放弃这条尚未保存的记录？</p><div className={styles.actions}>
               <button type="button" className={shared.button} disabled={blocked} onClick={() => { quickRef.current = ''; setQuickBody(''); setDiscardQuick(false); setMessage(null); reportGuard() }}>确认放弃记录</button>
-              <button type="button" className={shared.button} disabled={blocked} onClick={() => setDiscardQuick(false)}>继续记录</button></div></div>}
+              <button type="button" className={shared.button} disabled={blocked} onClick={() => { setDiscardQuick(false); discardTrigger.current?.focus() }}>继续记录</button></div></div>}
           </form><section className={materialStyles.recent} aria-label="当前筛选最近记录"><h4><StudioIcon name="clock" size={20} />最近记录</h4>
             <ul>{page?.items.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={blocked || Boolean(quickBody)}
               title={item.title} onClick={() => void selectNote(item.id)}><span>{item.title}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time></button></li>)}</ul>

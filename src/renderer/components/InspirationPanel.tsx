@@ -36,6 +36,7 @@ export interface InspirationPanelProps {
 }
 
 interface Draft { input: SaveInspirationInput; tags: string }
+type ActiveAction = 'list' | 'thumbnail' | 'upgrade' | 'save' | 'quick' | 'target' | 'targetUpgrade' | 'copy' | 'readReceipt' | 'writeReceipt'
 interface Listing { search: string; bookId: string; includeArchived: boolean; offset: number }
 interface CopyDraft {
   source: InspirationItem
@@ -126,13 +127,17 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   const [tag, setTag] = useState('')
   const [quick, setQuick] = useState(() => ({ id: crypto.randomUUID(), body: '' }))
   const [copiedNote, setCopiedNote] = useState<{ bookId: string; id: string } | null>(null)
+  const [activeAction, setActiveAction] = useState<ActiveAction | null>(null)
+  const actionActive = useRef(false)
   const quickCountId = useId()
   const freshRef = useRef(true)
   const editorRef = useRef<HTMLFormElement>(null)
   const discardTrigger = useRef<HTMLButtonElement>(null)
+  const tagFiltersRef = useRef<HTMLDivElement>(null)
+  const restoreTagFocus = useRef(false)
   const discardDisabledReason = tool.locked ? '请先完成当前操作或核对原请求' : undefined
   const visible = (page?.items ?? []).filter((item) => (!kind || item.kind === kind) && (!tag || item.tags.includes(tag)))
-  const tags = [...new Set(page?.items.flatMap((item) => item.tags) ?? [])].slice(0, 12)
+  const tags = [...new Set([...(tag ? [tag] : []), ...(page?.items.flatMap((item) => item.tags) ?? [])])]
   const copyFields = copy ? asNote(copy.source) : null
   const copyTooLarge = Boolean(copyFields && (copyFields.title.length > 120 || copyFields.body.length > MAX_NOTE_BODY))
   const supportsThumbnails = page?.schemaVersion === INSPIRATION_THUMBNAIL_SCHEMA_VERSION
@@ -143,6 +148,15 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   useEffect(() => () => { freshRef.current = true; dirtyCallback.current(false) }, [])
   useEffect(() => { if (draft) { editorRef.current?.scrollIntoView({ block: 'nearest' }); editorRef.current?.focus({ preventScroll: true }) } }, [draft?.input.id])
   useEffect(() => { setRecoveryPreserved(false) }, [tool.pending])
+  useEffect(() => {
+    if (!restoreTagFocus.current) return
+    restoreTagFocus.current = false
+    // 更多标签选中后移入首行；等渲染提交，再关闭弹层并把焦点交给该筛选项。
+    const group = tagFiltersRef.current
+    const more = group?.querySelector('details')
+    if (more) more.open = false
+    group?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus()
+  }, [tag])
 
   function canSwitch() {
     if (copyRef.current || !tool.canLeave()) { tool.setError('请先保存、放弃当前更改或取消关联，再切换内容；未确认请求须先核对。'); return false }
@@ -154,16 +168,23 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   function putDraft(next: Draft | null) { draftRef.current = next; setDraft(next) }
   function changed(next: Draft) { putDraft(next); setDiscard(false); tool.setDirty(true); tool.setNotice(null) }
   function remember(items: InspirationItem[]) { setParentNames((previous) => ({ ...previous, ...Object.fromEntries(items.map((item) => [item.id, item.title])) })) }
+  async function during<T>(action: ActiveAction, operation: () => Promise<T>): Promise<T> {
+    // 原同步忙锁继续防重；操作名只驱动对应按钮，避免刷新资料也显示“正在保存”。
+    if (actionActive.current) return operation()
+    actionActive.current = true; setActiveAction(action)
+    try { return await operation() }
+    finally { actionActive.current = false; setActiveAction(null) }
+  }
   async function load(next: Listing, keepEditor = false) {
     if (!canSwitch()) return
     let input: ListInspirationInput
     try { input = parseListInspirationInput({ search: next.search, ...(next.bookId ? { bookId: next.bookId } : {}), includeArchived: next.includeArchived, offset: next.offset }) }
     catch (failure) { tool.setError(failure instanceof DomainError ? failure.detail.message : '筛选条件无效。'); return }
-    await tool.read(() => api.listInspirations(input), (value) => {
+    await during('list', () => tool.read(() => api.listInspirations(input), (value) => {
       if (!validPage(value, next.offset)) throw new Error('Invalid inspiration page')
       setPage(value); setListing(next); setFilters(next); setTag(''); remember(value.items)
       if (!keepEditor) { putDraft(null); setCopy(null); setSelected(null); setDiscard(false) }
-    })
+    }))
   }
   function open(item: InspirationItem) {
     if (!canSwitch()) return
@@ -200,20 +221,20 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     const submitted = draftRef.current
     if (!submitted || !supportsThumbnails || tool.locked) return
     // 使用现有同步忙锁覆盖本地读取与解码，迟到结果只回到原草稿。
-    await tool.read(async () => {
+    await during('thumbnail', () => tool.read(async () => {
       try { return { ok: true as const, data: await readNoteThumbnailFile(file) } }
       catch (failure) { return { ok: false as const, error: { code: 'INVALID_INPUT' as const,
         message: failure instanceof DomainError ? failure.detail.message : failure instanceof Error ? failure.message : '灵感图片读取失败，原输入仍保留。' } } }
     }, (thumbnail) => {
       if (draftRef.current !== submitted) throw new Error('Inspiration draft changed')
       changed({ ...submitted, input: { ...submitted.input, thumbnail } })
-    })
+    }))
   }
   async function upgradeImages() {
     if (page?.schemaVersion !== 1 || !upgradeConfirmed || tool.locked || !canSwitch()) return
-    const success = await tool.write('inspiration.upgrade', () => api.upgradeInspirations({ expectedSchemaVersion: 1 }),
+    const success = await during('upgrade', () => tool.write('inspiration.upgrade', () => api.upgradeInspirations({ expectedSchemaVersion: 1 }),
       (value) => value?.schemaVersion === INSPIRATION_THUMBNAIL_SCHEMA_VERSION && typeof value.backupPath === 'string' && Boolean(value.backupPath),
-      (value) => { setBackupPath(value.backupPath); setUpgradeConfirmed(false) }, '全局灵感库已备份并启用配图。')
+      (value) => { setBackupPath(value.backupPath); setUpgradeConfirmed(false) }, '全局灵感库已备份并启用配图。'))
     if (success) await load({ ...listing, offset: 0 })
   }
   async function save(event: FormEvent) {
@@ -226,12 +247,12 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
         : draft.tags.split(/[,，、\n]/).map((item) => item.trim()).filter(Boolean) } }) }
     catch (failure) { tool.setError(failure instanceof DomainError ? failure.detail.message : '请检查灵感内容后重试。'); return }
     setDiscard(false)
-    const success = await tool.write('inspiration.save', () => api.saveInspiration(input), (value) => validItem(value) && value.id === input.id
+    const success = await during('save', () => tool.write('inspiration.save', () => api.saveInspiration(input), (value) => validItem(value) && value.id === input.id
       && value.revision === input.expectedRevision + 1 && sameFields(value, input.fields)
       && (input.thumbnail === undefined ? sameInspirationThumbnail(value.thumbnail, selected?.thumbnail ?? null) : matchesInspirationThumbnail(value.thumbnail, input.thumbnail)), (value) => {
       setSelected(value); remember([value]); setDiscard(false)
       putDraft({ input: { id: value.id, expectedRevision: value.revision, fields: savedFields(value) }, tags: value.tags.join('，') })
-    }, input.fields.archived ? '灵感已归档，原文和参考链均已保留。' : '灵感已保存。')
+    }, input.fields.archived ? '灵感已归档，原文和参考链均已保留。' : '灵感已保存。'))
     if (success) await load({ ...listing, offset: 0 }, true)
   }
   async function saveQuick(event: FormEvent) {
@@ -246,9 +267,9 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     catch (failure) { tool.setError(failure instanceof DomainError ? failure.detail.message : '快速记录内容无效，原文仍保留，请检查后重试。'); return }
     // 保存开始即收起旧的放弃确认，避免失败或回执未知时丢失原文及固定标识。
     setDiscard(false)
-    const success = await tool.write('inspiration.save', () => api.saveInspiration(input),
+    const success = await during('quick', () => tool.write('inspiration.save', () => api.saveInspiration(input),
       (value) => validItem(value) && value.id === input.id && value.revision === 1 && sameFields(value, input.fields) && value.thumbnail === null,
-      () => { setQuick({ id: crypto.randomUUID(), body: '' }); setDiscard(false) }, '灵感已保存，原文保留在全局收件箱。')
+      () => { setQuick({ id: crypto.randomUUID(), body: '' }); setDiscard(false) }, '灵感已保存，原文保留在全局收件箱。'))
     if (success) await load({ ...listing, offset: 0 }, true)
   }
   function startCopy(source: InspirationItem, linkChapters = false) {
@@ -262,7 +283,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
   async function prepareCopy() {
     if (!copy || !copy.targetBookId || copyTooLarge || tool.locked) return
     const intended = copy
-    await tool.read(async () => {
+    await during('target', () => tool.read(async () => {
       const nextBook = await api.getBook({ bookId: intended.targetBookId })
       if (!nextBook.ok) return nextBook
       const status = await api.getKnowledgeStatus({ bookId: intended.targetBookId })
@@ -275,7 +296,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     }, (value) => {
       if (value.book.book.archivedAt) { tool.setError('目标作品已归档，请先恢复作品，或选择其他作品。'); return }
       putCopy({ ...intended, target: value.book, requiresUpgrade: value.requiresUpgrade, materialSupported: value.materialSupported })
-    })
+    }))
   }
   function notifyBook(bookId: string) {
     void Promise.resolve().then(() => onBookChanged(bookId)).catch(() => tool.setError('笔记写入已确认；作品目录未同步，请在主窗口刷新作品。'))
@@ -285,10 +306,10 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     const intended = copy
     const bookId = copy.target.book.id
     const expectedBookRevision = copy.target.book.revision
-    const success = await tool.write('knowledge.upgrade', () => api.upgradeKnowledge({ bookId, expectedBookRevision }), (value) => value.bookId === bookId
+    const success = await during('targetUpgrade', () => tool.write('knowledge.upgrade', () => api.upgradeKnowledge({ bookId, expectedBookRevision }), (value) => value.bookId === bookId
       && value.bookRevision > expectedBookRevision && value.schemaVersion >= copySchema(intended) && !value.requiresUpgrade, () => {
       putCopy({ ...intended, target: null, requiresUpgrade: false, materialSupported: false }); notifyBook(bookId)
-    }, '作品备份和升级已完成，请重新读取复制目标。')
+    }, '作品备份和升级已完成，请重新读取复制目标。'))
     if (success) { tool.setDirty(true); tool.setNotice('作品备份和升级已完成，请点击“读取目标并预览”取得新版本。') }
   }
   async function confirmCopy() {
@@ -300,7 +321,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
       id: copy.source.id, expectedRevision: copy.source.revision, noteId: copy.noteId,
       ...(copy.linkChapters ? { chapterIds: copy.chapterIds } : {}) }) }
     catch (failure) { tool.setError(failure instanceof DomainError ? failure.detail.message : '复制目标无效。'); return }
-    await tool.write('inspiration.copy', () => api.copyInspirationToNote(input),
+    await during('copy', () => tool.write('inspiration.copy', () => api.copyInspirationToNote(input),
       (value) => isNoteWriteReceiptFor({ bookId: input.bookId, id: input.noteId, expectedBookRevision: input.expectedBookRevision,
         fields, ...(copy.materialSupported ? { material: parseNoteMaterial({ source: copy.source.source, tags: copy.source.tags }) } : {}),
         ...(input.chapterIds === undefined ? {} : { chapterIds: input.chapterIds }) }, value) && matchesCopiedInspirationThumbnail(value.thumbnail, copy.source.thumbnail),
@@ -308,25 +329,25 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
       copy.source.thumbnail ? `原图与文字已复制到作品笔记${copy.linkChapters ? '并关联所选章节' : ''}；收件箱原件保留。`
         : copy.linkChapters ? '已复制到作品笔记并关联所选章节，原件保留。可在本书素材中查看、解除关联或前往章节。'
         : copy.materialSupported ? '已复制到作品笔记，并保存独立出处和标签；收件箱原件保留。'
-          : '已复制到作品笔记，出处和标签已保留在正文中；收件箱原件保留。')
+          : '已复制到作品笔记，出处和标签已保留在正文中；收件箱原件保留。'))
   }
 
   return <section className={`${ui.panel} ${styles.panel}`} aria-label="灵感与拆书收件箱" aria-busy={tool.busy}>
     <div className={styles.topbar}><div className={styles.scope} aria-label="素材范围"><button type="button" aria-pressed="true"><StudioIcon name="spark" />全局灵感</button><button type="button" disabled={tool.locked || !onBookMaterials} title={onBookMaterials ? '查看当前作品保存的笔记' : '先打开一部作品'} onClick={onBookMaterials}><StudioIcon name="read" />本书素材</button></div>
       <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={tool.locked} onClick={() => create()}><StudioIcon name="plus" size={16} />记一条灵感</button><button className={ui.button} type="button" disabled={tool.locked} onClick={() => create(undefined, 'reference')}><StudioIcon name="read" size={16} />添加参考作品</button></div></div>
     {tool.error && <p className={ui.error} role="alert">{tool.error}</p>}
-    {tool.readFailure?.requestId && <button className={ui.button} type="button" disabled={tool.locked} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>}
+    {tool.readFailure?.requestId && <button className={ui.button} type="button" aria-busy={activeAction === 'readReceipt'} disabled={tool.locked} onClick={() => void during('readReceipt', tool.checkReadReceipt)}>{activeAction === 'readReceipt' ? '正在核对…' : '核对原读取'}</button>}
     {tool.notice && <p className={ui.notice} role="status">{tool.notice}</p>}
     {page?.schemaVersion === 1 && <section className={styles.upgrade} aria-label="启用全局灵感配图">
       <h4>启用全局灵感配图</h4><p>已有文字条目仍可编辑。启用图片前会独立备份整个灵感库，再追加图片结构；旧版应用无法读取新格式。</p>
       <label className={ui.check}><input type="checkbox" checked={upgradeConfirmed} disabled={tool.locked || tool.dirty}
         onChange={(event) => setUpgradeConfirmed(event.target.checked)} />我了解格式升级，并同意先备份后启用。</label>
-      <button type="button" className={ui.button} disabled={tool.locked || tool.dirty || !upgradeConfirmed} onClick={() => void upgradeImages()}>备份并启用配图</button>
+      <button type="button" className={ui.button} aria-busy={activeAction === 'upgrade'} disabled={tool.locked || tool.dirty || !upgradeConfirmed} onClick={() => void upgradeImages()}>{activeAction === 'upgrade' ? '正在备份并启用…' : '备份并启用配图'}</button>
     </section>}
     {backupPath && <p className={ui.muted}>启用前备份：{backupPath}</p>}
     {copiedNote && <button className={ui.button} type="button" disabled={tool.locked || tool.dirty}
       onClick={() => { if (canSwitch()) onOpenNote(copiedNote.bookId, copiedNote.id) }}>查看保存的素材与章节关联</button>}
-    {tool.pending && <div className={ui.warning}><p>保存结果尚未确认，表单与本次复制标识已保留。核对原请求前暂停写入。</p><div className={ui.actions}>{tool.pending.error.requestId && <button className={ui.button} type="button" disabled={tool.busy} onClick={() => void tool.checkReceipt().then((success) => { if (success && !copyRef.current) void load({ ...listing, offset: 0 }, true) })}>核对原请求</button>}</div><p>若服务连接已中断，请先保留当前输入，再从主窗口的草稿恢复入口重新连接并核对资料。不会自动重发本次复制。</p>{onRecover && <><label className={ui.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存当前输入与复制标识，可以离开面板恢复</label><button className={ui.button} type="button" disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}</div>}
+    {tool.pending && <div className={ui.warning}><p>保存结果尚未确认，表单与本次复制标识已保留。核对原请求前暂停写入。</p><div className={ui.actions}>{tool.pending.error.requestId && <button className={ui.button} type="button" aria-busy={activeAction === 'writeReceipt'} disabled={tool.busy} onClick={() => void during('writeReceipt', tool.checkReceipt).then((success) => { if (success && !copyRef.current) void load({ ...listing, offset: 0 }, true) })}>{activeAction === 'writeReceipt' ? '正在核对…' : '核对原请求'}</button>}</div><p>若服务连接已中断，请先保留当前输入，再从主窗口的草稿恢复入口重新连接并核对资料。不会自动重发本次复制。</p>{onRecover && <><label className={ui.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存当前输入与复制标识，可以离开面板恢复</label><button className={ui.button} type="button" disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}</div>}
     {(tool.pending || tool.error || tool.readFailure) && <details className={ui.details}><summary>查看并复制当前输入留存</summary><textarea readOnly rows={10}
       value={JSON.stringify({ draft, copy, quick, originalThumbnail: selected?.thumbnail ?? null, schemaVersion: page?.schemaVersion ?? null,
         backupPath, pendingCommand: tool.pending?.command ?? null, requestId: tool.pending?.error.requestId ?? null,
@@ -337,14 +358,20 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
     </aside><div className={styles.listPane}>
     <form className={styles.search} onSubmit={(event) => { event.preventDefault(); void load({ ...filters, offset: 0 }) }}>
       <label><span className={styles.srOnly}>查找内容</span><input type="search" maxLength={200} value={filters.search} disabled={tool.locked} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="搜索灵感、内容或标签…" /></label>
-      <button className={ui.button} type="submit" disabled={tool.locked || tool.dirty} title="应用搜索与筛选"><StudioIcon name="search" size={16} />筛选 / 刷新</button>
+      <button className={ui.button} type="submit" aria-busy={activeAction === 'list'} disabled={tool.locked || tool.dirty} title="应用搜索与筛选"><StudioIcon name="search" size={16} />{activeAction === 'list' ? '正在读取…' : '筛选 / 刷新'}</button>
       <details className={styles.searchOptions}><summary><StudioIcon name="settings" size={16} />筛选与导入</summary><div className={styles.searchOptionsBody}>
       <label>关联作品<select value={filters.bookId} disabled={tool.locked} onChange={(event) => setFilters({ ...filters, bookId: event.target.value })}><option value="">全部作品与未关联内容</option>{books.map((item) => <option key={item.id} value={item.id}>{item.title}{item.archivedAt ? '（已归档）' : ''}</option>)}</select></label>
       <label className={ui.check}><input type="checkbox" checked={filters.includeArchived} disabled={tool.locked} onChange={(event) => setFilters({ ...filters, includeArchived: event.target.checked })} />包含已归档</label>
       <InspirationImport api={api} disabled={disabled || editorDirty} onDirtyChange={(value) => { importDirtyRef.current = value; setImportDirty(value); dirtyCallback.current(value || editorDirtyRef.current) }} onSaved={() => setImportRefresh((value) => value + 1)} onUnknown={onUnknown} onRecover={onRecover} />
       </div></details>
     </form>
-    {!!tags.length && <div className={styles.tagFilters} aria-label="本页标签筛选"><button type="button" aria-pressed={!tag} onClick={() => setTag('')}>全部标签</button>{tags.map((value) => <button key={value} type="button" aria-pressed={tag === value} onClick={() => setTag(tag === value ? '' : value)}>{value}</button>)}</div>}
+    {!!tags.length && <div ref={tagFiltersRef} className={styles.tagFilters} aria-label="本页标签筛选">
+      <button type="button" aria-pressed={!tag} onClick={() => setTag('')}>全部标签</button>
+      {tags.slice(0, 4).map((value) => <button key={value} type="button" title={value} aria-pressed={tag === value} onClick={() => setTag(tag === value ? '' : value)}>{value}</button>)}
+      {tags.length > 4 && <details className={styles.moreTags}><summary>更多标签（{tags.length - 4}）</summary><div className={styles.tagOptions}>
+        {tags.slice(4).map((value) => <button key={value} type="button" title={value} aria-pressed={tag === value} onClick={() => { restoreTagFocus.current = true; setTag(tag === value ? '' : value) }}>{value}</button>)}
+      </div></details>}
+    </div>}
       {!page ? <div className={ui.empty}><p>{tool.busy ? '正在读取收件箱…' : '尚未取得收件箱资料，请点击筛选 / 刷新。'}</p></div>
         : !visible.length ? <div className={ui.empty}><h4>{page.total ? '本页没有匹配类型' : '留住还没找到归属的想法'}</h4><p>{page.total ? '可切换本页类型，或翻页继续查找。' : '写下一个画面、一句对白，或添加一本参考作品。以后再关联作品、补充出处。'}</p><button className={ui.button} type="button" disabled={tool.locked} onClick={() => create()}>新建灵感</button></div>
           : <ul className={styles.items}>{visible.map((item) => {
@@ -359,7 +386,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
                 <div className={styles.cardText}>
                 <button className={styles.itemTitle} type="button" disabled={tool.locked} aria-pressed={selected?.id === item.id} onClick={() => open(item)}><span><StudioIcon name={kindIcons[item.kind]} size={16} />{kindLabels[item.kind]}{item.archived ? ' · 已归档' : ''}</span><strong>{item.title}</strong></button>
                 <p className={styles.preview}>{studyMaterialText(item.kind, item.body) || '尚未填写内容'}</p>
-                {!!item.tags.length && <p className={styles.tags}>{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</p>}
+                {!!item.tags.length && <p className={styles.tags}>{item.tags.map((tag) => <span key={tag} title={tag}>{tag}</span>)}</p>}
                 </div>
               </div>
               <div className={styles.cardFooter}>
@@ -406,7 +433,7 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
           <label className={ui.check}><input type="checkbox" checked={draft.input.fields.archived} onChange={(event) => changed({ ...draft, input: { ...draft.input, fields: { ...draft.input.fields, archived: event.target.checked } } })} />归档条目（原文、出处与参考链继续保留）</label>
           <p className={ui.muted}>关联作品只标记归属。点击“复制到作品笔记”才会在作品内新增笔记，后续可在笔记中明确转为设定。</p>
         </div></fieldset>
-        <div className={ui.actions}><button className={ui.primaryButton} type="submit" disabled={tool.locked || Boolean(draft.input.expectedRevision && !tool.dirty)}>{tool.busy ? '正在保存…' : '保存条目'}</button><button ref={discardTrigger} className={ui.button} type="button" disabled={tool.locked} onClick={() => closeEditor()}>{tool.dirty ? '放弃未保存更改' : '收起编辑'}</button></div>
+        <div className={ui.actions}><button className={ui.primaryButton} type="submit" aria-busy={activeAction === 'save'} disabled={tool.locked || Boolean(draft.input.expectedRevision && !tool.dirty)}>{activeAction === 'save' ? '正在保存…' : '保存条目'}</button><button ref={discardTrigger} className={ui.button} type="button" disabled={tool.locked} onClick={() => closeEditor()}>{tool.dirty ? '放弃未保存更改' : '收起编辑'}</button></div>
         {discard && <div className={ui.warning} role="alert"><p>确定放弃这份表单的未保存更改？已保存原件会保留。</p><div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked} title={discardDisabledReason} onClick={() => closeEditor(true)}>确认放弃</button><button className={ui.button} type="button" disabled={tool.locked} title={discardDisabledReason} onClick={cancelDiscard}>继续编辑</button></div></div>}
         {selected && <div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked || tool.dirty} onClick={() => create(selected)}>以此继续写{kindLabels[nextKind[selected.kind]]}</button><button className={ui.button} type="button" disabled={tool.locked || tool.dirty || !books.some((item) => !item.archivedAt)} onClick={() => startCopy(selected)}>复制已保存版本到作品笔记</button></div>}
       </form>}
@@ -415,20 +442,20 @@ export function InspirationPanel({ api, books, activeBook, disabled, onDirtyChan
           <p className={ui.muted}>将携带这个已保存版本的原图一同复制，占用目标作品的素材图片预算。</p></>}
         <label>目标作品<select value={copy.targetBookId} disabled={tool.locked} onChange={(event) => putCopy({ ...copy, targetBookId: event.target.value, target: null, requiresUpgrade: false, materialSupported: false, chapterIds: [] })}><option value="">选择作品</option>{books.filter((item) => !item.archivedAt).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
         {copyTooLarge && <p className={ui.warning}>这条灵感超过作品笔记的限制（标题 120 字符、含出处的正文 20,000 字符）。请保留原件，先将需要的部分整理为一条子记录，再复制。</p>}
-        <div className={ui.actions}><button className={ui.button} type="button" disabled={tool.locked || !copy.targetBookId || copyTooLarge} onClick={() => void prepareCopy()}>读取目标并预览</button></div>
+        <div className={ui.actions}><button className={ui.button} type="button" aria-busy={activeAction === 'target'} disabled={tool.locked || !copy.targetBookId || copyTooLarge} onClick={() => void prepareCopy()}>{activeAction === 'target' ? '正在读取目标…' : '读取目标并预览'}</button></div>
         {copy.target && <><details className={ui.details} open><summary>将复制到《{copy.target.book.title}》的笔记内容</summary><textarea readOnly rows={8} value={copyFields.body} aria-label="复制后的完整笔记内容" /></details>
           {copy.materialSupported ? <div className={ui.fields}><p className={ui.muted}>独立出处：{copy.source.source || '未填写'}</p>
             {!!copy.source.tags.length && <p className={styles.tags}>{copy.source.tags.map((tag) => <span key={tag}>{tag}</span>)}</p>}</div>
             : !copy.requiresUpgrade && <p className={ui.muted}>当前格式仅在笔记正文保留出处和标签。需要独立筛选时，可在本书素材中先备份启用素材信息。</p>}
-          {copy.requiresUpgrade ? <div className={ui.warning}><p>这部作品需要先备份升级才能{copy.source.thumbnail ? '完整复制原图与笔记' : copy.linkChapters ? '保存章节关联' : '使用笔记'}。</p><button className={ui.button} type="button" disabled={tool.locked} onClick={() => void upgradeTarget()}>备份并升级目标作品</button></div>
+          {copy.requiresUpgrade ? <div className={ui.warning}><p>这部作品需要先备份升级才能{copy.source.thumbnail ? '完整复制原图与笔记' : copy.linkChapters ? '保存章节关联' : '使用笔记'}。</p><button className={ui.button} type="button" aria-busy={activeAction === 'targetUpgrade'} disabled={tool.locked} onClick={() => void upgradeTarget()}>{activeAction === 'targetUpgrade' ? '正在备份升级…' : '备份并升级目标作品'}</button></div>
             : <>{copy.linkChapters && <NoteChapterPicker key={copy.target.book.id} book={copy.target} value={copy.chapterIds} disabled={tool.locked}
               onChange={(chapterIds) => putCopy({ ...copy, chapterIds })} />}
-              <button className={ui.primaryButton} type="button" disabled={tool.locked || copyTooLarge || copy.linkChapters && (!copy.chapterIds.length || copy.chapterIds.some((id) => !copy.target!.chapters.some((chapter) => chapter.id === id)))} onClick={() => void confirmCopy()}>{copy.linkChapters ? '确认复制并关联章节' : '确认复制到作品笔记'}</button></>}</>}
+              <button className={ui.primaryButton} type="button" aria-busy={activeAction === 'copy'} disabled={tool.locked || copyTooLarge || copy.linkChapters && (!copy.chapterIds.length || copy.chapterIds.some((id) => !copy.target!.chapters.some((chapter) => chapter.id === id)))} onClick={() => void confirmCopy()}>{activeAction === 'copy' ? '正在复制…' : copy.linkChapters ? '确认复制并关联章节' : '确认复制到作品笔记'}</button></>}</>}
       </section>}
       {!draft && !copy && <><form className={styles.quick} onSubmit={(event) => void saveQuick(event)}><h4><StudioIcon name="spark" size={20} />快速记录</h4>
         <div className={styles.quickInput}><label><span className={styles.srOnly}>快速记录内容</span><textarea rows={10} maxLength={500} value={quick.body} disabled={tool.locked} aria-describedby={quickCountId} placeholder="记录一闪而过的灵感…" onChange={(event) => { setQuick({ ...quick, body: event.target.value }); setDiscard(false); tool.setDirty(Boolean(event.target.value)); tool.setNotice(null) }} /></label>
           <span id={quickCountId} className={styles.quickCount}>{quick.body.length} / 500</span></div>
-        <button type="submit" className={`${ui.primaryButton} ${styles.quickSave}`} disabled={tool.locked || !quick.body.trim()}><StudioIcon name="save" size={18} />{currentBook && !currentBook.archivedAt ? '保存并关联本书' : '保存灵感'}</button>
+        <button type="submit" className={`${ui.primaryButton} ${styles.quickSave}`} aria-busy={activeAction === 'quick'} disabled={tool.locked || !quick.body.trim()}><StudioIcon name="save" size={18} />{activeAction === 'quick' ? '正在保存…' : currentBook && !currentBook.archivedAt ? '保存并关联本书' : '保存灵感'}</button>
         {quick.body && <button ref={discardTrigger} type="button" className={ui.button} disabled={tool.locked} onClick={() => setDiscard(true)}>放弃本次记录</button>}
         {discard && <div className={ui.warning} role="alert"><p>放弃这条尚未保存的记录？</p><div className={ui.actions}><button type="button" className={ui.button} disabled={tool.locked} title={discardDisabledReason} onClick={discardQuick}>确认放弃记录</button><button type="button" className={ui.button} disabled={tool.locked} title={discardDisabledReason} onClick={cancelDiscard}>继续记录</button></div></div>}
       </form><section className={styles.recent} aria-label="当前筛选最近记录"><h4><StudioIcon name="clock" size={20} />最近记录</h4><ul>{page?.items.slice(0, 3).map((item) => <li key={item.id}><button type="button" disabled={tool.locked || tool.dirty} title={item.title} onClick={() => open(item)}><span>{item.title}</span><time dateTime={item.updatedAt}>{displayTime(item.updatedAt)}</time></button></li>)}</ul>{!page?.items.length && <p className={styles.recentEmpty}>{page ? '暂无记录' : '尚未取得记录'}</p>}</section></>}
@@ -461,7 +488,7 @@ function InspirationParentPicker({ api, id, value, label, disabled, onChange }: 
   }
   return <details className={ui.details}><summary>上级参考：{value ? label ?? value : '无（独立条目）'}</summary>
     {value && <button className={ui.button} type="button" disabled={disabled || loading} onClick={() => onChange(null)}>改为独立条目</button>}
-    <div className={ui.toolbar}><label>查找上级参考<input type="search" value={search} maxLength={200} disabled={disabled || loading} onChange={(event) => setSearch(event.target.value)} /></label><button className={ui.button} type="button" disabled={disabled || loading} onClick={() => void load(search, 0)}>{loading ? '查找中…' : '查找条目'}</button></div>
+    <div className={ui.toolbar}><label>查找上级参考<input type="search" value={search} maxLength={200} disabled={disabled || loading} onChange={(event) => setSearch(event.target.value)} /></label><button className={ui.button} type="button" aria-busy={loading} disabled={disabled || loading} onClick={() => void load(search, 0)}>{loading ? '查找中…' : '查找条目'}</button></div>
     {error && <p className={ui.error} role="alert">{error}</p>}
     {page && <><ul className={ui.selection}>{page.items.filter((item) => item.id !== id).map((item) => <li key={item.id}><span>{item.title}<small>{kindLabels[item.kind]}{item.archived ? ' · 已归档' : ''}</small></span><button className={ui.button} type="button" disabled={disabled || loading || item.id === value} onClick={() => onChange(item)}>{item.id === value ? '已关联' : '设为上级'}</button></li>)}</ul>{!page.items.some((item) => item.id !== id) && <p className={ui.muted}>本页没有可选的上级参考。</p>}<div className={ui.actions}><button className={ui.button} type="button" disabled={disabled || loading || offset === 0} onClick={() => void load(query, Math.max(0, offset - 50))}>上一页</button><span className={ui.muted}>共 {page.total} 条</span><button className={ui.button} type="button" disabled={disabled || loading || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) void load(query, page.nextOffset) }}>下一页</button></div></>}
   </details>
