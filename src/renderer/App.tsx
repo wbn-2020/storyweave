@@ -2,8 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { flushSync } from 'react-dom'
 import type {
   AppError, BookSnapshot, BookSummary, ChapterSnapshot, ChapterSummary, CommandMap, CompletedRequest,
-  Result, ServiceCommand, StudioApi, WorkspaceSnapshot, CreateBookInput,
+  Result, RevisionSnapshot, ServiceCommand, StudioApi, WorkspaceSnapshot, CreateBookInput,
 } from '../contracts/api'
+import { requiredId } from '../contracts/api'
 import { parseManuscript } from '../contracts/manuscript'
 import { isKnowledgeAdjudicationReceiptFor, type CreateKnowledgeItemInput, type KnowledgeItemDetail, type KnowledgeKind, type KnowledgeStatus, type UpdateKnowledgeItemInput } from '../contracts/knowledge'
 import type { CreateStoryRecordInput, StoryRecordDetail, UpdateStoryRecordInput, StoryKind } from '../contracts/story'
@@ -322,8 +323,8 @@ export function App({ api }: Props) {
   }
 
   async function mutate<K extends ServiceCommand>(command: K, run: () => Promise<Result<CommandMap[K]['output'] | null>>, apply: (value: CommandMap[K]['output']) => void | boolean | Promise<void | boolean>) {
-    // 导出回执待核对时保留清单与保存位置，补领原回执后仍在本页展示成品。
-    const preserveForm = command === 'book.create' || command === 'book.update' || command === 'book.export.commit' || command === 'chapter.update' || command.startsWith('knowledge.') || command.startsWith('story.') || command.startsWith('memory.') || command.startsWith('ai.') || command.startsWith('notes.') || command.startsWith('workbench.') || command.startsWith('inspiration.')
+    // 回执待核对时保留操作页面及其输入，补领原回执后再推进版本。
+    const preserveForm = command === 'book.create' || command === 'book.update' || command === 'book.export.commit' || command === 'chapter.update' || command === 'revision.merge' || command === 'revision.restore' || command.startsWith('knowledge.') || command.startsWith('story.') || command.startsWith('memory.') || command.startsWith('ai.') || command.startsWith('notes.') || command.startsWith('workbench.') || command.startsWith('inspiration.')
     const receive = async (response: CompletedRequest): Promise<boolean> => {
       if (response.command !== command) return false
       // command 已核对；映射类型的关联在跨回调处由这一处收窄保留。
@@ -962,12 +963,24 @@ export function App({ api }: Props) {
     }, false, false, false, true)
   }
 
-  async function restoreRevision(revisionId: string) {
+  async function restoreRevision(source: RevisionSnapshot) {
     if (!api) return
     await changeView(async () => {
       const current = session.getCurrent().chapter
-      if (!current || bookRef.current?.book.archivedAt) return
-      await mutate('revision.restore', () => api.restoreRevision({ bookId: current.bookId, chapterId: current.id, revisionId, expectedRevisionId: current.revisionId }), acceptChapter)
+      if (!current || bookRef.current?.book.archivedAt || source.bookId !== current.bookId || source.chapterId !== current.id) return
+      await mutate('revision.restore', () => api.restoreRevision({ bookId: current.bookId, chapterId: current.id, revisionId: source.id, expectedRevisionId: current.revisionId }), async (saved) => {
+        // 恢复仅对章节修订做 CAS；其他写入可先推进书版本，身份、来源正文和定稿仍须一起核对。
+        try {
+          requiredId(saved.revisionId)
+          if (saved.bookId !== current.bookId || saved.id !== current.id || saved.revisionId === current.revisionId
+            || !Number.isSafeInteger(saved.bookRevision) || saved.bookRevision <= current.bookRevision
+            || saved.status !== 'writing' || saved.finalizedRevisionId !== current.finalizedRevisionId || saved.finalizedAt !== current.finalizedAt
+            || saved.plainText !== source.plainText || saved.characterCount !== source.characterCount
+            || JSON.stringify(parseManuscript(saved.document)) !== JSON.stringify(source.document)) return false
+        } catch { return false }
+        await acceptChapter(saved)
+        return true
+      })
     }, false, false, false, true)
   }
 

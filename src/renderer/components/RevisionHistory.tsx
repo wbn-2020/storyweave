@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { ChapterSnapshot, RevisionSnapshot, RevisionSummary, StudioApi } from '../../contracts/api'
-import { DomainError } from '../../contracts/api'
-import { documentToText, parseManuscript, type ManuscriptBlock } from '../../contracts/manuscript'
+import type { ChapterSnapshot, RevisionPage, RevisionSnapshot, RevisionSummary, StudioApi } from '../../contracts/api'
+import { DomainError, isRecord, requiredId, requiredInteger } from '../../contracts/api'
+import { countCharacters, documentToText, MAX_CHAPTER_LENGTH, parseManuscript, type ManuscriptBlock } from '../../contracts/manuscript'
 import { applyParagraphChanges, compareParagraphs, paragraphText, type ParagraphChange } from '../../contracts/paragraph-diff'
 import type { RevisionMergeInput } from '../../contracts/revision-merge'
 import { displayTime, request } from '../request'
@@ -19,11 +19,32 @@ export interface RevisionHistoryProps {
   error?: string | null
   registerLeaveGuard?: RegisterPanelLeaveGuard
   onClose: () => void
-  onRestore: (revisionId: string) => void | Promise<void>
+  onRestore: (revision: RevisionSnapshot) => void | Promise<void>
   onMerge?: (input: RevisionMergeInput) => void | Promise<void>
 }
 const reasons = { created: '建立章节', saved: '保存正文', restored: '恢复版本', imported: '导入正文' }
 interface ManuscriptRow { block: ManuscriptBlock; index: number }
+
+function checkRevisionPage(value: RevisionPage, beforeSequence?: number, previous: readonly RevisionSummary[] = []): boolean {
+  try {
+    if (!isRecord(value) || !Array.isArray(value.items) || value.items.length > 50) return false
+    const ids = new Set(previous.map((item) => item.id))
+    let ceiling = beforeSequence ?? Number.MAX_SAFE_INTEGER
+    for (const item of value.items) {
+      if (!isRecord(item)) return false
+      const id = requiredId(item.id).toLowerCase()
+      const sequence = requiredInteger(item.sequence, '修订序号')
+      if (!sequence || sequence >= ceiling || ids.has(id)) return false
+      requiredInteger(item.characterCount, '修订字数', MAX_CHAPTER_LENGTH)
+      if (item.parentRevisionId !== null) requiredId(item.parentRevisionId)
+      if (item.restoredFromRevisionId !== null) requiredId(item.restoredFromRevisionId)
+      if (!Object.hasOwn(reasons, item.reason) || typeof item.createdAt !== 'string' || !Number.isFinite(Date.parse(item.createdAt))) return false
+      ids.add(id); ceiling = sequence
+    }
+    // 非末页必须完整且游标指向最后一条，避免重页或跳页悄悄混入时间线。
+    return value.nextBeforeSequence === null || value.items.length === 50 && value.nextBeforeSequence === ceiling
+  } catch { return false }
+}
 
 export function RevisionHistory({ api, chapter, archived, busy, error, onClose, onRestore, onMerge, registerLeaveGuard }: RevisionHistoryProps) {
   const [items, setItems] = useState<RevisionSummary[]>([])
@@ -35,7 +56,7 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
   const [differencePage, setDifferencePage] = useState(0)
   const [onlyChanged, setOnlyChanged] = useState(false)
   const [confirmMerge, setConfirmMerge] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
+  const [submitting, setSubmitting] = useState<'merge' | 'restore' | null>(null)
   const [loading, setLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [readError, setReadError] = useState<string | null>(null)
@@ -44,11 +65,13 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
   const previewRequest = useRef(0)
   const mounted = useRef(true)
   const submitLock = useRef(false)
+  const mergeTrigger = useRef<HTMLButtonElement>(null)
+  const restoreTrigger = useRef<HTMLButtonElement>(null)
   const parentBusy = useRef(busy)
   parentBusy.current = busy
   const currentBasis = useRef(basisKey)
   currentBasis.current = basisKey
-  const blocked = busy || submitting
+  const blocked = busy || submitting !== null
   const comparison = useMemo(() => {
     if (!preview) return { changes: [], error: null }
     try { return { changes: compareParagraphs(chapter.document, preview.document), error: null } }
@@ -109,7 +132,7 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat ||
           parentBusy.current || submitLock.current || document.querySelector('dialog[open]') || event.target instanceof HTMLSelectElement) return
       event.preventDefault()
-      if (confirmRestore || confirmMerge) { setConfirmRestore(false); setConfirmMerge(false); return }
+      if (confirmRestore || confirmMerge) { cancelRestoreConfirmation(); return }
       onClose()
     }
     window.addEventListener('keydown', closeWithEscape)
@@ -124,7 +147,10 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
     if (!mounted.current || ticket !== pageRequest.current || currentBasis.current !== requestedBasis) return
     setLoading(false)
     if (!result.ok) { setReadError(result.error.message); return }
-    setItems((current) => beforeSequence === undefined ? result.data.items : [...current, ...result.data.items.filter((item) => !current.some((existing) => existing.id === item.id))])
+    if (!checkRevisionPage(result.data, beforeSequence, beforeSequence === undefined ? [] : items)) {
+      setReadError('历史分页的结构、顺序或游标无法核对，已有版本仍保留。请重新读取。'); return
+    }
+    setItems((current) => beforeSequence === undefined ? result.data.items : [...current, ...result.data.items])
     setCursor(result.data.nextBeforeSequence)
   }
 
@@ -137,12 +163,13 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
     if (!mounted.current || ticket !== previewRequest.current || currentBasis.current !== requestedBasis) return
     setPreviewLoading(false)
     if (!result.ok) { setReadError(result.error.message); return }
-    if (result.data.bookId !== chapter.bookId || result.data.chapterId !== chapter.id || result.data.id !== id) {
+    if (!isRecord(result.data) || result.data.bookId !== chapter.bookId || result.data.chapterId !== chapter.id || result.data.id !== id) {
       setReadError('读取的版本身份与所选章节不符，未展示或采用。'); return
     }
     try {
       const document = parseManuscript(result.data.document)
-      if (documentToText(document) !== result.data.plainText) throw new Error('Revision text mismatch')
+      if (!checkRevisionPage({ items: [result.data], nextBeforeSequence: null }) || documentToText(document) !== result.data.plainText
+        || countCharacters(result.data.plainText) !== result.data.characterCount) throw new Error('Revision text mismatch')
       setSelection({ basisKey: requestedBasis, revision: { ...result.data, document } })
     } catch { setReadError('所选版本的正文结构或纯文本无法核对，请保留原稿后重试。') }
   }
@@ -153,24 +180,30 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
     setConfirmMerge(false); setConfirmRestore(false)
   }
 
+  function cancelRestoreConfirmation() {
+    const trigger = confirmMerge ? mergeTrigger.current : restoreTrigger.current
+    setConfirmRestore(false); setConfirmMerge(false)
+    trigger?.focus({ preventScroll: true })
+  }
+
   async function mergeSelected() {
     if (blocked || submitLock.current || archived || !onMerge || !preview || !merged.document || comparison.error) return
     if (!confirmMerge) { setConfirmMerge(true); setConfirmRestore(false); return }
-    submitLock.current = true; setSubmitting(true); setReadError(null)
+    submitLock.current = true; setSubmitting('merge'); setReadError(null)
     try {
       await onMerge({ bookId: chapter.bookId, chapterId: chapter.id, expectedBookRevision: chapter.bookRevision,
         expectedRevisionId: chapter.revisionId, sourceRevisionId: preview.id, selectedBlockIds: [...selectedBlocks] })
     } catch { if (mounted.current) setReadError('采用结果尚未确认，所选差异仍保留。请核对保存状态后再继续。') }
-    finally { submitLock.current = false; if (mounted.current) { setSubmitting(false); setConfirmMerge(false) } }
+    finally { submitLock.current = false; if (mounted.current) { setSubmitting(null); setConfirmMerge(false) } }
   }
 
   async function restoreSelected() {
     if (blocked || submitLock.current || archived || !preview || preview.id === chapter.revisionId) return
     if (!confirmRestore) { setConfirmRestore(true); setConfirmMerge(false); return }
-    submitLock.current = true; setSubmitting(true); setReadError(null)
-    try { await onRestore(preview.id) }
+    submitLock.current = true; setSubmitting('restore'); setReadError(null)
+    try { await onRestore(preview) }
     catch { if (mounted.current) setReadError('恢复结果尚未确认，请核对保存状态；原有历史仍保留。') }
-    finally { submitLock.current = false; if (mounted.current) { setSubmitting(false); setConfirmRestore(false) } }
+    finally { submitLock.current = false; if (mounted.current) { setSubmitting(null); setConfirmRestore(false) } }
   }
 
   return <Dialog title={<><StudioIcon name="history" size={28} />版本历史</>} wide busy={blocked} error={error ?? readError} onClose={onClose} className={diffStyles.dialog}>
@@ -211,8 +244,8 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
           <dt data-kind="moved">移动</dt><dd>{comparison.changes.filter((item) => item.moved).length} 段</dd>
         </dl><p className={diffStyles.hint}>按当前稿恢复到所选来源稿计算；修改含内容与格式，同一段落可能同时修改与移动。</p><strong>已选 {selectedBlocks.length} 处</strong></> : <p className={diffStyles.hint}>选择一个历史版本查看差异。</p>}
         <div className={diffStyles.restoreActions}>
-          {onMerge && <button type="button" className={styles.primaryButton} title={archived ? '归档作品只读' : !selectedBlocks.length ? '先勾选需要恢复的差异' : '核对预览后新增工作稿修订'} disabled={blocked || archived || !merged.document || Boolean(comparison.error)} onClick={() => void mergeSelected()}><StudioIcon name="layers" size={18} />{submitting ? '正在恢复…' : confirmMerge ? '确认局部恢复' : `局部恢复（${selectedBlocks.length}）`}</button>}
-          <button type="button" className={diffStyles.restoreVersion} title={archived ? '归档作品只读' : !preview ? '先选择历史版本' : preview.id === chapter.revisionId ? '所选版本已经是当前稿' : '核对所选历史稿后新增修订'} disabled={blocked || archived || !preview || preview.id === chapter.revisionId || previewLoading} onClick={() => void restoreSelected()}><StudioIcon name="history" size={18} />{confirmRestore ? '确认整版恢复' : '恢复为新修订'}</button>
+          {onMerge && <button ref={mergeTrigger} type="button" className={styles.primaryButton} aria-busy={submitting === 'merge'} title={archived ? '归档作品只读' : !selectedBlocks.length ? '先勾选需要恢复的差异' : '核对预览后新增工作稿修订'} disabled={blocked || archived || !merged.document || Boolean(comparison.error)} onClick={() => void mergeSelected()}><StudioIcon name="layers" size={18} />{submitting === 'merge' ? '正在局部恢复…' : confirmMerge ? '确认局部恢复' : `局部恢复（${selectedBlocks.length}）`}</button>}
+          <button ref={restoreTrigger} type="button" className={`${styles.button} ${diffStyles.restoreVersion}`} aria-busy={submitting === 'restore'} title={archived ? '归档作品只读' : !preview ? '先选择历史版本' : preview.id === chapter.revisionId ? '所选版本已经是当前稿' : '核对所选历史稿后新增修订'} disabled={blocked || archived || !preview || preview.id === chapter.revisionId || previewLoading} onClick={() => void restoreSelected()}><StudioIcon name="history" size={18} />{submitting === 'restore' ? '正在整版恢复…' : confirmRestore ? '确认整版恢复' : '恢复为新修订'}</button>
         </div>
         {confirmRestore && preview && <p className={diffStyles.confirm} role="status">将把版本 {preview.sequence} 的正文恢复为新的当前稿。当前窗口的修改会先保存。</p>}
         {confirmMerge && <p className={diffStyles.confirm} role="status">将采用所选 {selectedBlocks.length} 处段落差异并新增工作稿版本；原稿、历史与作者定稿保留。请核对中间预览。</p>}
@@ -220,7 +253,7 @@ export function RevisionHistory({ api, chapter, archived, busy, error, onClose, 
       </aside>
     </div>
     <div className={styles.formActions}><button type="button" className={styles.button} onClick={onClose} disabled={blocked}>关闭</button>
-      {(confirmRestore || confirmMerge) && <button type="button" className={styles.button} onClick={() => { setConfirmRestore(false); setConfirmMerge(false) }} disabled={blocked}>取消恢复</button>}
+      {(confirmRestore || confirmMerge) && <button type="button" className={styles.button} onClick={cancelRestoreConfirmation} disabled={blocked}>取消恢复</button>}
     </div>
   </Dialog>
 }
