@@ -49,6 +49,8 @@ type Draft =
   | { kind: 'goal'; input: SaveWritingGoalInput }
   | { kind: 'session'; input: LogWritingSessionInput }
 interface ReviewReplacement { issue: ReviewIssue; original: string; bookRevision: number; confirmed: boolean }
+interface ArchitectDraft { ideas: { id: string; title: string; content: string }[]; selectedIds: string[]; title: string; content: string }
+const emptyArchitectDraft = (): ArchitectDraft => ({ ideas: [], selectedIds: [], title: '', content: '' })
 
 const tabs: { id: Tab; label: string; icon: StudioIconName }[] = [
   { id: 'outline', label: '章节大纲', icon: 'list' },
@@ -96,7 +98,9 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
   const initialRead = useRef(true)
   const initialIssueOpened = useRef(false)
   const [reviewMutation, setReviewMutation] = useState<SaveReviewIssueInput | null>(null)
-  const tool = useToolSession({ api, disabled, onUnknown, onDirtyChange, isProtected: () => syncRef.current })
+  const [architectDraft, setArchitectDraft] = useState(emptyArchitectDraft)
+  const architectDirty = useRef(false)
+  const tool = useToolSession({ api, disabled, onUnknown, onDirtyChange, isProtected: () => syncRef.current || architectDirty.current })
   const [search, setSearch] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
   const [planningChapterId, setPlanningChapterId] = useState(chapter?.id ?? '')
@@ -217,6 +221,12 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
     })
   }
   function changed(next: Draft) { setDraft(next); setDiscard(false); tool.setDirty(true); tool.setNotice(null) }
+  function changeArchitect(next: ArchitectDraft) {
+    setArchitectDraft(next)
+    // 想法保留在父面板，切换标签和打开正式表单不丢失；离开作品前须明确处理。
+    architectDirty.current = Boolean(next.ideas.length || next.title || next.content)
+    tool.setDirty(tool.hasChanges())
+  }
   function canSwitch() {
     if (!tool.canLeave() || syncRef.current) { tool.setError('当前内容尚未处理完，请先保存、放弃更改或核对原请求。'); return false }
     return true
@@ -598,35 +608,36 @@ function WorkbenchContent({ api, book, chapter, disabled, onDirtyChange, onBookC
               <StoryArchitectView
                 book={catalog}
                 snapshot={snapshot}
-                disabled={blocked}
+                disabled={blocked || Boolean(draft)}
+                draft={architectDraft}
+                onChange={changeArchitect}
                 onApplyBrief={(brief: WorkbenchSnapshot['brief']) => edit({ kind: 'brief', input: { ...mutation(), brief } }, true)}
-                onCreateScene={(sceneGoal: string) => {
-                  setTab('scenes')
-                  edit({
+                onCreateScene={(title: string, goal: string) => {
+                  if (edit({
                     kind: 'scene',
                     input: {
                       ...mutation(),
                       id: crypto.randomUUID(),
                       expectedRevision: 0,
                       fields: {
-                        title: '开篇黄金第一场 · 危机入局',
+                        title,
                         chapterId: currentChapter?.id ?? catalog.chapters[0]?.id ?? null,
-                        position: (snapshot.scenes.length || 0) + 1,
-                        goal: sceneGoal,
-                        conflict: '核心阻碍突发降临，退路被断',
-                        outcome: '主角被迫亮出底牌，悬念钩子抛出',
-                        viewpoint: snapshot.brief.narrator || '第三人称限知',
+                        position: Math.max(0, ...snapshot.scenes.filter((item) => item.chapterId === (currentChapter?.id ?? catalog.chapters[0]?.id ?? null)).map((item) => item.position)) + 1,
+                        goal,
+                        conflict: '',
+                        outcome: '',
+                        viewpoint: '',
                         characterIds: [],
                         locationId: null,
-                        storyTime: '开篇第一日',
-                        plotline: '主线开局',
+                        storyTime: '',
+                        plotline: '',
                         status: 'planned',
-                        targetCharacters: 2500,
+                        targetCharacters: null,
                         anchor: null,
                         archived: false,
                       },
                     },
-                  }, true)
+                  }, true)) setTab('scenes')
                 }}
               />
             )}
@@ -973,126 +984,119 @@ function ActivitySummary({ snapshot, date, period, disabled, onEditGoal }: { sna
   </>
 }
 
-// ============================================================
-// StarWriter V2.4.8 同款扩展组件：故事建筑师 / 朱雀 AI 检测 / 多维读者模拟
-// ============================================================
-
-const DEFAULT_IDEAS = [
-  { id: '1', title: '末日重生反套路', tag: '开篇脑洞', content: '开篇第1分钟主角发现自己虽然重生，但这次变异力量提早了3天降临，所有前世记忆全部产生偏差。' },
-  { id: '2', title: '金手指代价限制', tag: '系统设定', content: '系统每次提供神级功法或技能，必须献祭一件与自身强烈情感羁绊的旧物，防止力量过分膨胀。' },
-  { id: '3', title: '双面身份博弈', tag: '人物张力', content: '主角白天是官方镇魔司里唯唯诺诺的档案录入员，夜晚是黑市深渊里令各方枭雄闻风丧胆的暗行者。' },
-  { id: '4', title: '第三卷核心反转', tag: '主线伏笔', content: '一直引导主角探索深渊裂隙的神秘信使，其实是十年后战死在绝巅之上的主角自己残留的执念投影。' },
-]
-
-function StoryArchitectView({ book, snapshot, disabled, onApplyBrief, onCreateScene }: {
+function StoryArchitectView({ book, snapshot, disabled, draft, onChange, onApplyBrief, onCreateScene }: {
   book: BookSnapshot
   snapshot: WorkbenchSnapshot
   disabled: boolean
+  draft: ArchitectDraft
+  onChange: (draft: ArchitectDraft) => void
   onApplyBrief: (brief: WorkbenchSnapshot['brief']) => void
-  onCreateScene: (sceneGoal: string) => void
+  onCreateScene: (title: string, goal: string) => void
 }) {
-  const [selectedIdeas, setSelectedIdeas] = useState<string[]>(['1', '2'])
-  const [ideas, setIdeas] = useState(DEFAULT_IDEAS)
-  const [newTitle, setNewTitle] = useState('')
-  const [newContent, setNewContent] = useState('')
-  const [generatedBrief, setGeneratedBrief] = useState<WorkbenchSnapshot['brief'] | null>(null)
+  const [preview, setPreview] = useState(false)
+  const [discard, setDiscard] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [copyMessage, setCopyMessage] = useState<string | null>(null)
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const copyLock = useRef(false)
+  const active = useRef(true)
+  const titleRef = useRef<HTMLInputElement>(null)
+  const keepRef = useRef<HTMLButtonElement>(null)
+  const lastField = useRef<HTMLElement | null>(null)
+  const selected = draft.ideas.filter((item) => draft.selectedIds.includes(item.id))
+  const premise = selected.map((item) => `${item.title}\n${item.content}`).join('\n\n')
+  const tooLong = premise.length > 5000
+  const dirty = Boolean(draft.ideas.length || draft.title || draft.content)
+  const ready = !disabled && selected.length > 0 && !tooLong
+  const generatedBrief = preview ? { ...snapshot.brief, premise } : null
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  useEffect(() => { if (discard) keepRef.current?.focus() }, [discard])
 
   function toggleIdea(id: string) {
-    setSelectedIdeas((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])
+    if (disabled) return
+    change({ ...draft, selectedIds: draft.selectedIds.includes(id) ? draft.selectedIds.filter((value) => value !== id) : [...draft.selectedIds, id] })
+  }
+  function change(next: ArchitectDraft) {
+    setPreview(false); setDiscard(false); setCopyMessage(null); setCopyError(null); onChange(next)
   }
 
   function addCustomIdea(e: FormEvent) {
     e.preventDefault()
-    if (!newTitle.trim()) return
-    const item = { id: crypto.randomUUID(), title: newTitle.trim(), tag: '自定想法', content: newContent.trim() || newTitle.trim() }
-    setIdeas((cur) => [...cur, item])
-    setSelectedIdeas((cur) => [...cur, item.id])
-    setNewTitle('')
-    setNewContent('')
+    if (disabled || !draft.title.trim() || draft.ideas.length >= 50) return
+    const item = { id: crypto.randomUUID(), title: draft.title.trim(), content: draft.content.trim() }
+    change({ ideas: [...draft.ideas, item], selectedIds: [...draft.selectedIds, item.id], title: '', content: '' })
+    titleRef.current?.focus()
   }
-
-  const selectedTexts = ideas.filter((i) => selectedIdeas.includes(i.id)).map((i) => `【${i.tag} · ${i.title}】\n${i.content}`).join('\n\n')
-
+  async function copyPrompt() {
+    if (copyLock.current || disabled || !selected.length) return
+    copyLock.current = true; setCopying(true); setCopyMessage(null); setCopyError(null)
+    try {
+      await navigator.clipboard.writeText(promptPackage)
+      if (active.current) setCopyMessage('指令已复制。')
+    } catch { if (active.current) setCopyError('复制未完成，完整指令已保留。') }
+    finally { copyLock.current = false; if (active.current) setCopying(false) }
+  }
   const promptPackage = `【故事建筑师指令包 · 专用于给大模型生成长篇骨架】
 《${book.book.title}》创作空间想法箱勾选内容：
 
-${selectedTexts || '（尚未选择想法箱条目）'}
+${premise || '（尚未选择想法）'}
 
 当前创作约定参考：
-- 叙述人称：${snapshot.brief.narrator || '第三人称'}
-- 预设文风：${snapshot.brief.style || '极简动词白描，紧凑悬念，有烟火气'}
-- 核心规则禁忌：${snapshot.brief.rules || '不可违背世界观力量代价；角色只能使用已知信息。'}
+- 叙述人称：${snapshot.brief.narrator || '尚未填写'}
+- 叙述时态：${snapshot.brief.tense || '尚未填写'}
+- 文风：${snapshot.brief.style || '尚未填写'}
+- 核心规则：${snapshot.brief.rules || '尚未填写'}
 
 请根据以上构思，为我构建：
 1. 一句话故事核心前提与两卷主线冲突
 2. 主角核心动机、执念与致命弱点
 3. 第一卷前五章连贯大纲与开篇第1章黄金场景节拍`
 
-  function buildBrief() {
-    const brief: WorkbenchSnapshot['brief'] = {
-      premise: ideas.filter((i) => selectedIdeas.includes(i.id)).map((i) => i.content).join('；') || snapshot.brief.premise,
-      style: '去AI味极简动词白描，拒绝空洞浮夸修辞，保持市井生活细节与真实物理反馈',
-      narrator: '第三人称限知视角',
-      tense: '现在时',
-      rules: '超能或金手指必有消耗代价；各方博弈只能使用已知信息，禁止未卜先知。',
-    }
-    setGeneratedBrief(brief)
-  }
-
   return <section className={styles.architectSection} aria-label="故事建筑师">
     <div className={styles.architectHero}>
-      <div>
-        <h4>故事建筑师 · 从想法箱到骨架流水线</h4>
-        <p>勾选想法箱若干条，一键打包成高阶提示词喂给大模型；或直接将生成的故事前提、人设与首章节拍回填入库。</p>
-      </div>
+      <h4>故事建筑师</h4>
       <div className={styles.actions}>
-        <button type="button" className={styles.primaryButton} disabled={disabled || !selectedIdeas.length} onClick={buildBrief}>
-          + 智能生成故事前提与约定
-        </button>
+        <button type="button" className={styles.primaryButton} disabled={!ready} title={tooLong ? '所选内容超过故事前提的 5,000 字符限制，请减少选择。' : undefined} onClick={() => setPreview(true)}><StudioIcon name="notes" />整理创作约定草案</button>
+        <button type="button" className={styles.button} disabled={disabled || !dirty} onClick={() => setDiscard(true)}>清空想法草稿</button>
       </div>
     </div>
-
+    {dirty && <p className={styles.warning} role="status">想法草稿尚未保存。{draft.title || draft.content ? '仍有尚未加入想法箱的输入。' : ''}</p>}
+    {discard && <div className={styles.warning} role="alert"><p>确定清空本次想法草稿？已保存的创作约定和场景会保留。</p><div className={styles.actions}>
+      <button type="button" className={styles.button} disabled={disabled} onClick={() => { change(emptyArchitectDraft()); requestAnimationFrame(() => titleRef.current?.focus()) }}>确认清空</button>
+      <button ref={keepRef} type="button" className={styles.button} onClick={() => { setDiscard(false); requestAnimationFrame(() => (lastField.current?.isConnected ? lastField.current : titleRef.current)?.focus()) }}>继续编辑想法</button>
+    </div></div>}
     <div className={styles.fieldGrid}>
       <div>
-        <h5 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 650 }}>想法箱（勾选用于打包）</h5>
+        <h5>想法箱</h5>
         <div className={styles.ideaCardsGrid}>
-          {ideas.map((item) => {
-            const active = selectedIdeas.includes(item.id)
-            return <div key={item.id} className={styles.ideaBoxItem} style={{ borderColor: active ? 'var(--color-accent)' : undefined, background: active ? 'var(--color-accent-soft)' : undefined }} onClick={() => toggleIdea(item.id)}>
-              <div className={styles.ideaItemHeader}>
-                <span className={styles.ideaTag}>{item.tag}</span>
-                <span style={{ fontSize: 12, color: active ? 'var(--color-accent)' : 'var(--color-muted)' }}>{active ? '✓ 已选入' : '点击勾选'}</span>
-              </div>
-              <strong>{item.title}</strong>
-              <p>{item.content}</p>
-            </div>
-          })}
+          {draft.ideas.map((item) => <label key={item.id} className={styles.ideaBoxItem} data-selected={draft.selectedIds.includes(item.id)}>
+            <span className={styles.ideaItemHeader}><input type="checkbox" checked={draft.selectedIds.includes(item.id)} disabled={disabled} onChange={() => toggleIdea(item.id)} /><strong>{item.title}</strong></span>
+            <span>{item.content}</span>
+          </label>)}
+          {!draft.ideas.length && <p className={styles.empty}>尚未添加想法。</p>}
         </div>
-
-        <form onSubmit={addCustomIdea} style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-ink)' }}>+ 添加新念头到想法箱</span>
-          <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="脑洞或悬念标题…" maxLength={100} style={{ padding: '6px 10px' }} />
-          <textarea value={newContent} onChange={(e) => setNewContent(e.target.value)} placeholder="具体构思内容，如主角获得的奇怪信物…" rows={2} style={{ padding: '6px 10px' }} />
-          <button type="submit" className={styles.button} disabled={!newTitle.trim()}>添加念头</button>
+        <form className={styles.ideaForm} aria-label="添加想法" onSubmit={addCustomIdea} onFocusCapture={(event) => { if (event.target instanceof HTMLElement) lastField.current = event.target }}>
+          <fieldset disabled={disabled || draft.ideas.length >= 50}>
+            <label>想法标题<input ref={titleRef} required value={draft.title} onChange={(e) => change({ ...draft, title: e.target.value })} maxLength={100} /></label>
+            <label>想法内容<textarea value={draft.content} onChange={(e) => change({ ...draft, content: e.target.value })} maxLength={5000} rows={3} /></label>
+          </fieldset>
+          {draft.ideas.length >= 50 && <p className={styles.warning}>本次最多保留 50 条想法，请先处理已有草稿。</p>}
+          <button type="submit" className={styles.button} disabled={disabled || !draft.title.trim() || draft.ideas.length >= 50}><StudioIcon name="plus" />添加念头</button>
         </form>
       </div>
-
       <div className={styles.architectConsole}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <strong style={{ fontSize: 13.5 }}>故事建筑师 · 指令打包区</strong>
-          <button type="button" className={styles.button} onClick={() => navigator.clipboard.writeText(promptPackage)}>复制完整指令</button>
-        </div>
-        <textarea className={styles.promptPackageBox} readOnly rows={12} value={promptPackage} />
-
-        {generatedBrief && <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--color-accent)', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-accent)' }}>已提炼出故事约定草案：</span>
-          <p style={{ fontSize: 12.5, margin: 0 }}><strong>故事前提：</strong>{generatedBrief.premise}</p>
-          <p style={{ fontSize: 12, margin: 0, color: 'var(--color-muted)' }}><strong>文风：</strong>{generatedBrief.style} | <strong>视角：</strong>{generatedBrief.narrator}</p>
-          <div className={styles.actions} style={{ marginTop: 6 }}>
-            <button type="button" className={styles.primaryButton} onClick={() => onApplyBrief(generatedBrief)}>应用为此书正式创作约定</button>
-            <button type="button" className={styles.button} onClick={() => onCreateScene(generatedBrief.premise)}>一键生成黄金第1场景</button>
+        <div className={styles.heading}><strong>故事指令</strong><button type="button" className={styles.button} disabled={disabled || copying || !selected.length} aria-busy={copying} onClick={() => void copyPrompt()}><StudioIcon name="copy" />复制完整指令</button></div>
+        {copyMessage && <p className={styles.notice} role="status">{copyMessage}</p>}{copyError && <p className={styles.error} role="alert">{copyError}</p>}
+        <label>完整故事指令<textarea className={styles.promptPackageBox} readOnly rows={12} value={promptPackage} /></label>
+        {tooLong && <p className={styles.warning} role="status">所选内容共 {premise.length.toLocaleString()} 字符，超过故事前提的 5,000 字符限制，请减少选择。</p>}
+        {generatedBrief && <section className={styles.architectPreview} aria-label="创作约定草案">
+          <h5>创作约定草案</h5>
+          <p>{generatedBrief.premise}</p>
+          <div className={styles.actions}>
+            <button type="button" className={styles.primaryButton} disabled={!ready} onClick={() => onApplyBrief(generatedBrief)}>带入创作约定并编辑</button>
+            <button type="button" className={styles.button} disabled={!ready} onClick={() => onCreateScene(selected[0].title, premise)}>带入场景并编辑</button>
           </div>
-        </div>}
+        </section>}
       </div>
     </div>
   </section>
