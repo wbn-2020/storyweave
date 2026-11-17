@@ -113,14 +113,14 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
     if (!current.current.busy && operation.current === null) onClose()
   }
 
-  return <Dialog title="从草稿副本恢复" wide busy={locked} error={error ?? readError} onClose={close}>
+  return <Dialog title="从草稿副本恢复" className={styles.draftImport} wide busy={locked} error={error ?? readError} onClose={close}>
     <p className={styles.helpText}>恢复目标：《{book.title}》。检查点来自当前作品库；也可以选择另存的 JSON 草稿。确认后会在目标作品中建立新章节，保留原章节、版本和草稿副本。</p>
     {book.archivedAt && <p className={styles.formError}>目标作品已归档，可以预览草稿。请解除归档后再恢复。</p>}
     <div className={styles.importOptions}>
       <button type="button" className={styles.button} disabled={locked} onClick={() => void prepare()}>{reading === 'file' ? '正在选择与读取…' : '选择 JSON 草稿副本'}</button>
       <button type="button" className={styles.button} disabled={locked} onClick={() => setAttempt((value) => value + 1)}>重新检查恢复草稿</button>
     </div>
-    {drafts && <section className={styles.fieldStack} aria-label="检查点容量与分代">
+    {drafts && <details className={styles.draftDetails}><summary>检查点容量与分代 · {drafts.capacity.files.toLocaleString()} 项</summary><section className={styles.fieldStack} aria-label="检查点容量与分代">
       <p className={styles.helpText}>当前写入代：{drafts.capacity.generationId === 'legacy' ? '初始代' : drafts.capacity.generationId} ·
         {drafts.capacity.files.toLocaleString()} / {drafts.capacity.maxFiles.toLocaleString()} 项 ·
         {(drafts.capacity.bytes / 1024 / 1024).toFixed(1)} / {(drafts.capacity.maxBytes / 1024 / 1024).toFixed(0)} MiB。
@@ -130,7 +130,7 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
       </select></label>
       <label className={styles.checkLabel}><input type="checkbox" checked={confirmRotation} disabled={locked} onChange={(event) => setConfirmRotation(event.target.checked)} />保留全部旧检查点，新建一代承接后续自动保护</label>
       <button type="button" className={styles.button} disabled={locked || !confirmRotation} onClick={() => void rotate()}>{reading === 'rotate' ? '正在建立新代…' : '建立检查点新代'}</button>
-    </section>}
+    </section></details>}
     {drafts && drafts.warnings.length > 0 && <ul className={styles.warningList}>{drafts.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
     {drafts && drafts.skipped > 0 && <p className={styles.helpText}>{drafts.skipped} 项无法读取或不符合草稿格式，未作修改。</p>}
     <div className={styles.previewLayout}>
@@ -151,7 +151,7 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
     </div>
     {preview && <>
       <div className={styles.importSummary}><strong>{preview.sourceName}</strong><span>{preview.characterCount.toLocaleString()} 字</span><time dateTime={preview.createdAt}>{formatTime(preview.createdAt)}</time></div>
-      <p className={styles.helpText}>来源作品：{preview.bookId}{preview.bookId === book.id ? '（当前作品）' : '（与目标作品不同）'}<br />来源章节：{preview.chapterId}<br />来源正文版本：{preview.baseRevisionId}</p>
+      <details className={styles.draftDetails}><summary>查看来源与正文版本</summary><p className={styles.helpText}>来源作品：{preview.bookId}{preview.bookId === book.id ? '（当前作品）' : '（与目标作品不同）'}<br />来源章节：{preview.chapterId}<br />来源正文版本：{preview.baseRevisionId}</p></details>
     </>}
     <form onSubmit={commit}>
       <div className={styles.fieldStack}>
@@ -159,7 +159,7 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
         <label className={styles.checkLabel}><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} disabled={!previewMatches || locked || Boolean(book.archivedAt) || submittedToken === preview?.token} />我已核对草稿，确认恢复到《{book.title}》的新章节，保留现有章节。</label>
       </div>
       {submittedToken && <p className={styles.helpText} role="status">该预览已提交恢复。若结果未确认，请先核对回执和目录，再决定是否另选草稿。</p>}
-      <div className={styles.formActions}><button type="button" className={styles.button} disabled={locked} onClick={close}>取消</button><button type="submit" className={styles.primaryButton} disabled={!canCommit}>{busy ? '正在恢复…' : '恢复为新章节'}</button></div>
+      <div className={styles.formActions}><button type="button" className={styles.button} disabled={locked} onClick={close}>取消</button><button type="submit" className={styles.primaryButton} disabled={!canCommit} aria-busy={busy}>{busy ? '正在恢复…' : '恢复为新章节'}</button></div>
     </form>
   </Dialog>
 }

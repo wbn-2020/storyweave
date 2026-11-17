@@ -37,8 +37,9 @@ function ReviewWorkspace({ source, proposal, state, caption, readerNotice, selec
   onBlockRef?: (id: string, element: HTMLDivElement | null) => void
 }) {
   const reviewItems = proposal?.items ?? []
+  const awaitingCheck = !proposal && (source.state === 'succeeded' || source.state === 'running' && source.active === false)
   return <div className={styles.workspace}>
-    <section className={styles.manuscript} aria-label="审稿固定稿件"><header><StudioIcon name="notes" size={24} /><h3>{source.context.chapterTitle}</h3><span className={styles.reviewState} role="status"><StudioIcon name={proposal ? 'check' : 'clock'} size={14} />{state}</span></header>
+    <section className={styles.manuscript} aria-label="审稿固定稿件"><header><StudioIcon name="notes" size={24} /><h3>{source.context.chapterTitle}</h3><span className={styles.reviewState} data-state={awaitingCheck ? 'unchecked' : source.state} role="status"><StudioIcon name={awaitingCheck ? 'warning' : proposal ? 'check' : 'clock'} size={14} />{state}</span></header>
       <p className={styles.sourceCaption}>{caption}</p>
       <div className={styles.manuscriptScroll} tabIndex={0} role="region" aria-label="固定稿件正文与页边批注">{source.context.chapterBlocks.map((block) => {
         const indexes = reviewItems.flatMap((item, index) => item.blockIds.includes(block.blockId) ? [index] : [])
@@ -245,7 +246,7 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
   return <section className={ui.panel} aria-label="审稿候选逐项审阅" aria-busy={tool.busy}>
     <button type="button" className={ui.button} onClick={() => { needsRead.current = true; setExpanded(true) }}><StudioIcon name="read" />打开审稿试读</button>
     {expanded && createPortal(<DialogDisplayContext.Provider value="modal"><Dialog title="审稿试读" className={`${ui.panel} ${styles.dialog}`} wide busy={tool.busy || synchronizing} onClose={() => setExpanded(false)}>
-    {parsed.error && <p className={ui.warning} role="alert">{parsed.error}</p>}
+    {parsed.error && <p className={`${ui.warning} ${styles.resultWarning}`} role="alert"><StudioIcon name="warning" size={18} /><span>{parsed.error}</span></p>}
     {error && <p className={ui.error} role="alert">{error}</p>}
     {changedRun && <p className={ui.warning}>候选版本已变化，当前编辑仍保留。请先留存后重新打开结果。</p>}
     {tool.error && <p className={ui.error} role="alert">{tool.error}</p>}{tool.notice && <p className={ui.notice} role="status">{tool.notice}</p>}
@@ -271,7 +272,7 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
       return <article className={`${ui.panel} ${styles.issue}`} hidden={selected !== index} key={draft.id}><details ref={(element) => { if (element) editors.current.set(index, element); else editors.current.delete(index) }}>
         <summary>{index + 1}. {item.title} · {REVIEW_LENS_LABELS[item.lens]} · {saved ? '已登记' : '审阅与改写'}</summary>
         <button type="button" className={ui.button} onClick={collapseIssue}>收起建议</button>
-        {item.requirement ? <blockquote>章纲要求：{item.requirement.text}<p className={ui.identity}>固定大纲修订 {item.requirement.revisionId}</p></blockquote> : <blockquote>{item.quote}<p className={ui.identity}>固定正文修订 {source.context.chapterRevisionId} · {item.blockIds.length} 个段落</p></blockquote>}
+        {item.requirement ? <blockquote>章纲要求：{item.requirement.text}<p className={ui.identity}>固定大纲修订 {item.requirement.revisionId}</p></blockquote> : <blockquote><p className={ui.identity}>{item.quote === original ? '定位引文' : '定位引文（节选）'}</p>{item.quote}<p className={ui.identity}>固定正文修订 {source.context.chapterRevisionId} · {item.blockIds.length} 个段落</p></blockquote>}
         <p>可能的反证或其他解释：{item.counterpoint || '模型未提供，请作者另行核对。'}</p>
         <fieldset disabled={blocked || Boolean(saved)} className={ui.fields}>
           <label>理由<textarea value={saved?.reason ?? draft.reason} rows={3} maxLength={10000} onChange={(event) => edit(index, { reason: event.target.value })} /></label>
@@ -281,7 +282,7 @@ function ReviewCompletedResults({ api, run, bookRevision, disabled, error, onDir
         {draft.replacement.trim() && !item.requirement && !saved && <AiTextDiff originalText={original} suggestedText={draft.replacement} disabled={blocked} onAcceptText={(replacement) => edit(index, { replacement })} />}
         {saved ? <div className={ui.actions}><p className={ui.notice}>已登记：{decisionLabel(saved)}</p>
           {onOpenChecklist && <button type="button" className={ui.button} disabled={tool.locked || sync || hasEdits(drafts)} onClick={() => openDecision(saved.id)}>查看这条审稿决定</button>}</div>
-          : <div className={ui.actions}><button className={ui.primaryButton} type="button" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'open'} onClick={() => void save(index, 'open')}>采纳建议</button><button className={ui.button} type="button" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'dismissed'} onClick={() => void save(index, 'dismissed')}>忽略建议</button><button className={ui.button} type="button" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'intentional'} onClick={() => void save(index, 'intentional')}>这是刻意安排</button></div>}
+          : <div className={ui.actions}><button className={ui.primaryButton} type="button" aria-label="采纳建议" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'open'} onClick={() => void save(index, 'open')}>{saving?.index === index && saving.status === 'open' ? '保存中…' : '采纳建议'}</button><button className={ui.button} type="button" aria-label="忽略建议" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'dismissed'} onClick={() => void save(index, 'dismissed')}>{saving?.index === index && saving.status === 'dismissed' ? '保存中…' : '忽略建议'}</button><button className={ui.button} type="button" aria-label="这是刻意安排" disabled={blocked} aria-busy={saving?.index === index && saving.status === 'intentional'} onClick={() => void save(index, 'intentional')}>{saving?.index === index && saving.status === 'intentional' ? '保存中…' : '这是刻意安排'}</button></div>}
       </details></article>
     })}
     <footer className={styles.footer}><span className={styles.decisionCount} data-decision="accepted"><StudioIcon name="check" />采纳 {decisions.filter((item) => !['dismissed', 'intentional'].includes(item.status)).length} 条</span><span className={styles.decisionCount} data-decision="dismissed"><StudioIcon name="close" />忽略 {decisions.filter((item) => item.status === 'dismissed').length} 条</span><span className={`${ui.muted} ${styles.disclaimer}`}><StudioIcon name="info" size={16} />模型建议，非事实判定</span>

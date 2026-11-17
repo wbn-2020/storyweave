@@ -159,7 +159,9 @@ export function App({ api }: Props) {
   workspaceRef.current = workspace
   const [book, setBook] = useState<BookSnapshot | null>(null)
   const bookRef = useRef<BookSnapshot | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
+  const [messageState, setMessageState] = useState<{ text: string; tone: 'warning' | 'success' } | null>(null)
+  const message = messageState?.text ?? null
+  const setMessage = useCallback((text: string | null) => setMessageState(text === null ? null : { text, tone: 'warning' }), [])
   const [modal, setModal] = useState<Modal>(null)
   const [exportReceipt, setExportReceipt] = useState<BookExportReceipt | null>(null)
   const aiInstruction = modal?.kind === 'ai' ? modal.initialInstruction : undefined
@@ -971,7 +973,7 @@ export function App({ api }: Props) {
   async function commitImport(token: string, title: string) {
     if (!api) return
     await changeView(async () => {
-      await mutate('import.commit', () => api.commitTextImport({ token, title }), (snapshot) => { applyBook(snapshot, true); setModal(null); setMessage('导入完成。请选择目录中的章节开始检查与编辑。') })
+      await mutate('import.commit', () => api.commitTextImport({ token, title }), (snapshot) => { applyBook(snapshot, true); setModal(null); setMessageState({ text: '导入完成。请选择目录中的章节开始检查与编辑。', tone: 'success' }) })
     }, false, false, false, true)
   }
 
@@ -981,7 +983,7 @@ export function App({ api }: Props) {
     await changeView(async () => {
       await mutate('draft.import', () => api.commitDraftImport({ scope, token, title }), async (saved) => {
         await acceptChapter(saved, true)
-        setMessage('草稿已恢复为新章节，原章和原始副本已保留。请核对新章正文与来源记录。')
+        setMessageState({ text: '草稿已恢复为新章节，原章和原始副本已保留。请核对新章正文与来源记录。', tone: 'success' })
       })
     }, false, false, false, true)
   }
@@ -1339,7 +1341,8 @@ export function App({ api }: Props) {
   }, [api, session.flush, session.isComposing])
 
   if (viewState === 'loading') return <div className={styles.centerState}><span className={styles.spinner} />正在打开织章书房…</div>
-  const modalError = message ?? session.session.error?.message
+  // 已确认完成的工作室提示单独呈现，不作为各业务面板的错误回传。
+  const modalError = (messageState?.tone === 'success' ? null : message) ?? session.session.error?.message
   const detailsRecovery = pendingMessage ? { message: pendingMessage, checking: checkingReceipt,
     onCheck: () => void checkMutationReceipt(), onRecover: () => openRecovery(true) } : undefined
   const closeModal = async () => {
@@ -1575,7 +1578,7 @@ export function App({ api }: Props) {
         </div>
       </header>
     <main className={`${styles.main} ${studioView !== 'write' || isCanvasView ? styles.homeMain : ''}`}>
-      {message && !hasBlockingDialog && <div className={styles.notice} role="alert"><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
+      {message && !hasBlockingDialog && <div className={`${styles.notice} ${messageState?.tone === 'success' ? styles.noticeSuccess : ''}`} role={messageState?.tone === 'success' ? 'status' : 'alert'}><span>{message}</span><button type="button" onClick={() => setMessage(null)} aria-label="关闭提示">×</button></div>}
       {display.warning && !hasBlockingDialog && <div className={styles.notice} role="status"><span>{display.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={display.retrySave}>保存当前显示偏好</button></div>}
       {pendingMessage && <div className={styles.notice} role="alert"><span>{pendingMessage}</span><button className={styles.receiptButton} type="button" onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
       {session.session.error && <StellarEmpty compact role="alert" heading="h2" icon={storageReason ? 'database' : 'warning'} hintIcon="refresh"
