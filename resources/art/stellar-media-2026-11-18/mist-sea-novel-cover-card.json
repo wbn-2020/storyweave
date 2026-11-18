@@ -1,0 +1,26 @@
+{
+  "id": "mist-sea-novel-cover",
+  "file": "mist-sea-novel-cover.png",
+  "libraryFile": "mist-sea-novel-cover-card.jpg",
+  "prompt": "Use case: illustration-story. Asset type: original full-bleed front-cover illustration for a Chinese science-fantasy novel, a finished painting, not a mockup. Subject: the old stone Mist-Sea Lighthouse on a rocky sea cliff, its warm lantern casting a narrow beam through deep-blue night mist; a delicate celestial star chart above, a small brass star-chart key in the foreground on stone, all three story elements clear and coherent. Style: refined premium Chinese science-fantasy anime concept painting, detailed weathered stone and brass, quiet turquoise ocean, restrained cyan and violet light, readable balanced exposure. Composition: vertical 3:4 front cover, complete lighthouse in the middle safe area, generous dark-blue sky in the upper quarter suitable for a later typographic title, no title drawn into the image; foreground key visible and anatomically plausible. No people, no words, no letters, no logos, no watermarks, no borders, no app UI, no browser, no book mockup, no collage.",
+  "model": "gpt-image-2.6",
+  "inputSize": "768x1024",
+  "width": 1086,
+  "height": 1448,
+  "bytes": 2967202,
+  "sha256": "70aa26ca1fb2a548dcc45d66360ad3699a3e7b051bfb7c7c8bc40483df072262",
+  "librarySha256": "b85a0386abae02a6c1a6d4dcb48b9e1e8916aed14238075330fef7bcdce4633d",
+  "libraryBytes": 585472,
+  "runId": "bcbdbc5f-24ef-4d03-a930-d3782fd54539",
+  "mediaId": "afe2dd28-507d-4655-a227-d88f5017d710",
+  "kind": "cover",
+  "jpegSource": {
+    "mime": "image/png",
+    "width": 1086,
+    "height": 1448,
+    "byteLength": 2967202,
+    "sha256": "70aa26ca1fb2a548dcc45d66360ad3699a3e7b051bfb7c7c8bc40483df072262",
+    "quality": 93
+  },
+  "scope": "隔离合成作品；真实作品需作者采用"
+}

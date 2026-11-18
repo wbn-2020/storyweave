@@ -17,6 +17,7 @@ interface Props {
   onStateChange: (state: { dirty: boolean; locked: boolean; running: boolean }) => void
   onUse: (run: ImageGenerationRun) => Promise<void>; onClose: () => void
 }
+type GenerationOperation = 'load' | 'people' | 'start' | 'check' | 'cancel' | 'discard' | 'jpeg' | 'use'
 const stateLabels: Record<ImageGenerationRun['state'], string> = {
   running: '正在生成', succeeded: '生成完成，待保存', failed: '生成失败', cancelled: '已取消',
   interrupted: '请求已中断，待核对', saved: '已存入本书', discarded: '已放弃',
@@ -31,8 +32,10 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   const [consent, setConsent] = useState(false), [dirty, setDirty] = useState(false)
   const [run, setRun] = useState<ImageGenerationRun | null>(null), [submitted, setSubmitted] = useState<ImageGenerationInput | null>(null)
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [operationName, setOperationName] = useState<GenerationOperation | null>(null)
   const [loaded, setLoaded] = useState(false), [pollPaused, setPollPaused] = useState(false)
   const mounted = useRef(false), busyRef = useRef(false), runRef = useRef(run), submittedRef = useRef(submitted)
+  const editor = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onStateChange, onUse, onClose })
   callbacks.current = { onStateChange, onUse, onClose }
   runRef.current = run; submittedRef.current = submitted
@@ -52,18 +55,26 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   }, [])
   useEffect(() => { callbacks.current.onStateChange({ dirty, locked, running }) }, [dirty, locked, running])
   useEffect(() => {
+    if (loaded) {
+      editor.current?.scrollIntoView({ block: 'nearest' })
+      const target = editor.current?.querySelector<HTMLElement>('select:not(:disabled),button:not(:disabled)')
+      ;(target ?? editor.current)?.focus({ preventScroll: true })
+    }
+  }, [loaded])
+  useEffect(() => {
     if (!running || pollPaused || disabled) return
     const timer = window.setTimeout(() => void check(), 1200)
     return () => window.clearTimeout(timer)
   }, [run, busy, running, pollPaused, disabled])
 
-  async function operation(action: () => Promise<void>) {
+  async function operation(next: GenerationOperation, action: () => Promise<void>) {
     if (!mounted.current || busyRef.current || disabled) return
-    busyRef.current = true; setBusy(true); setError(null)
+    busyRef.current = true; setBusy(true); setOperationName(next); setError(null)
     try { await action() }
     catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : '图片操作未完成，请核对原任务。') }
-    finally { busyRef.current = false; if (mounted.current) setBusy(false) }
+    finally { busyRef.current = false; if (mounted.current) { setBusy(false); setOperationName(null) } }
   }
+  const processing = (next: GenerationOperation) => busy && operationName === next
   function receive(value: unknown, runId: string) {
     if (!isImageGenerationRun(value, bookId, runId)) throw new Error('图片回执身份或格式不符，请保留原任务编号并重新核对。')
     const previous = runRef.current
@@ -73,7 +84,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
     runRef.current = value; setRun(value); setDirty(false); setConfirmDiscard(false); setLoaded(true); setPollPaused(false)
   }
   async function load() {
-    await operation(async () => {
+    await operation('load', async () => {
       if (initialRunId) {
         const result = await request(() => api.getImageGeneration({ bookId, runId: initialRunId }))
         if (!result.ok) throw new Error(result.error.message)
@@ -88,7 +99,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   }
   function changed(change: () => void) { change(); setDirty(true); setConsent(false); setConfirmDiscard(false) }
   async function searchPeople(search: string, offset = 0) {
-    await operation(async () => {
+    await operation('people', async () => {
       const result = await request(() => api.listKnowledgeItems({ bookId, kind: 'person', search, offset, limit: 40 }))
       if (!result.ok) throw new Error(result.error.message)
       const page = result.data
@@ -100,7 +111,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   async function start(event: FormEvent) {
     event.preventDefault()
     if (readOnly || !connection || run || submitted || !consent || keyMissing || unsupportedSize || connections?.requiresUpgrade) return
-    await operation(async () => {
+    await operation('start', async () => {
       const input = parseImageGenerationInput({ bookId, expectedBookRevision: bookRevision, runId: crypto.randomUUID(), mediaId: crypto.randomUUID(),
         connectionId: connection.id, expectedConnectionVersion: connection.version, kind, personId: kind === 'portrait' ? personId : null, title, prompt, size })
       // 在调用前固定身份；IPC 失联后以此编号读取，不能以新编号无声重试。
@@ -116,7 +127,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   async function check() {
     const runId = runRef.current?.input.runId ?? submittedRef.current?.runId ?? initialRunId
     if (!runId) return
-    await operation(async () => {
+    await operation('check', async () => {
       try {
         const result = await request(() => api.getImageGeneration({ bookId, runId }))
         if (!result.ok) {
@@ -136,7 +147,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   }
   async function cancel() {
     if (!run || run.state !== 'running') return
-    await operation(async () => {
+    await operation('cancel', async () => {
       const result = await request(() => api.cancelImageGeneration({ bookId, runId: run.input.runId }))
       if (!result.ok) throw new Error(result.error.message)
       receive(result.data, run.input.runId)
@@ -145,7 +156,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   async function discard() {
     if (!run || running || busy) return
     if (!confirmDiscard) { setConfirmDiscard(true); return }
-    await operation(async () => {
+    await operation('discard', async () => {
       const result = await request(() => api.discardImageGeneration({ bookId, runId: run.input.runId }))
       if (!result.ok) throw new Error(result.error.message)
       receive(result.data, run.input.runId)
@@ -153,7 +164,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
   }
   async function createJpeg() {
     if (!run || run.state !== 'succeeded' || !oversized) return
-    await operation(async () => {
+    await operation('jpeg', async () => {
       const result = await request(() => api.createImageGenerationJpeg({ bookId, runId: run.input.runId }))
       if (!result.ok) throw new Error(result.error.message)
       receive(result.data, run.input.runId)
@@ -165,31 +176,31 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
     callbacks.current.onClose()
   }
 
-  return <div className={styles.generator} aria-busy={busy || running}>
+  return <div ref={editor} tabIndex={-1} className={styles.generator} aria-busy={busy || running}>
     <h4>{run ? stateLabels[run.state] : '生成图片'}</h4>
     {readOnly && <p className={styles.warning}>当前作品暂不可写，可核对、取消或明确放弃原任务；恢复编辑并刷新资料后才能保存到本书。</p>}
     {error && <p className={styles.error} role="alert">{error}</p>}
     {unresolved && <div className={styles.warning}><p>原请求结果尚待核对；当前输入与任务编号保留，不会自动重发。</p><code>{submitted?.runId ?? initialRunId}</code>
-      <button type="button" className={styles.button} disabled={busy || disabled} onClick={() => void check()}>核对原任务</button></div>}
-    {!loaded && !unresolved && <button type="button" className={styles.button} disabled={busy || disabled} onClick={() => void load()}>重新读取生成资料</button>}
+      <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('check')} onClick={() => void check()}>{processing('check') ? '正在核对原任务…' : '核对原任务'}</button></div>}
+    {!loaded && !unresolved && <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('load')} onClick={() => void load()}>{processing('load') ? '正在读取生成资料…' : '重新读取生成资料'}</button>}
     {run ? <>
       <p className={styles.muted}>{run.connection.name} · {run.connection.model} · {run.input.size === 'auto' ? '接口默认画幅' : run.input.size}</p>
       {running && <><div className={styles.generationSkeleton} data-kind={run.input.kind} role="status"><StudioIcon name="spark" size={32} /><span>正在生成{run.input.kind === 'cover' ? '封面' : '立绘'}…</span></div>
-        <button type="button" className={styles.button} disabled={busy || disabled} onClick={() => void cancel()}>取消生成</button></>}
+        <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('cancel')} onClick={() => void cancel()}>{processing('cancel') ? '正在取消生成…' : '取消生成'}</button></>}
       {running && pollPaused && <div className={styles.warning}><p>自动核对已暂停，原任务仍保留；可手动核对当前状态。</p>
-        <button type="button" className={styles.button} disabled={busy || disabled} onClick={() => void check()}>核对原任务</button></div>}
+        <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('check')} onClick={() => void check()}>{processing('check') ? '正在核对原任务…' : '核对原任务'}</button></div>}
       {run.error && <p className={styles.warning} role="status">{run.error}</p>}
       {run.image && <><img className={styles.generatedPreview} src={`data:${run.image.mime};base64,${run.image.dataBase64}`} alt={run.input.title} />
         <p className={styles.muted}>{run.image.width} × {run.image.height} · {(run.image.byteLength / 1024 / 1024).toFixed(2)} MiB · 尚未保存为书内图片</p>
         {oversized && <div className={styles.warning}><p>原图超过书内单张 2 MiB 上限，已完整留存在图片任务中。可明确制作同尺寸 JPEG 入库副本（质量 93，有损压缩）；不缩放、不裁切，原图继续保留。含透明像素的图片不会转换。</p>
-          <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={busy} onClick={() => void createJpeg()}>制作同尺寸 JPEG 入库副本</button></div>}
+          <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('jpeg')} onClick={() => void createJpeg()}>{processing('jpeg') ? '正在制作 JPEG 副本…' : '制作同尺寸 JPEG 入库副本'}</button></div>}
         {run.jpegSource && <p className={styles.notice} role="status">当前预览为同尺寸 JPEG 入库副本（质量 {run.jpegSource.quality}）；{(run.jpegSource.byteLength / 1024 / 1024).toFixed(2)} MiB 原图保留在原任务文件，尚未采用为书内图片。</p>}
-        <button type="button" className={styles.primaryButton} disabled={busy || disabled || readOnly || oversized} title={oversized ? '请先制作符合 2 MiB 上限的入库副本' : undefined} onClick={() => void operation(() => callbacks.current.onUse(run))}><StudioIcon name="pen" />编辑并保存到本书</button></>}
+        <button type="button" className={styles.primaryButton} disabled={busy || disabled || readOnly || oversized} aria-busy={processing('use')} title={oversized ? '请先制作符合 2 MiB 上限的入库副本' : undefined} onClick={() => void operation('use', () => callbacks.current.onUse(run))}><StudioIcon name="pen" />{processing('use') ? '正在读取生成原图…' : '编辑并保存到本书'}</button></>}
       {run.usage && <p className={styles.muted}>提供方返回用量：输入 {run.usage.inputTokens ?? '未知'}，输出 {run.usage.outputTokens ?? '未知'}，合计 {run.usage.totalTokens ?? '未知'} token</p>}
       <details><summary>本次生成输入</summary><p className={styles.notes}>{run.input.prompt}</p><p className={styles.identity}>任务：{run.input.runId}<br />作品基线：v{run.input.expectedBookRevision}</p></details>
       {!running && <div className={styles.actions}>
-        <button type="button" className={styles.button} disabled={busy || disabled} onClick={() => void check()}>重新核对原任务</button>
-        {!['saved', 'discarded'].includes(run.state) && <button type="button" className={styles.button} disabled={busy || disabled} onClick={() => void discard()}>{confirmDiscard ? '确认放弃这次结果' : '放弃这次结果'}</button>}
+        <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('check')} onClick={() => void check()}>{processing('check') ? '正在核对原任务…' : '重新核对原任务'}</button>
+        {!['saved', 'discarded'].includes(run.state) && <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('discard')} onClick={() => void discard()}>{processing('discard') ? '正在放弃结果…' : confirmDiscard ? '确认放弃这次结果' : '放弃这次结果'}</button>}
       </div>}
       {confirmDiscard && <p className={styles.warning}>放弃后不再恢复为待保存图片，原留存记录仍保留。</p>}
     </> : loaded && <form className={styles.generatorForm} onSubmit={(event) => void start(event)}>
@@ -202,7 +213,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
         {keyMissing && <p className={styles.warning}>所选连接没有本次会话密钥，请先在模型设置保存。</p>}
         {kind === 'portrait' && <div className={styles.people}>
           <div className={styles.search}><label>查找已有的人物<input value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} /></label>
-            <button type="button" className={styles.button} onClick={() => void searchPeople(query.trim())}>查找人物</button></div>
+            <button type="button" className={styles.button} disabled={busy || disabled} aria-busy={processing('people')} onClick={() => void searchPeople(query.trim())}>{processing('people') ? '正在查找人物…' : '查找人物'}</button></div>
           <label>关联人物<select required value={personId} onChange={(event) => changed(() => setPersonId(event.target.value))}><option value="">请选择人物</option>
             {personId && !people?.items.some((item) => item.id === personId) && <option value={personId}>{personId}</option>}
             {people?.items.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label>
@@ -218,7 +229,7 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
         <p className={styles.muted}>{prompt.length} / {IMAGE_PROMPT_LIMIT} 字符 · 仅发送以上提示，接收一张不超过 4 MiB、边长不超过 4096 像素的 PNG / JPEG；书内单张仍限 2 MiB，超限后可另行确认制作 JPEG 副本。</p>
         <label className={styles.check}><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />确认发送至所选提供方，可能产生图像生成费用</label>
       </fieldset>
-      <button type="submit" className={styles.goldButton} disabled={disabled || readOnly || busy || unresolved || !connection || !consent || !!keyMissing || unsupportedSize || connections?.requiresUpgrade || !title.trim() || !prompt.trim() || kind === 'portrait' && !personId}><StudioIcon name="spark" />开始生成</button>
+      <button type="submit" className={styles.goldButton} aria-busy={processing('start')} disabled={disabled || readOnly || busy || unresolved || !connection || !consent || !!keyMissing || unsupportedSize || connections?.requiresUpgrade || !title.trim() || !prompt.trim() || kind === 'portrait' && !personId}><StudioIcon name="spark" />{processing('start') ? '正在发送图片请求…' : '开始生成'}</button>
     </form>}
     <button type="button" className={styles.button} disabled={disabled || locked} onClick={close}>{dirty && confirmDiscard ? '确认放弃表单并返回' : '返回图片详情'}</button>
   </div>

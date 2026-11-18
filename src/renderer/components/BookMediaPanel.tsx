@@ -32,6 +32,8 @@ export interface BookMediaPanelProps {
   initialRunId?: string
 }
 
+type MediaOperation = 'reload' | 'image' | 'file' | 'people' | 'save' | 'compare' | 'upgrade' | 'readReceipt' | 'writeReceipt' | 'export'
+
 function sizeLabel(bytes: number): string { return `${(bytes / 1024 / 1024).toFixed(2)} MiB` }
 function encode(bytes: Uint8Array): string {
   let binary = ''
@@ -97,6 +99,8 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
   const [readingGenerations, setReadingGenerations] = useState(false)
   const generationRead = useRef<Promise<ImageGenerationPage | undefined> | null>(null)
   const mounted = useRef(true), lifetime = useRef(0)
+  const [operation, setOperation] = useState<MediaOperation | null>(null)
+  const operationRef = useRef<MediaOperation | null>(null), returnFocus = useRef<HTMLElement | null>(null)
   const [generator, setGenerator] = useState<{ kind: 'cover' | 'portrait'; runId?: string } | null>(null)
   const initialGeneration = useRef(sceneMode ? undefined : initialRunId)
   const [generationState, setGenerationState] = useState({ dirty: false, locked: false, running: false })
@@ -106,7 +110,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
   const [query, setQuery] = useState(''), [submittedQuery, setSubmittedQuery] = useState(''), [offset, setOffset] = useState(0)
   const names = useRef(new Map<string, string>()), syncRef = useRef(false), needsRead = useRef(true)
   const snapshotRef = useRef(snapshot), bookRevisionRef = useRef(book.book.revision), editorRef = useRef<HTMLFormElement>(null)
-  const fileInput = useRef<HTMLInputElement>(null), imageAttempt = useRef<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null), imageAttempt = useRef<string | null>(null), editTrigger = useRef<HTMLButtonElement>(null)
   bookRevisionRef.current = book.book.revision
   const tool = useToolSession({ api, disabled, onDirtyChange: (value) => {
     mediaGuard.current = value; dirtyCallback.current(value || generationRef.current.dirty || generationRef.current.locked)
@@ -146,6 +150,21 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     const owner = item.kind === 'cover' ? 'cover' : item.kind === 'scene' ? `scene:${item.placeId}` : `portrait:${item.personId}`
     if (!owners.has(owner)) { currentIds.add(item.id); owners.add(owner) }
   }
+  // 每个入口只显示自己的忙态；原请求锁和版本核对仍由 tool 管理。
+  async function perform<T>(next: MediaOperation, action: () => Promise<T>): Promise<T | undefined> {
+    if (!mounted.current || operationRef.current) return
+    operationRef.current = next; setOperation(next)
+    try { return await action() }
+    finally { operationRef.current = null; if (mounted.current) setOperation(null) }
+  }
+  const processing = (next: MediaOperation) => tool.busy && operation === next
+  function rememberFocus() { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null }
+  function restoreFocus() {
+    requestAnimationFrame(() => {
+      const target = returnFocus.current?.isConnected ? returnFocus.current : editTrigger.current
+      if (target && !target.matches(':disabled')) target.focus({ preventScroll: true })
+    })
+  }
   function receive(value: BookMediaSnapshot) {
     snapshotRef.current = value; setSnapshot(value)
     for (const person of value.people) names.current.set(person.id, person.name)
@@ -170,7 +189,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     if (!mounted.current) return
     if (tool.hasChanges() || tool.hasPending() || generationRef.current.dirty || generationRef.current.locked) { tool.setError('请先保存、放弃当前输入或核对原请求，再刷新图片资料。'); return }
     const epoch = lifetime.current
-    await tool.read(async () => {
+    await perform('reload', () => tool.read(async () => {
       const catalog = await api.getBook({ bookId })
       if (!catalog.ok) return catalog
       const media = await api.getBookMedia({ bookId })
@@ -194,7 +213,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
       receive(media); setPlaceName(name); onBookChange(catalog)
       syncRef.current = false; setSyncRequired(false); setConflict(null)
       setPeople(null)
-    })
+    }))
     if (!sceneMode && mounted.current && epoch === lifetime.current) {
       const page = await refreshGenerations()
       if (mounted.current && epoch === lifetime.current && initialGeneration.current) {
@@ -232,9 +251,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
   function openGenerator(next: 'cover' | 'portrait', runId?: string) {
     // 原任务核对不受作品写入条件限制，归档、旧快照和满预算仍须能恢复与取消。
     if (sceneMode || draft || (runId ? navigationBlocked : blocked || budgetFull) || !canSwitch()) return
-    setGenerator({ kind: next, ...(runId ? { runId } : {}) }); tool.setError(null)
+    rememberFocus(); setGenerator({ kind: next, ...(runId ? { runId } : {}) }); tool.setError(null)
   }
-  function closeGenerator() { setGenerator(null); void refreshGenerations() }
+  function closeGenerator() { setGenerator(null); restoreFocus(); void refreshGenerations() }
   async function useGenerated(run: ImageGenerationRun) {
     if (run.input.bookId !== bookId || run.state !== 'succeeded' || !run.image || !run.sha256 || tool.locked || !snapshot || readonly) throw new Error('当前生成结果不可采用，请先核对原任务。')
     const { dataBase64, byteLength, mime } = run.image
@@ -275,7 +294,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     if (sceneMode ? item.kind !== 'scene' || item.placeId !== scenePlaceId : item.kind === 'scene') return
     imageAttempt.current = item.id
     setKind(item.kind); setSelectedId(item.id); setImage(null); setImageDecoded(false)
-    await tool.read(async () => {
+    await perform('image', () => tool.read(async () => {
       const result = await api.readBookMedia({ bookId, id: item.id })
       if (!result.ok) return result
       if (!isBookMediaImage(result.data, bookId, item.id) || !sameFields(result.data, item)) {
@@ -284,17 +303,17 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
       const bytes = Uint8Array.from(atob(result.data.dataBase64), (char) => char.charCodeAt(0))
       if (await digest(bytes) !== item.sha256) return { ok: false as const, error: { code: 'STORAGE_ERROR' as const, message: '原图摘要不匹配，已停止显示，请保留作品数据并检查恢复包。' } }
       return result
-    }, setImage)
+    }, setImage))
   }
   function chooseFile(next: BookMediaKind) {
     if (blocked || draft || budgetFull || !canSwitch()) return
-    setKind(next)
+    rememberFocus(); setKind(next)
     fileInput.current?.click()
   }
   async function pickFile(file: File) {
     if (blocked || draft || !snapshot || !canSwitch()) return
     const baseline = snapshot.bookRevision, selectedKind = kind
-    await tool.read(async () => {
+    await perform('file', () => tool.read(async () => {
       try {
         if (!BOOK_MEDIA_MIMES.includes(file.type as BookMediaMime) || !/\.(png|jpe?g|webp)$/i.test(file.name)) throw new Error('请选择本地 PNG、JPEG 或 WebP 图片。')
         if (!file.size || file.size > MAX_BOOK_MEDIA_ITEM_BYTES) throw new Error('单张原图必须大于 0 字节且不超过 2 MiB。')
@@ -313,12 +332,12 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
         title: file.name.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名图片', alt: '', mime: value.mime, dataBase64: value.dataBase64 } })
       setDraftHash(value.sha256); setDraftBytes(value.byteLength); setDraftDecoded(false); setConflict(null); setDiscard(false); tool.setDirty(true)
       tool.setNotice(sceneMode ? '场景图已读入，核对地点、名称和备注后保存到本书。' : '图片已读入，填写名称、人物关联和备注后保存到本书。')
-    })
+    }))
   }
   function reuseImage() {
     if (blocked || !image || !imageDecoded || !snapshot || !canSwitch()) return
     if (snapshot.items.length >= MAX_BOOK_MEDIA_ITEMS || snapshot.totalBytes + image.byteLength > MAX_BOOK_MEDIA_BYTES) { tool.setError('追加此图会超过本书容量；旧资产仍保留。'); return }
-    setDraft({ bookId, expectedBookRevision: snapshot.bookRevision, id: crypto.randomUUID(), fields: { kind: image.kind, personId: image.personId,
+    rememberFocus(); setDraft({ bookId, expectedBookRevision: snapshot.bookRevision, id: crypto.randomUUID(), fields: { kind: image.kind, personId: image.personId,
       ...(image.kind === 'scene' ? { placeId: image.placeId } : {}),
       title: image.title, alt: image.alt, mime: image.mime, dataBase64: image.dataBase64 } })
     setDraftHash(image.sha256); setDraftBytes(image.byteLength); setDraftDecoded(false); setConflict(null); setDiscard(false); tool.setDirty(true)
@@ -334,23 +353,23 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     clearDraft()
   }
   function clearDraft() {
-    setDraft(null); setDraftHash(''); setDraftBytes(0); setDiscard(false); setConflict(null); tool.setDirty(false); tool.setError(null)
+    setDraft(null); setDraftHash(''); setDraftBytes(0); setDiscard(false); setConflict(null); tool.setDirty(false); tool.setError(null); restoreFocus()
   }
   async function searchPeople(search: string, pageOffset: number) {
     if (tool.locked || !snapshot || snapshot.requiresUpgrade) return
-    await tool.read(() => api.listKnowledgeItems({ bookId, kind: 'person', search, offset: pageOffset, limit: 40 }), (value) => {
+    await perform('people', () => tool.read(() => api.listKnowledgeItems({ bookId, kind: 'person', search, offset: pageOffset, limit: 40 }), (value) => {
       if (value.bookId !== bookId || value.bookRevision !== snapshot.bookRevision || !Array.isArray(value.items) || value.items.length > 40
         || value.items.some((person) => person.bookId !== bookId || person.kind !== 'person')) throw new Error('wrong people')
       for (const person of value.items) names.current.set(person.id, person.name)
       setPeople(value); setOffset(pageOffset); setSubmittedQuery(search)
-    })
+    }))
   }
   async function save(event: FormEvent) {
     event.preventDefault()
     if (!draft || blocked || !draftFits || !draftDecoded || draft.expectedBookRevision !== snapshot?.bookRevision) return
     try {
       const input = parseSaveBookMediaInput(draft), hash = draftHash, bytes = draftBytes
-      const success = await tool.write('book.media.save', () => api.saveBookMedia(input), (value) => {
+      const success = await perform('save', () => tool.write('book.media.save', () => api.saveBookMedia(input), (value) => {
         if (!isBookMediaSnapshot(value, bookId) || value.schemaVersion < requiredSchema) return false
         const item = value.savedMedia
         return Boolean(item && item.id === input.id && item.bookRevision === input.expectedBookRevision + 1 && item.sha256 === hash && item.byteLength === bytes
@@ -358,17 +377,18 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
           && sameFields(item, { kind: input.fields.kind, personId: input.fields.personId, title: input.fields.title, alt: input.fields.alt, mime: input.fields.mime }))
       }, (value) => {
         receive(value); setDraft(null); setConflict(null); setDiscard(false)
-        setKind(input.fields.kind); setPersonFilter(''); setSelectedId(input.id)
+        // 新资产排在首位，解除旧筛选和页码，让刚保存的版本立即可见。
+        setKind(input.fields.kind); setPersonFilter(''); setRoleFilter('all'); setPortraitOffset(0); setCoverOffset(0); setSelectedId(input.id)
         setImageDecoded(false); setImage({ ...value.savedMedia!, bookId, dataBase64: input.fields.dataBase64 })
         syncRef.current = true; setSyncRequired(true)
-      }, '图片已保存到本书，旧资产继续保留。')
+      }, '图片已保存到本书，旧资产继续保留。'))
       if (success) await reload()
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '图片保存前校验失败，请检查输入。') }
   }
-  async function checkReceipt() { if (await tool.checkReceipt()) await reload() }
+  async function checkReceipt() { if (await perform('writeReceipt', () => tool.checkReceipt())) await reload() }
   async function compareLatest() {
     if (!draft || tool.locked || syncRef.current) return
-    await tool.read(async () => {
+    await perform('compare', () => tool.read(async () => {
       const media = await api.getBookMedia({ bookId })
       if (!media.ok) return media
       if (!isBookMediaSnapshot(media.data, bookId)) throw new Error('invalid media')
@@ -384,7 +404,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     }, ({ media, name }) => {
       if (media.bookRevision < bookRevisionRef.current || media.bookRevision < draft.expectedBookRevision) throw new Error('stale snapshot')
       setConflict(media); setConflictPlaceName(name); tool.setNotice('最新图片列表已读取，当前图片和备注仍保留；请核对后明确沿用输入。')
-    })
+    }))
   }
   function rebase() {
     if (!draft || !conflict || tool.locked || conflict.archived || conflict.schemaVersion < requiredSchema || conflict.bookRevision < bookRevisionRef.current) return
@@ -396,9 +416,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
   async function upgrade() {
     if (!snapshot || readonly || !canSwitch()) return
     const expectedBookRevision = snapshot.bookRevision
-    const success = await tool.write('knowledge.upgrade', () => api.upgradeKnowledge({ bookId, expectedBookRevision }),
+    const success = await perform('upgrade', () => tool.write('knowledge.upgrade', () => api.upgradeKnowledge({ bookId, expectedBookRevision }),
       (value) => value.bookId === bookId && value.schemaVersion >= requiredSchema && !value.requiresUpgrade && value.bookRevision >= expectedBookRevision,
-      () => { syncRef.current = true; setSyncRequired(true) }, '作品备份和升级已确认。')
+      () => { syncRef.current = true; setSyncRequired(true) }, '作品备份和升级已确认。'))
     if (success) await reload()
   }
   async function copyDraft() {
@@ -410,10 +430,10 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     if (!selected || !image || image.id !== selected.id || !imageDecoded || !canSwitch()) return
     const fixed = selected
     let receipt: BookMediaExportReceipt | null = null
-    const success = await tool.write('book.media.export', () => api.exportBookMedia({ bookId, id: fixed.id, expectedSha256: fixed.sha256, mime: fixed.mime }),
+    const success = await perform('export', () => tool.write('book.media.export', () => api.exportBookMedia({ bookId, id: fixed.id, expectedSha256: fixed.sha256, mime: fixed.mime }),
       (value) => value === null || Boolean(value && value.bookId === bookId && value.id === fixed.id && value.sha256 === fixed.sha256
         && value.bytes === fixed.byteLength && typeof value.filePath === 'string' && value.filePath.length > 0),
-      (value) => { receipt = value }, '导出操作已结束。')
+      (value) => { receipt = value }, '导出操作已结束。'))
     if (success) tool.setNotice(receipt ? `原图已导出：${(receipt as BookMediaExportReceipt).filePath}` : '已取消导出。')
   }
   function personName(id: string | null): string { return snapshot?.people.find((person) => person.id === id)?.name ?? (id ? names.current.get(id) ?? '人物资料待刷新' : book.book.title) }
@@ -423,14 +443,14 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     initialKind={generator.kind} initialRunId={generator.runId} disabled={tool.locked || syncRequired}
     readOnly={readonly || !snapshot || requiresUpgrade} onStateChange={generationChanged} onUse={useGenerated} onClose={closeGenerator} />
 
-  return <section className={styles.panel} aria-label={sceneMode ? '地点场景图' : '封面与人物立绘'}>
+  return <section className={styles.panel} aria-label={sceneMode ? '地点场景图' : '封面与人物立绘'} aria-busy={tool.busy || awaitingInitial}>
     <header className={styles.heading} data-scene={sceneMode}>
       <h2>{sceneMode ? `${placeName ?? '地点'} · 场景图` : '封面与人物立绘'}</h2>
       {!sceneMode && <div className={styles.switcher} role="group" aria-label="图片用途">
         <button type="button" disabled={navigationBlocked} aria-pressed={kind === 'cover'} onClick={() => switchKind('cover')}>封面</button>
         <button type="button" disabled={navigationBlocked} aria-pressed={kind === 'portrait'} onClick={() => switchKind('portrait')}>立绘</button>
       </div>}
-      <div className={styles.headerActions}><button type="button" className={styles.iconButton} aria-label={syncRequired ? '重试同步图片资料' : '刷新图片资料'}
+      <div className={styles.headerActions}><button type="button" className={styles.iconButton} aria-label={processing('reload') ? '正在读取图片资料' : syncRequired ? '重试同步图片资料' : '刷新图片资料'} aria-busy={processing('reload')}
         title={tool.dirty ? '请先保存或明确放弃当前输入' : syncRequired ? '重试同步图片资料' : '刷新图片资料'} disabled={tool.locked || tool.dirty || !!generator || awaitingInitial} onClick={() => void reload()}><StudioIcon name="refresh" size={20} /></button>
         {onClose && <button type="button" className={styles.button} disabled={tool.locked || generationState.locked || awaitingInitial} onClick={onClose}><StudioIcon name="arrow" style={{ transform: 'rotate(180deg)' }} />返回</button>}</div>
     </header>
@@ -444,9 +464,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     {!sceneMode && pendingGeneration && !generator && <div className={styles.notice}><p>本书有一份待处理的{pendingGeneration.kind === 'cover' ? '封面' : '立绘'}生成任务：{pendingGeneration.title}。</p>
       <button type="button" className={styles.button} disabled={navigationBlocked || !!draft} onClick={() => openGenerator(pendingGeneration.kind, pendingGeneration.runId)}>恢复原任务</button></div>}
     {tool.readFailure?.requestId && <div className={styles.warning}><p>图片资料读取尚待核对，当前输入仍保留。</p>
-      <button type="button" className={styles.button} disabled={tool.locked} onClick={() => void tool.checkReadReceipt()}>核对原读取</button></div>}
+      <button type="button" className={styles.button} disabled={tool.locked} aria-busy={processing('readReceipt')} onClick={() => void perform('readReceipt', () => tool.checkReadReceipt())}>{processing('readReceipt') ? '正在核对原读取…' : '核对原读取'}</button></div>}
     {tool.pending && <div className={styles.warning}><p>{exporting ? '导出结果尚未确认，请核对原请求和所选文件；确认前暂停再次导出。' : '保存结果尚未确认，原图与输入已保留。核对原请求前暂停修改和切换。'}</p>
-      {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} onClick={() => void checkReceipt()}>核对原请求</button> : <p>没有可查询的请求编号，请留存输入后通过主窗口恢复。</p>}
+      {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} aria-busy={processing('writeReceipt')} onClick={() => void checkReceipt()}>{processing('writeReceipt') ? '正在核对原请求…' : '核对原请求'}</button> : <p>没有可查询的请求编号，请留存输入后通过主窗口恢复。</p>}
       {draft && <button type="button" className={styles.button} onClick={() => void copyDraft()}>复制完整素材请求以留存</button>}
       {onRecover && <><label className={styles.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存原图和当前输入，可以离开本面板恢复</label>
         <button type="button" className={styles.button} disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}
@@ -457,7 +477,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
     {(!snapshot || requiresUpgrade) && generationEditor}
     {!snapshot ? <p role="status" className={styles.empty}>{tool.busy ? '正在读取图片元信息…' : '尚未读取图片资料，请点击“刷新资料”重试。'}</p>
       : requiresUpgrade ? <div className={styles.empty}><h4>{sceneMode ? '启用地点场景图' : '启用本书图片资料'}</h4><p>{sceneMode ? '先备份并升级作品格式，再为地点保存场景图。原封面、立绘和旧版本继续保留。' : '先备份并升级作品格式，再保存封面与人物立绘。'}</p>
-        <button type="button" className={styles.primaryButton} disabled={tool.locked || readonly} onClick={() => void upgrade()}>备份并升级作品</button></div>
+        <button type="button" className={styles.primaryButton} disabled={tool.locked || readonly} aria-busy={processing('upgrade')} onClick={() => void upgrade()}>{processing('upgrade') ? '正在备份并升级…' : '备份并升级作品'}</button></div>
         : <>
           {budgetFull && <p className={styles.warning}>本书图片预算已用满，仍可查看全部旧资产。</p>}
           <div className={styles.layout} data-scene={sceneMode}>
@@ -495,10 +515,10 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
               {items.length ? <ul className={styles.items}>{items.slice(portraitStart, portraitStart + 6).map((item) => {
                 const person = snapshot.people.find((entry) => entry.id === item.personId)
                 return <li key={item.id}><button type="button" className={styles.item} disabled={navigationBlocked} aria-pressed={selectedId === item.id}
-                  aria-label={`${sceneMode ? '场景' : '立绘'}：${sceneMode ? placeName : personName(item.personId)} · ${item.title}`} onClick={() => void view(item)}>
+                  aria-label={`${sceneMode ? '场景' : '立绘'}：${sceneMode ? placeName : personName(item.personId)} · ${item.title} · v${item.bookRevision}`} onClick={() => void view(item)}>
                   <SavedMediaImage api={api} bookId={bookId} metadata={item} name={item.title} className={styles.portraitImage}
                     fallback={<span className={styles.portraitFallback}><StudioIcon name={sceneMode ? 'image' : 'user'} size={40} /><small>{sceneMode ? '读取场景' : '读取立绘'}</small></span>} />
-                  {!sceneMode && <span className={styles.roleTag} data-tone={person?.needsReview ? 'review' : person?.isViewpoint ? 'viewpoint' : 'person'}>{person?.needsReview ? '待确认' : person?.isViewpoint ? '主视角' : '人物'}</span>}
+                  {!sceneMode && <span className={styles.roleTag} data-tone={person?.needsReview ? 'review' : person?.isViewpoint ? 'viewpoint' : 'person'}>{person?.needsReview ? '待确认' : person?.isViewpoint ? '主视角' : '其他人物'}</span>}
                   <span className={styles.itemFooter}><strong title={sceneMode ? item.title : personName(item.personId)}>{sceneMode ? item.title : personName(item.personId)}</strong><small data-current={currentIds.has(item.id)}>{sceneMode ? `v${item.bookRevision} · ` : ''}{currentIds.has(item.id) ? '当前使用' : '未使用'}</small></span>
                 </button></li>
               })}</ul> : <div className={styles.galleryEmpty}><StudioIcon name="image" size={36} /><h4>{sceneMode ? '尚未添加地点场景图' : personFilter || roleFilter !== 'all' ? '没有符合筛选的立绘' : '尚未添加人物立绘'}</h4>
@@ -519,7 +539,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
         {sceneMode ? <p>关联地点：{placeName ?? scenePlaceId}</p> : <label>图片用途<select value={draft.fields.kind} onChange={(event) => { const next = event.target.value as BookMediaKind; change({ kind: next, personId: null }) }}>
           <option value="cover">本书封面</option><option value="portrait">人物立绘</option></select></label>}
         {draft.fields.kind === 'portrait' && <div className={styles.people}><div className={styles.search}><label>查找已有的人物<input value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} /></label>
-          <button type="button" className={styles.button} onClick={() => void searchPeople(query.trim(), 0)}>查找人物</button></div>
+          <button type="button" className={styles.button} disabled={tool.locked} aria-busy={processing('people')} onClick={() => void searchPeople(query.trim(), 0)}>{processing('people') ? '正在查找人物…' : '查找人物'}</button></div>
           <label>关联人物<select value={draft.fields.personId ?? ''} required onChange={(event) => change({ personId: event.target.value || null })}>
             <option value="">请选择本书已有的人物</option>
             {draft.fields.personId && !people?.items.some((person) => person.id === draft.fields.personId) && <option value={draft.fields.personId}>{names.current.get(draft.fields.personId) ?? draft.fields.personId}</option>}
@@ -536,9 +556,9 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
       </fieldset>
       {!draftFits && <p className={styles.error} role="alert">本次保存会超过图片预算，请放弃本次输入或选择更小的原图。</p>}
       {draft.expectedBookRevision !== snapshot.bookRevision && <p className={styles.warning}>当前输入基于作品 v{draft.expectedBookRevision}，列表为 v{snapshot.bookRevision}；请先保留输入、读取并比较最新版本。</p>}
-      <div className={styles.actions}><button type="submit" className={styles.primaryButton} disabled={blocked || !draftFits || !draftDecoded || draft.expectedBookRevision !== snapshot.bookRevision || (draft.fields.kind === 'portrait' && !draft.fields.personId)}>保存到本书</button>
+      <div className={styles.actions}><button type="submit" className={styles.primaryButton} aria-busy={processing('save')} disabled={blocked || !draftFits || !draftDecoded || draft.expectedBookRevision !== snapshot.bookRevision || (draft.fields.kind === 'portrait' && !draft.fields.personId)}>{processing('save') ? '正在保存图片…' : '保存到本书'}</button>
         <button type="button" className={styles.button} disabled={tool.locked || syncRequired} onClick={dropDraft}>{discard ? '确认放弃本次输入' : '放弃本次输入'}</button>
-        <button type="button" className={styles.button} disabled={tool.locked || syncRequired} onClick={() => void compareLatest()}>保留输入，读取最新版本</button>
+        <button type="button" className={styles.button} disabled={tool.locked || syncRequired} aria-busy={processing('compare')} onClick={() => void compareLatest()}>{processing('compare') ? '正在读取最新版本…' : '保留输入，读取最新版本'}</button>
         <button type="button" className={styles.button} onClick={() => void copyDraft()}>复制当前素材请求</button></div>
       {discard && <p className={styles.warning}>再次点击确认将放弃未保存的图片和备注；已存入本书的资产继续保留。</p>}
       {conflict && <div className={styles.comparison}><p>当前输入基于作品 v{draft.expectedBookRevision}，最新为 v{conflict.bookRevision}；已有 {conflict.items.length} 张、{sizeLabel(conflict.totalBytes)}。</p>
@@ -547,7 +567,7 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
         <button type="button" className={styles.button} disabled={tool.locked || conflict.archived || conflict.schemaVersion < requiredSchema || conflict.items.some((item) => item.id === draft.id)} onClick={rebase}>确认沿用输入，改用最新版本</button></div>}
     </form> : selected ? <>
                 {image && image.id === selected.id ? <MediaPreview key={image.id} fields={image} onDecoded={setImageDecoded} />
-                  : <div className={styles.empty}><StudioIcon name="image" size={36} /><p role="status">{tool.busy ? '正在读取所选原图…' : '尚未取得原图'}</p><button type="button" className={styles.button} disabled={navigationBlocked} onClick={() => void view(selected)}>重新读取原图</button></div>}
+                  : <div className={styles.empty}><StudioIcon name="image" size={36} /><p role="status">{processing('image') ? '正在读取所选原图…' : '尚未取得原图'}</p><button type="button" className={styles.button} disabled={navigationBlocked} aria-busy={processing('image')} onClick={() => void view(selected)}>{processing('image') ? '正在读取原图…' : '重新读取原图'}</button></div>}
                 <h3 className={styles.detailName}>{sceneMode ? placeName : personName(selected.personId)}</h3>
                 <dl className={styles.facts}><dt>版本</dt><dd>v{selected.bookRevision} <span className={styles.muted}>{currentIds.has(selected.id) ? '当前使用' : '未使用'}</span></dd>
                   <dt>来源</dt><dd>{selectedSource ? `模型生成 · ${selectedSource.model}` : !sceneMode && (!generationPage || generationWarning) ? '来源待核对' : '未登记'}</dd></dl>
@@ -558,10 +578,10 @@ function MediaContent({ api, book, disabled, onDirtyChange, onBookChange, onUnkn
               </> : <div className={styles.empty}><StudioIcon name="image" size={36} /><p>{sceneMode ? '选择场景版本查看详情。' : '选择封面或立绘查看详情。'}</p></div>}
               </div>
               {!draft && !generator && selected && <div className={styles.detailActions}>
-                <button type="button" className={styles.editButton} disabled={blocked || budgetFull || !imageDecoded || image?.id !== selected.id}
+                <button ref={editTrigger} type="button" className={styles.editButton} disabled={blocked || budgetFull || !imageDecoded || image?.id !== selected.id}
                   title={uploadReason ?? (!imageDecoded ? '请等待原图读取与解码' : '追加新版本，保留已有图片')} onClick={reuseImage}><StudioIcon name="pen" />{sceneMode ? '编辑场景图' : selected.kind === 'cover' ? '编辑封面' : '编辑立绘'}</button>
-                <button type="button" className={styles.goldButton} disabled={navigationBlocked || !imageDecoded || image?.id !== selected.id}
-                  title={!imageDecoded ? '请等待原图读取与解码' : '导出所选原图'} onClick={() => void exportImage()}><StudioIcon name="export" />导出素材</button>
+                <button type="button" className={styles.goldButton} disabled={navigationBlocked || !imageDecoded || image?.id !== selected.id} aria-busy={processing('export')}
+                  title={!imageDecoded ? '请等待原图读取与解码' : '导出所选原图'} onClick={() => void exportImage()}><StudioIcon name="export" />{processing('export') ? '正在导出素材…' : '导出素材'}</button>
               </div>}
             </aside>
           </div>

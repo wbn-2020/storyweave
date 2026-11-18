@@ -1,0 +1,26 @@
+{
+  "id": "yelan-portrait",
+  "file": "yelan-portrait.png",
+  "libraryFile": "yelan-portrait-card.jpg",
+  "prompt": "Use case: illustration-story. Asset type: finished original character portrait for a Chinese science-fantasy novel. Subject: Ye Lan (叶岚), an adult female tide cartographer, calm and observant, wearing a practical navy-blue surveying coat with modest brass fastenings, dark hair tied loosely, distinct recognizable face, slight three-quarter turn, no resemblance to a male lighthouse keeper. Background: a softly suggested turquoise sea, weathered lighthouse stone and a faint celestial night sky, secondary to the single character. Style: refined premium Chinese science-fantasy anime painted illustration, detailed clean shading, cyan rim light and restrained violet highlights, natural mature facial proportions and readable silhouette, balanced exposure. Composition: vertical 3:4 portrait, centered head and upper body, the whole hair and both shoulders visible with generous upper and side margins for a narrow gallery crop, face in the upper-middle safe area, hands outside the image. No words, no letters, no logos, no watermarks, no border, no frames, no interface, no screenshots, no collage.",
+  "model": "gpt-image-2.6",
+  "inputSize": "768x1024",
+  "width": 1086,
+  "height": 1448,
+  "bytes": 2503876,
+  "sha256": "b2536466ae3de56cc7f6252443ecdcad5a5db1885100a4983ea07cfea55fcbee",
+  "librarySha256": "cf5dc8d90dbb837292963dbb283a33365075926bd987ef3648d18330da07a547",
+  "libraryBytes": 436529,
+  "runId": "8de1161a-c149-4176-b7bc-ac05bd4d57e2",
+  "mediaId": "3b3ab8f8-364a-413c-aa34-b57a8fced051",
+  "kind": "portrait",
+  "jpegSource": {
+    "mime": "image/png",
+    "width": 1086,
+    "height": 1448,
+    "byteLength": 2503876,
+    "sha256": "b2536466ae3de56cc7f6252443ecdcad5a5db1885100a4983ea07cfea55fcbee",
+    "quality": 93
+  },
+  "scope": "隔离合成作品；真实作品需作者采用"
+}

@@ -1,0 +1,40 @@
+{
+  "input": {
+    "bookId": "3f1a7c9d-954d-46c5-a66a-cb920306f482",
+    "runId": "bcbdbc5f-24ef-4d03-a930-d3782fd54539",
+    "mediaId": "afe2dd28-507d-4655-a227-d88f5017d710",
+    "expectedBookRevision": 20,
+    "connectionId": "a4404310-fecb-4613-9f34-b2577699f7a0",
+    "expectedConnectionVersion": 0,
+    "kind": "cover",
+    "personId": null,
+    "title": "雾海星图·封面",
+    "prompt": "Use case: illustration-story. Asset type: original full-bleed front-cover illustration for a Chinese science-fantasy novel, a finished painting, not a mockup. Subject: the old stone Mist-Sea Lighthouse on a rocky sea cliff, its warm lantern casting a narrow beam through deep-blue night mist; a delicate celestial star chart above, a small brass star-chart key in the foreground on stone, all three story elements clear and coherent. Style: refined premium Chinese science-fantasy anime concept painting, detailed weathered stone and brass, quiet turquoise ocean, restrained cyan and violet light, readable balanced exposure. Composition: vertical 3:4 front cover, complete lighthouse in the middle safe area, generous dark-blue sky in the upper quarter suitable for a later typographic title, no title drawn into the image; foreground key visible and anatomically plausible. No people, no words, no letters, no logos, no watermarks, no borders, no app UI, no browser, no book mockup, no collage.",
+    "size": "768x1024"
+  },
+  "connection": {
+    "id": "a4404310-fecb-4613-9f34-b2577699f7a0",
+    "name": "封面立绘·本轮幻图",
+    "baseUrl": "https://huantu.xyz/api/v1",
+    "model": "gpt-image-2.6",
+    "contextWindow": 8192,
+    "maxOutputTokens": 1024,
+    "version": 0,
+    "updatedAt": "2026-11-18T12:21:24.884Z"
+  },
+  "version": 1,
+  "state": "succeeded",
+  "contextHash": "cd5b68d8574f4b0d5e44d32233f01bb8a837541aecb81fc423e8a0604e459f99",
+  "sha256": "70aa26ca1fb2a548dcc45d66360ad3699a3e7b051bfb7c7c8bc40483df072262",
+  "image": {
+    "mime": "image/png",
+    "width": 1086,
+    "height": 1448,
+    "dataBase64": "完整原图见同目录文件",
+    "byteLength": 2967202
+  },
+  "usage": null,
+  "error": null,
+  "createdAt": "2026-11-18T12:21:27.255Z",
+  "updatedAt": "2026-11-18T12:22:46.378Z"
+}
