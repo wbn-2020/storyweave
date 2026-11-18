@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { DomainError, type AppError, type BookSnapshot, type StudioApi } from '../../contracts/api'
 import {
   CALENDAR_KINDS, CALENDAR_SCHEMA_VERSION, MAX_CALENDAR_ENTRIES, MIN_CALENDAR_MONTH, MAX_CALENDAR_MONTH,
@@ -23,6 +23,7 @@ export interface WritingCalendarPanelProps {
 
 const kindLabels: Record<CalendarEntryFields['kind'], string> = { writing: '写作计划', deadline: '截止日期', publication: '发布计划', idea: '灵感整理' }
 const sourceLabels = { manual: '常规编辑 / 手工记录', ai: 'AI 采用', import: '导入', restore: '恢复' }
+type CalendarAction = 'read' | 'save' | 'compare' | 'writeReceipt' | 'readReceipt' | 'upgrade'
 const weekdays = ['日', '一', '二', '三', '四', '五', '六']
 function adjacentMonth(month: string, offset: number): string {
   const date = new Date(`${month}-01T12:00:00Z`)
@@ -66,6 +67,10 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   const bookRevisionRef = useRef(book.book.revision)
   const needsRead = useRef(true)
   const editorRef = useRef<HTMLFormElement>(null)
+  const editorTrigger = useRef<HTMLButtonElement | null>(null)
+  const returnEditorFocus = useRef(false)
+  const actionLock = useRef(false)
+  const [action, setAction] = useState<CalendarAction | null>(null)
   bookRevisionRef.current = book.book.revision
   const tool = useToolSession({ api, disabled, onDirtyChange, onUnknown, isProtected: () => syncRef.current })
   const [today, setToday] = useState(localDate)
@@ -91,14 +96,30 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   const sourceTotals = Object.entries(sourceLabels).map(([source, label]) => ({ source, label, added: snapshot?.activity.filter((item) => item.source === source).reduce((total, item) => total + item.added, 0) ?? 0 }))
   const totalAdded = sourceTotals.reduce((total, item) => total + item.added, 0)
   const conflictEntry = conflict?.events.find((entry) => entry.id === draft?.id)
+  const readBusy = tool.busy && (action === 'read' || syncRequired)
+  const saveBusy = tool.busy && action === 'save' && !syncRequired
+
+  // 共用请求锁只负责防重，按钮按实际操作表达忙态；确认后的目录同步归刷新入口。
+  async function runAction(next: CalendarAction, operation: () => Promise<unknown>) {
+    if (actionLock.current) return
+    actionLock.current = true; setAction(next)
+    try { await operation() }
+    finally { actionLock.current = false; setAction(null) }
+  }
 
   function receive(value: CalendarSnapshot) { snapshotRef.current = value; setSnapshot(value) }
   useEffect(() => {
-    if (!disabled && needsRead.current) { needsRead.current = false; void reload() }
+    if (!disabled && needsRead.current) { needsRead.current = false; void runAction('read', reload) }
   }, [disabled, month])
   useEffect(() => () => { needsRead.current = true }, [])
   useEffect(() => {
     if (draft) { editorRef.current?.scrollIntoView({ block: 'nearest' }); editorRef.current?.focus({ preventScroll: true }) }
+  }, [draft?.id])
+  useLayoutEffect(() => {
+    if (draft || !returnEditorFocus.current) return
+    returnEditorFocus.current = false
+    const trigger = editorTrigger.current
+    if (trigger?.isConnected && !trigger.disabled) trigger.focus()
   }, [draft?.id])
   useEffect(() => { setRecoveryPreserved(false) }, [tool.pending])
   useEffect(() => {
@@ -170,9 +191,10 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     selectDate(dates[next])
     document.getElementById(`${prefix}-${dates[next]}`)?.focus()
   }
-  function edit(item?: CalendarEntry) {
+  function edit(item?: CalendarEntry, trigger?: HTMLButtonElement) {
     if (blocked || !canSwitch() || !snapshot) return
     if (!item && snapshot.totalEntries >= MAX_CALENDAR_ENTRIES) { tool.setError('本书已达到 2,000 条日程上限，可继续编辑已有日程。'); return }
+    editorTrigger.current = trigger ?? null
     setDraft({ bookId, expectedBookRevision: snapshot.bookRevision, id: item?.id ?? crypto.randomUUID(), expectedRevision: item?.revision ?? 0, month,
       fields: item ? parseCalendarEntryFields(item) : { date: selectedDate, title: '', kind: 'writing', notes: '', done: false, targetCharacters: null } })
     setConflict(null); setDiscard(false); tool.setDirty(!item); tool.setError(null); tool.setNotice(null)
@@ -185,6 +207,8 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
   function dropDraft() {
     if (tool.locked) return
     if (tool.hasChanges() && !discard) { setDiscard(true); return }
+    // 表单卸载后再返回实际触发按钮；明确放弃前仍保留输入和当前位置。
+    returnEditorFocus.current = true
     setDraft(null); setConflict(null); setDiscard(false); tool.setDirty(false); tool.setError(null)
   }
   function closePanel() {
@@ -199,8 +223,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     setDraft(null); setConflict(null); setDiscard(false)
     syncRef.current = true; setSyncRequired(true)
   }
-  async function save(event: FormEvent) {
-    event.preventDefault()
+  async function save() {
     if (!draft || blocked || draft.expectedBookRevision !== snapshot?.bookRevision) return
     try {
       const input = parseSaveCalendarEntryInput(draft)
@@ -244,16 +267,16 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
 
   return <section className={styles.panel} aria-label="创作日历">
     <header className={styles.heading}><div><h3><StudioIcon name="chart" size={24} />创作数据</h3><p className={styles.muted}>{book.book.title}</p></div>
-      <div className={styles.actions}><button type="button" className={styles.button} disabled={tool.locked || tool.dirty} onClick={() => void reload()}><StudioIcon name="refresh" size={16} />{syncRequired ? '重试同步' : '刷新日历'}</button>
+      <div className={styles.actions}><button type="button" className={styles.button} disabled={tool.locked || tool.dirty} aria-busy={readBusy} onClick={() => void runAction('read', reload)}><StudioIcon name="refresh" size={16} />{readBusy ? syncRequired ? '正在同步日历…' : '正在刷新日历…' : syncRequired ? '重试同步' : '刷新日历'}</button>
         <button type="button" className={styles.button} disabled={tool.locked} onClick={closePanel}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />返回</button></div></header>
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
     {tool.readFailure?.requestId && <div className={styles.actions}>
-      <button type="button" className={styles.button} disabled={tool.locked} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>
+      <button type="button" className={styles.button} disabled={tool.locked} aria-busy={tool.busy && action === 'readReceipt'} onClick={() => void runAction('readReceipt', tool.checkReadReceipt)}>{tool.busy && action === 'readReceipt' ? '正在核对读取…' : '核对原读取'}</button>
       <span className={styles.muted}>原读取编号：<code>{tool.readFailure.requestId}</code></span>
     </div>}
     {tool.pending && <div className={styles.warning}><p>保存结果尚未确认，当前输入已保留。核对原请求前暂停提交。</p>
-      {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} onClick={() => void checkReceipt()}>核对原请求</button>
+      {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} aria-busy={tool.busy && action === 'writeReceipt' && !syncRequired} onClick={() => void runAction('writeReceipt', checkReceipt)}>{tool.busy && action === 'writeReceipt' && !syncRequired ? '正在核对保存…' : '核对原请求'}</button>
         : <p>缺少可查询的请求编号，请保留输入并通过主窗口恢复。</p>}
       {onRecover && <><label className={styles.check}><input type="checkbox" checked={recoveryPreserved} onChange={(event) => setRecoveryPreserved(event.target.checked)} />我已留存输入，可以离开本面板进行恢复</label>
         <button type="button" className={styles.button} disabled={tool.busy || !recoveryPreserved} onClick={onRecover}>打开主窗口恢复</button></>}
@@ -264,7 +287,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
     {readonly && <p className={styles.warning}>作品已归档，日历仅供查看。</p>}
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取本月日程与写作记录…' : '尚未取得本月日历，请点击“刷新日历”重试。'}</p>
       : snapshot.requiresUpgrade ? <div className={styles.empty}><h4>启用这部作品的创作日历</h4><p>备份并升级作品后，即可保存日程和查看月度写作记录。</p>
-        <button type="button" className={styles.primaryButton} disabled={tool.locked || readonly} onClick={() => void upgrade()}>备份并升级作品</button></div>
+        <button type="button" className={styles.primaryButton} disabled={tool.locked || readonly} aria-busy={tool.busy && action === 'upgrade' && !syncRequired} onClick={() => void runAction('upgrade', upgrade)}>{tool.busy && action === 'upgrade' && !syncRequired ? '正在备份升级…' : '备份并升级作品'}</button></div>
         : <>
           <div className={styles.metrics} aria-label="当前作品创作指标">
             <div><span><StudioIcon name="spark" size={24} />今日创作</span><strong>{creationMetrics?.todayAdded.toLocaleString() ?? '—'}<small>字</small><MetricChange current={creationMetrics?.todayAdded} previous={creationMetrics?.yesterdayAdded} label="较昨日" /></strong><small><time dateTime={today}>{today}</time> · 已保存新增</small></div>
@@ -313,14 +336,14 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
           <div className={styles.detailLayout}>
             <section className={styles.dayDetails} aria-label={`${selectedDate} 日程和记录`}>
               <div className={styles.heading}><h4><time dateTime={selectedDate}>{selectedDate}</time></h4>
-                <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty || snapshot.totalEntries >= MAX_CALENDAR_ENTRIES} onClick={() => edit()}>添加日程</button></div>
+                <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty || snapshot.totalEntries >= MAX_CALENDAR_ENTRIES} onClick={(event) => edit(undefined, event.currentTarget)}>添加日程</button></div>
               <p className={styles.daySummary}>计划 {selected?.statistics.plannedCharacters.toLocaleString() ?? 0} 字 · 净增 {signed(selected?.statistics.net ?? 0)} 字 · 记录 {selected?.statistics.minutes ?? 0} 分钟</p>
               {!selected?.events.length ? <p className={styles.empty}>这天还没有日程。可以添加写作目标、截止日期或发布计划。</p>
                 : <ul className={styles.events}>{selected.events.map((item) => <li key={item.id}>
                   <div className={styles.eventHeading}><strong>{item.title}</strong><span className={styles.state} data-overdue={!item.done && item.date < today}>{item.done ? '已完成' : item.date < today ? '逾期未完成' : '待完成'}</span></div>
                   <p className={styles.muted}>{kindLabels[item.kind]}{item.targetCharacters !== null && item.targetCharacters !== undefined ? ` · 计划 ${item.targetCharacters.toLocaleString()} 字` : ''}</p>
                   {item.notes && <p className={styles.notes}>{item.notes}</p>}
-                  <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={() => edit(item)}>编辑 / 标记完成</button>
+                  <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={(event) => edit(item, event.currentTarget)}>编辑 / 标记完成</button>
                 </li>)}</ul>}
               <h4 className={styles.activityHeading}>当天写作记录</h4>
               {!selected?.activity.length ? <p className={styles.muted}>这天没有已保存的写作记录。</p> : <ul className={styles.activity}>{selected.activity.map((day) => <li key={day.source}>
@@ -336,7 +359,7 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
             </svg></details>
           </div>
         </>}
-    {draft && <form ref={editorRef} className={styles.editor} tabIndex={-1} onSubmit={(event) => void save(event)} aria-label="编辑日程">
+    {draft && <form ref={editorRef} className={styles.editor} tabIndex={-1} onSubmit={(event) => { event.preventDefault(); void runAction('save', save) }} aria-label="编辑日程">
       <h4>{draft.expectedRevision ? '编辑日程' : '新建日程'}</h4>
       <fieldset disabled={tool.locked || syncRequired || readonly} className={styles.fields}>
         <label>日程标题<input required maxLength={160} value={draft.fields.title} onChange={(event) => change({ title: event.target.value })} /></label>
@@ -347,9 +370,9 @@ function CalendarContent({ api, book, disabled, onDirtyChange, onBookChange, onU
         <label className={styles.check}><input type="checkbox" checked={draft.fields.done} onChange={(event) => change({ done: event.target.checked })} />我已完成这项日程</label>
         {draft.fields.date < today && !draft.fields.done && <p className={styles.muted}>日期已过，保存后会显示为逾期未完成；仍可补记或调整日期。</p>}
       </fieldset>
-      <div className={styles.actions}><button type="submit" className={styles.primaryButton} disabled={blocked || draft.expectedBookRevision !== snapshot?.bookRevision}>{tool.busy ? '处理中…' : '保存日程'}</button>
+      <div className={styles.actions}><button type="submit" className={styles.primaryButton} disabled={blocked || draft.expectedBookRevision !== snapshot?.bookRevision} aria-busy={saveBusy}>{saveBusy ? '正在保存日程…' : '保存日程'}</button>
         <button type="button" className={styles.button} disabled={tool.locked} onClick={dropDraft}>{discard ? '确认放弃当前更改' : tool.dirty ? '放弃更改' : '关闭编辑'}</button>
-        <button type="button" className={styles.button} disabled={tool.locked || syncRequired || !/^\d{4}-\d{2}-\d{2}$/.test(draft.fields.date)} onClick={() => void compareLatest()}>保留输入，读取最新版本</button></div>
+        <button type="button" className={styles.button} disabled={tool.locked || syncRequired || !/^\d{4}-\d{2}-\d{2}$/.test(draft.fields.date)} aria-busy={tool.busy && action === 'compare'} onClick={() => void runAction('compare', compareLatest)}>{tool.busy && action === 'compare' ? '正在读取最新日程…' : '保留输入，读取最新版本'}</button></div>
       {conflict && <div className={styles.comparison}><h4>最新已保存版本</h4>
         {conflictEntry ? <><p><strong>{conflictEntry.title}</strong> · {conflictEntry.date} · {kindLabels[conflictEntry.kind]} · {conflictEntry.done ? '已完成' : '待完成'}</p><p>计划字数：{conflictEntry.targetCharacters ?? '未设定'}</p><p className={styles.notes}>{conflictEntry.notes || '无备注'}</p></>
           : <p>{draft.expectedRevision > 0 ? '所查月份找不到这条日程，它可能已被改期。请先留存输入，再到其他月份查找。' : '所查月份没有同一标识的日程。'}</p>}

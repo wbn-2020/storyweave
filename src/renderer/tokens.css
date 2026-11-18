@@ -547,7 +547,8 @@
 *, *::before, *::after { box-sizing: border-box; }
 body {
   margin: 0;
-  min-width: 360px;
+  /* 垂直滚动条会占用可用宽度，最小宽度须受根视口约束，避免 360px 下再出现横向滚动。 */
+  min-width: min(360px, 100%);
   background: var(--bg-shell);
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
