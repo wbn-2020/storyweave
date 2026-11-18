@@ -28,6 +28,8 @@ const stateLabels: Record<GenerationRun['state'], string> = { prepared: '等待�
 const newConnection = (): AiConnectionConfig => ({ id: crypto.randomUUID(), name: '', baseUrl: '', model: '', contextWindow: 32_000, maxOutputTokens: 8192 })
 const fieldsOf = (connection: StudioAiConnection): AiConnectionConfig => ({ id: connection.id, name: connection.name, baseUrl: connection.baseUrl, model: connection.model, contextWindow: connection.contextWindow, maxOutputTokens: connection.maxOutputTokens })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+type KickstartOperation = 'load' | 'read' | 'configure' | 'save' | 'send' | 'cancel' | 'adopt' | 'writeReceipt' | 'readReceipt' | 'leave'
+  | `prepare:${GenerationPart}` | `select:${string}`
 
 export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDirtyChange, onBookChange, onAdopted, onClose, onManual, onRecover, registerLeaveGuard }: Props) {
   const identity = useRef(bookId ?? crypto.randomUUID())
@@ -51,12 +53,17 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const [opening, setOpening] = useState(false)
   const [copied, setCopied] = useState(false)
   const [autoOpen, setAutoOpen] = useState(false)
+  const [operation, setOperation] = useState<KickstartOperation | null>(null)
+  const operationRef = useRef<KickstartOperation | null>(null)
   const mounted = useRef(true)
   const initialReadNeeded = useRef(true)
   const proposalHeading = useRef<HTMLHeadingElement>(null)
+  const roomHeading = useRef<HTMLHeadingElement>(null)
+  const previewHeading = useRef<HTMLHeadingElement>(null)
+  const configurationTrigger = useRef<HTMLButtonElement>(null)
   const callbacks = useRef({ onDirtyChange, onBookChange, onAdopted })
   callbacks.current = { onDirtyChange, onBookChange, onAdopted }
-  const guard = useRef({ tool: false, forms: false, running: false, opening: false })
+  const guard = useRef({ tool: false, forms: false, running: false, opening: false, operation: false })
   const report = () => callbacks.current.onDirtyChange(Object.values(guard.current).some(Boolean))
   const tool = useToolSession({ api, disabled, onDirtyChange: (value) => { guard.current.tool = value; report() } })
   const run = snapshot?.run ?? null
@@ -66,7 +73,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const configDirty = apiKey.length > 0 || (original ? !same(configuration, fieldsOf(original)) || original.isDefault !== isDefault
     : Boolean(configuration.name || configuration.baseUrl || configuration.model))
   const seedDirty = !same(seed, savedSeed)
-  const locked = tool.locked || opening || run?.state === 'running'
+  const locked = tool.locked || operation !== null || opening || run?.state === 'running'
   // 分区重掷期间保留上一份已确认输出，但旧候选不能用于当前请求的选用或采纳。
   const proposalRun = run?.state === 'succeeded' ? run
     : lastProposalRun && run?.parentRunId === lastProposalRun.id && same(seed, lastProposalRun.seed) ? lastProposalRun : null
@@ -81,7 +88,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const leave = usePanelLeave({
     register: registerLeaveGuard,
     blockedReason: () => opening ? '正在打开第一章，请稍候。'
-      : tool.locked ? '开书操作正在处理或原写入尚未确认，请先核对回执。'
+      : tool.locked || operationRef.current ? '开书操作正在处理或原写入尚未确认，请先核对回执。'
         : run?.state === 'running' ? '请先中止生成并确认已收到的输出，再离开开书房。' : null,
     hasChanges: () => seedDirty || configDirty,
     onBlocked: tool.setError,
@@ -93,7 +100,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
     return () => { mounted.current = false; initialReadNeeded.current = true; callbacks.current.onDirtyChange(false) }
   }, [])
   useEffect(() => {
-    if (!disabled && initialReadNeeded.current) { initialReadNeeded.current = false; void load() }
+    if (!disabled && initialReadNeeded.current) { initialReadNeeded.current = false; void perform('load', load) }
   }, [disabled])
   useEffect(() => {
     guard.current.forms = seedDirty || configDirty
@@ -103,8 +110,15 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   }, [seedDirty, configDirty, run?.state, opening])
   useEffect(() => { setCopied(false) }, [seed, configuration, snapshot, tool.pending?.error.requestId])
   useEffect(() => {
-    if (run?.state === 'succeeded') { proposalHeading.current?.focus({ preventScroll: true }); proposalHeading.current?.scrollIntoView({ block: 'start' }) }
-  }, [run?.id, run?.state])
+    if (step !== 2 || !draftReady || run?.state === 'running') return
+    // 向导卸载时 Dialog 会恢复入口焦点；下一帧再交给已保存草稿或固定发送预览。
+    const frame = requestAnimationFrame(() => {
+      if (document.querySelector('dialog:modal')) return
+      const target = run?.state === 'succeeded' ? proposalHeading.current : run?.state === 'prepared' ? previewHeading.current : roomHeading.current
+      target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: 'start' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [step, draftReady, run?.id, run?.state])
   useEffect(() => {
     if (run && connections.some((connection) => connection.id === run.connection.id)) setConnectionId(run.connection.id)
   }, [run?.id, connectionsReady])
@@ -116,6 +130,18 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   useEffect(() => {
     if (autoOpen && snapshot?.adoption && !tool.busy && !tool.pending) { setAutoOpen(false); void enter(snapshot) }
   }, [autoOpen, snapshot?.adoption?.id, tool.busy, tool.pending])
+
+  // 保存种子和固定预览连续执行时保持同一个入口忙态，原请求锁仍由 tool 管理。
+  async function perform<T>(next: KickstartOperation, action: () => Promise<T> | T): Promise<T | undefined> {
+    if (!mounted.current || operationRef.current) return
+    operationRef.current = next; guard.current.operation = true; report(); setOperation(next)
+    try { return await action() }
+    finally {
+      operationRef.current = null; guard.current.operation = false
+      if (mounted.current) { report(); setOperation(null) }
+    }
+  }
+  const processing = (next: KickstartOperation) => operation === next
 
   function receive(value: KickstartSnapshot, restoreSeed = false) {
     if (value.book.book.id !== identity.current || value.run && value.run.bookId !== identity.current || value.adoption && value.adoption.runId !== value.run?.id) throw new Error('Draft identity mismatch')
@@ -167,6 +193,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
           setConnections((current) => [...current.filter((item) => item.id !== value.id).map((item) => value.isDefault ? { ...item, isDefault: false } : item), value])
           setConfiguration(fieldsOf(value)); setDefault(value.isDefault); setDefaultConfirmed(false); setConnectionId(value.id); setConnectionsReady(true); setApiKey(''); setConfigOpen(false)
           if (input.apiKey) setKeyIds((ids) => [...new Set([...ids, value.id])])
+          requestAnimationFrame(() => configurationTrigger.current?.focus({ preventScroll: true }))
         }, '模型配置已保存。若刚才核对了超时回执，请重新填写会话密钥并保存一次。')
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请检查模型配置。'); return false }
   }
@@ -231,7 +258,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
     const removing = ids.every((id) => selection.has(id))
     let selectedIds = removing ? run.selectedIds.filter((id) => !ids.includes(id)) : [...new Set([...run.selectedIds, ...ids])]
     if (removing && part === 'cast') selectedIds = selectedIds.filter((id) => id !== proposal.outline.candidateId)
-    void selectCandidates(selectedIds)
+    return selectCandidates(selectedIds)
   }
   async function adopt() {
     if (!snapshot || !run || !proposal || locked || seedDirty || configDirty || !seedMatchesRun) return
@@ -281,7 +308,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const selectedTitle = proposal?.titles.find((item) => visibleSelection.has(item.candidateId))
   const canAdopt = Boolean(proposal && selectedTitle && !proposalLocked && !seedDirty && !configDirty && seedMatchesRun)
   const toolLockedReason = disabled ? '工作区正在处理其他操作，请稍候'
-    : tool.pending ? '原写入尚未确认，请先核对原请求' : tool.busy ? '正在处理开书操作，请稍候' : undefined
+    : tool.pending ? '原写入尚未确认，请先核对原请求' : tool.busy || operation !== null ? '正在处理开书操作，请稍候' : undefined
   const lockedReason = toolLockedReason ?? (opening ? '正在打开第一章，请稍候'
     : run?.state === 'running' ? '正在生成提案，请等待完成或明确中止' : undefined)
   const seedDisabledReason = !draftReady ? '开书草稿尚未读取，请先重新读取草稿'
@@ -301,10 +328,10 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const feedback = <>
     {(tool.error || tool.notice) && <div className={tool.error ? styles.error : styles.notice} role={tool.error ? 'alert' : 'status'}>{tool.error ?? tool.notice}</div>}
     {tool.error && !tool.pending && <div className={styles.actions}><button type="button" onClick={() => void copyRecovery()}>复制草稿与已读输出</button><button type="button" disabled={!copied || tool.busy} title={recoveryReason} onClick={onRecover}>已留存，进入恢复</button></div>}
-    {tool.pending && <div className={styles.recovery}><p>原写入尚未确认。核对前暂停生成与采用，避免重复请求。</p><div className={styles.actions}><button type="button" disabled={tool.busy || !tool.pending.error.requestId} title={tool.busy ? '正在核对原请求，请稍候' : !tool.pending.error.requestId ? '原请求没有可查询编号，请先留存草稿并进入恢复' : undefined} onClick={() => void tool.checkReceipt()}>核对原请求</button><button type="button" onClick={() => void copyRecovery()}>复制草稿与回执</button><button type="button" disabled={!copied || tool.busy} title={recoveryReason} onClick={onRecover}>已留存，进入恢复</button></div></div>}
-    {tool.readFailure && <div className={styles.recovery}>读取尚未确认。<button type="button" disabled={tool.locked || !tool.readFailure.requestId} title={toolLockedReason ?? (!tool.readFailure.requestId ? '原读取没有可查询编号，请先留存草稿并进入恢复' : undefined)} onClick={() => void tool.checkReadReceipt()}>核对原读取请求</button></div>}
-    {!connectionsReady && !tool.busy && <button type="button" onClick={() => void load()}>重新读取模型与草稿</button>}
-    {!draftReady && !tool.busy && <button type="button" onClick={() => void reload(true)}>重新读取开书草稿</button>}
+    {tool.pending && <div className={styles.recovery}><p>原写入尚未确认。核对前暂停生成与采用，避免重复请求。</p><div className={styles.actions}><button type="button" disabled={tool.busy || !tool.pending.error.requestId} aria-busy={processing('writeReceipt')} title={tool.busy ? '正在核对原请求，请稍候' : !tool.pending.error.requestId ? '原请求没有可查询编号，请先留存草稿并进入恢复' : undefined} onClick={() => void perform('writeReceipt', () => tool.checkReceipt())}>{processing('writeReceipt') ? '正在核对原请求…' : '核对原请求'}</button><button type="button" onClick={() => void copyRecovery()}>复制草稿与回执</button><button type="button" disabled={!copied || tool.busy} title={recoveryReason} onClick={onRecover}>已留存，进入恢复</button></div></div>}
+    {tool.readFailure && <div className={styles.recovery}>读取尚未确认。<button type="button" disabled={tool.locked || !tool.readFailure.requestId} aria-busy={processing('readReceipt')} title={toolLockedReason ?? (!tool.readFailure.requestId ? '原读取没有可查询编号，请先留存草稿并进入恢复' : undefined)} onClick={() => void perform('readReceipt', () => tool.checkReadReceipt())}>{processing('readReceipt') ? '正在核对原读取…' : '核对原读取请求'}</button></div>}
+    {!connectionsReady && <button type="button" disabled={locked} aria-busy={processing('load')} onClick={() => void perform('load', load)}>{processing('load') ? '正在读取模型与草稿…' : '重新读取模型与草稿'}</button>}
+    {!draftReady && <button type="button" disabled={locked} aria-busy={processing('read')} onClick={() => void perform('read', () => reload(true))}>{processing('read') ? '正在读取开书草稿…' : '重新读取开书草稿'}</button>}
   </>
   const seedOptions = <fieldset disabled={locked || !draftReady || Boolean(snapshot?.adoption)} title={lockedReason ?? (!draftReady ? seedDisabledReason : adoptedReason)} className={styles.fields}>
     <label>题材<input maxLength={80} value={seed.genre} onChange={(event) => setSeed({ ...seed, genre: event.target.value })} placeholder="也可以填写自定义题材" /></label>
@@ -312,7 +339,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
     <label>叙事模板<select value={seed.template} onChange={(event) => setSeed({ ...seed, template: event.target.value as KickstartSeed['template'] })}>{Object.entries(templateLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     <label>本次使用模型<select value={connectionId} disabled={configDirty} title={configDirty ? '请先保存或放弃当前模型配置修改' : undefined} onChange={(event) => setConnectionId(event.target.value)}><option value="">请选择连接</option>{connections.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model}</option>)}</select></label>
   </fieldset>
-  const connectionForm = configOpen && <form className={styles.connection} onSubmit={(event) => void configure(event)}>
+  const connectionForm = configOpen && <form className={styles.connection} onSubmit={(event) => void perform('configure', () => configure(event))}>
     <div className={styles.sectionHeading}><h3>工作区模型连接</h3><span>{keyIds.includes(configuration.id) ? '当前会话已填写密钥' : '密钥仅在本次桌面会话保留'}</span></div>
     {connections.length > 0 && <label>编辑已有连接<select value={original?.id ?? ''} disabled={locked || configDirty} title={lockedReason ?? (configDirty ? '请先保存或放弃当前模型配置修改' : undefined)} onChange={(event) => editConfiguration(connections.find((item) => item.id === event.target.value))}><option value="">新连接</option>{connections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
     <fieldset disabled={locked} title={lockedReason} className={styles.fields}>
@@ -326,16 +353,17 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
       {replacingDefault && <label className={`${styles.check} ${styles.full}`}><input type="checkbox" checked={defaultConfirmed} onChange={(event) => setDefaultConfirmed(event.target.checked)} />确认替换“{oldDefault?.name}”的默认状态</label>}
     </fieldset>
     <p className={styles.hint}>首次在旧书库保存连接，会先在 studio-backups 留存目录库备份，再增加配置表。作品正文不参与这次升级。</p>
-    <div className={styles.actions}><button className={styles.primary} type="submit" disabled={locked || !configDirty || replacingDefault && !defaultConfirmed} title={lockedReason ?? (!configDirty ? '模型配置尚未修改，无需重复保存' : replacingDefault && !defaultConfirmed ? '请先确认替换原默认连接' : undefined)}>保存模型配置</button>
+    <div className={styles.actions}><button className={styles.primary} type="submit" disabled={locked || !configDirty || replacingDefault && !defaultConfirmed} aria-busy={processing('configure')} title={lockedReason ?? (!configDirty ? '模型配置尚未修改，无需重复保存' : replacingDefault && !defaultConfirmed ? '请先确认替换原默认连接' : undefined)}>{processing('configure') ? '正在保存模型配置…' : '保存模型配置'}</button>
       {configDirty && <button type="button" disabled={locked} title={lockedReason} onClick={onClose}>放弃修改或离开</button>}
       <button type="button" disabled={locked} title={lockedReason} onClick={() => setConfigOpen(false)}>收起配置</button>
     </div>
   </form>
 
-  return <section className={styles.panel} aria-label={step < 2 ? '新建作品向导' : '开书房'}>
-    {step < 2 ? <DialogDisplayContext.Provider value="modal"><Dialog title={<span className={styles.wizardTitle}><StudioIcon name="planet" size={24} />新建作品</span>} className={styles.wizard} wide onClose={onClose} busy={tool.busy || opening}>
+  return <section className={styles.panel} aria-label={step < 2 ? '新建作品向导' : '开书房'} aria-busy={tool.busy || operation !== null || opening}>
+    {step < 2 ? <DialogDisplayContext.Provider value="modal"><Dialog title={<span className={styles.wizardTitle}><StudioIcon name="planet" size={24} />新建作品</span>} className={styles.wizard} wide onClose={onClose} busy={tool.busy || operation !== null || opening}>
       <nav className={styles.steps} aria-label="开书步骤">{['题材', '种子', '提案'].map((label, index) => <button key={label} type="button" aria-current={step === index ? 'step' : undefined}
         data-complete={index < step} disabled={locked || index > step} title={lockedReason ?? (index > step ? '请先完成当前步骤，再点击下一步' : undefined)} onClick={() => setStep(index)}><span>{index + 1}</span>{label}</button>)}</nav>
+      <div className={styles.wizardBody} data-wizard-body>
       {feedback}
       {step === 0 ? <div className={styles.genreStep} title={lockedReason ?? (!draftReady ? seedDisabledReason : undefined)}>
         <GenrePicker value={seed.genre} disabled={locked || !draftReady} onSelect={(genre) => setSeed({ ...seed, genre })} />
@@ -346,22 +374,25 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
       </div> : <div className={styles.seedStep}>
         <label>一句话脑洞<textarea autoFocus maxLength={2000} rows={3} value={seed.idea} disabled={locked} onChange={(event) => setSeed({ ...seed, idea: event.target.value })} /></label>
         {seedOptions}
-        <button type="button" disabled={locked} title={lockedReason} onClick={() => setConfigOpen(!configOpen)}><StudioIcon name="settings" size={16} />工作区模型</button>
+        <button ref={configurationTrigger} type="button" disabled={locked} title={lockedReason} aria-expanded={configOpen} onClick={() => setConfigOpen(!configOpen)}><StudioIcon name="settings" size={16} />工作区模型</button>
         {connectionForm}
         {!connectionId && <p className={styles.hint}>尚未配置模型。可以先保存故事种子，也可以手工建立作品。</p>}
       </div>}
+      </div>
       <footer className={styles.wizardActions}>
         <button type="button" onClick={step === 0 ? onClose : () => setStep(0)} disabled={locked} title={lockedReason}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />{step === 0 ? '上一步' : '返回题材'}</button>
         <button className={styles.textButton} type="button" disabled={locked} title={lockedReason} onClick={onManual}>手工建立作品</button>
         <button className={styles.primary} type="button" disabled={locked || !draftReady || !seed.idea.trim() || !seed.genre.trim() || step === 1 && configDirty}
+          aria-busy={processing('save') || processing('prepare:all')}
           title={lockedReason ?? seedDisabledReason ?? (step === 1 && configDirty ? '请先保存或放弃模型配置修改' : undefined)}
           onClick={() => {
             if (step === 0) { setStep(1); return }
-            if (connectionId) void prepare('all')
-            else void saveDraft().then((saved) => { if (saved) { setStep(2); setConfigOpen(false) } })
-          }}>{step === 0 ? '下一步 · 故事种子' : connectionId ? '下一步 · 生成提案' : '保存种子 · 进入开书房'}<StudioIcon name="arrow" size={16} /></button>
+            if (connectionId) void perform('prepare:all', () => prepare('all'))
+            else void perform('save', async () => { const saved = await saveDraft(); if (saved) { setStep(2); setConfigOpen(false) } })
+          }}>{processing('save') ? '正在保存故事种子…' : processing('prepare:all') ? '正在准备发送预览…' : step === 0 ? '下一步 · 故事种子' : connectionId ? '下一步 · 生成提案' : '保存种子 · 进入开书房'}<StudioIcon name="arrow" size={16} /></button>
       </footer>
     </Dialog></DialogDisplayContext.Provider> : <>
+      <h2 className={styles.srOnly} ref={roomHeading} tabIndex={-1}>开书房</h2>
       <header className={styles.seedBar}>
         <label className={styles.ideaInput}><span><StudioIcon name="spark" size={20} />灵感输入</span><textarea maxLength={2000} rows={2} value={seed.idea}
           disabled={locked || !draftReady || Boolean(snapshot?.adoption)} title={lockedReason ?? (!draftReady ? seedDisabledReason : adoptedReason)} onChange={(event) => setSeed({ ...seed, idea: event.target.value })} placeholder="写下你的一句话脑洞" /></label>
@@ -369,9 +400,9 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
           {STELLAR_GENRES.map((genre) => <button key={genre.id} type="button" aria-pressed={seed.genre === genre.label} onClick={() => setSeed({ ...seed, genre: genre.label })}>{genre.label}</button>)}
         </fieldset>
         <div className={styles.generateActions}>
-          {run?.state === 'running' ? <button type="button" disabled={tool.locked} title={toolLockedReason} onClick={() => void cancel()}><StudioIcon name="close" size={20} />中止本次生成</button>
+          {run?.state === 'running' ? <button type="button" disabled={tool.locked || operation !== null} title={toolLockedReason} aria-busy={processing('cancel')} onClick={() => void perform('cancel', cancel)}><StudioIcon name="close" size={20} />{processing('cancel') ? '正在中止本次生成…' : '中止本次生成'}</button>
             : <button className={styles.primary} type="button" disabled={!canGenerate} title={generateReason}
-              onClick={() => void prepare('all')}><StudioIcon name="spark" size={20} />{run && ['failed', 'cancelled', 'interrupted'].includes(run.state) ? '重新生成开书包' : '生成开书包'}</button>}
+              aria-busy={processing('prepare:all')} onClick={() => void perform('prepare:all', () => prepare('all'))}><StudioIcon name="spark" size={20} />{processing('prepare:all') ? '正在准备发送预览…' : run && ['failed', 'cancelled', 'interrupted'].includes(run.state) ? '重新生成开书包' : '生成开书包'}</button>}
           <div className={styles.progressTrack} data-running={run?.state === 'running'} data-complete={run?.state === 'succeeded'} role={run?.state === 'running' ? 'progressbar' : undefined}
             aria-label={run?.state === 'running' ? '正在推演故事' : undefined} />
           <span className={styles.generationState} role="status">{run ? run.state === 'running' ? `推演中 · 已收到 ${run.outputText.length.toLocaleString()} 字符` : stateLabels[run.state] : '等待生成'}</span>
@@ -380,20 +411,20 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
       <div className={styles.workspaceTools}>
         <div className={styles.actions}>
           <button type="button" disabled={locked} title={lockedReason} aria-expanded={optionsOpen} onClick={() => setOptionsOpen(!optionsOpen)}><StudioIcon name="settings" size={16} />创作选项</button>
-          <button type="button" disabled={locked} title={lockedReason} aria-expanded={configOpen} onClick={() => setConfigOpen(!configOpen)}>工作区模型{selectedConnection ? ` · ${selectedConnection.name}` : ''}</button>
-          {!snapshot?.adoption && <button type="button" disabled={locked || !draftReady || !seed.idea.trim() || !seed.genre.trim()} title={lockedReason ?? seedDisabledReason} onClick={() => void saveDraft()}><StudioIcon name="save" size={16} />保存草稿</button>}
+          <button ref={configurationTrigger} type="button" disabled={locked} title={lockedReason} aria-expanded={configOpen} onClick={() => setConfigOpen(!configOpen)}>工作区模型{selectedConnection ? ` · ${selectedConnection.name}` : ''}</button>
+          {!snapshot?.adoption && <button type="button" disabled={locked || !draftReady || !seed.idea.trim() || !seed.genre.trim()} aria-busy={processing('save')} title={lockedReason ?? seedDisabledReason} onClick={() => void perform('save', saveDraft)}><StudioIcon name="save" size={16} />{processing('save') ? '正在保存草稿…' : '保存草稿'}</button>}
           <button type="button" disabled={locked} title={lockedReason} onClick={onManual}>手工建立作品</button>
         </div>
-        <button className={styles.textButton} type="button" onClick={onClose} disabled={tool.busy || opening} title={tool.busy ? '正在处理开书操作，请稍候再返回' : opening ? '正在打开第一章，请稍候' : undefined}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />返回</button>
+        <button className={styles.textButton} type="button" onClick={onClose} disabled={tool.busy || operation !== null || opening} title={tool.busy || operation !== null ? '正在处理开书操作，请稍候再返回' : opening ? '正在打开第一章，请稍候' : undefined}><StudioIcon name="arrow" size={16} style={{ transform: 'rotate(180deg)' }} />返回</button>
       </div>
       {feedback}
       {optionsOpen && <section className={styles.options} aria-label="创作选项">{seedOptions}</section>}
       {connectionForm}
       {run?.state === 'prepared' && <section className={styles.requestPreview} aria-label="发送预览">
-        <div><strong>发送预览 · {partLabels[run.part]}</strong><p>{run.connection.name} / {run.connection.model} · 预估输入 {run.estimatedInputTokens.toLocaleString()} token · 输出上限 {run.connection.maxOutputTokens.toLocaleString()} token</p>
+        <div><h3 ref={previewHeading} tabIndex={-1}>发送预览 · {partLabels[run.part]}</h3><p>{run.connection.name} / {run.connection.model} · 预估输入 {run.estimatedInputTokens.toLocaleString()} token · 输出上限 {run.connection.maxOutputTokens.toLocaleString()} token</p>
           <p className={styles.hint}>将发送至 {run.connection.baseUrl}。输入量为本机粗估，最终费用以服务方账单为准。</p></div>
         <details><summary>查看实际发送内容</summary>{run.messages.map((message, index) => <div key={index}><strong>{message.role}</strong><pre className={styles.raw}>{message.content}</pre></div>)}</details>
-        <div className={styles.actions}><button className={styles.primary} type="button" disabled={locked || !seedMatchesRun || !connectionMatchesRun || seedDirty || configDirty} title={lockedReason ?? (!seedMatchesRun ? '故事种子已改变，请重新生成发送预览' : !connectionMatchesRun ? '模型连接已改变，请重新生成发送预览' : changedReason)} onClick={() => void start()}>确认发送并生成</button>
+        <div className={styles.actions}><button className={styles.primary} type="button" disabled={locked || !seedMatchesRun || !connectionMatchesRun || seedDirty || configDirty} aria-busy={processing('send')} title={lockedReason ?? (!seedMatchesRun ? '故事种子已改变，请重新生成发送预览' : !connectionMatchesRun ? '模型连接已改变，请重新生成发送预览' : changedReason)} onClick={() => void perform('send', start)}>{processing('send') ? '正在启动生成…' : '确认发送并生成'}</button>
           {(!seedMatchesRun || !connectionMatchesRun) && <span>脑洞或模型连接已改变，请重新生成发送预览。</span>}</div>
       </section>}
       {run?.error && <p className={styles.error} role="alert">{run.error}</p>}
@@ -404,13 +435,13 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
         <div className={styles.proposalGrid}>
           <section className={styles.proposalPart} aria-labelledby="kickstart-titles">
             <header className={styles.partHeading}><h3 id="kickstart-titles"><StudioIcon name="spark" size={20} />书名候选</h3>
-              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} onClick={() => void prepare('titles')} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成书名')}><StudioIcon name="refresh" size={16} />重掷</button>
-                <button type="button" className={styles.selectButton} disabled={proposalLocked || !proposal || Boolean(selectedTitle)} title={proposalDisabledReason ?? (selectedTitle ? '已选定书名，可在候选列表切换' : undefined)} onClick={() => { if (proposal?.titles[0]) void choose(proposal.titles[0].candidateId, true) }}><StudioIcon name="check" size={16} />{selectedTitle ? '已选' : '选用'}</button></div>
+              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} aria-busy={processing('prepare:titles')} onClick={() => void perform('prepare:titles', () => prepare('titles'))} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成书名')}><StudioIcon name="refresh" size={16} />{processing('prepare:titles') ? '正在准备…' : '重掷'}</button>
+                <button type="button" className={styles.selectButton} disabled={proposalLocked || !proposal || Boolean(selectedTitle)} aria-busy={processing('select:titles')} title={proposalDisabledReason ?? (selectedTitle ? '已选定书名，可在候选列表切换' : undefined)} onClick={() => { if (proposal?.titles[0]) void perform('select:titles', () => choose(proposal.titles[0].candidateId, true)) }}><StudioIcon name="check" size={16} />{processing('select:titles') ? '正在保存…' : selectedTitle ? '已选' : '选用'}</button></div>
             </header>
             {proposal ? <div className={styles.titleLayout}>
               <fieldset className={styles.titles} disabled={proposalLocked} title={proposalDisabledReason}><legend className={styles.srOnly}>选择一个书名</legend>
                 {proposal.titles.map((candidate) => <label key={candidate.candidateId} className={styles.titleChoice} title={proposalLocked ? proposalDisabledReason : candidate.value.angle}>
-                  <input type="radio" name="kickstart-title" checked={visibleSelection.has(candidate.candidateId)} onChange={() => void choose(candidate.candidateId, true)} />
+                  <input type="radio" name="kickstart-title" checked={visibleSelection.has(candidate.candidateId)} aria-busy={processing(`select:${candidate.candidateId}`)} onChange={() => void perform(`select:${candidate.candidateId}`, () => choose(candidate.candidateId, true))} />
                   <span>{candidate.value.title}</span>
                 </label>)}
               </fieldset>
@@ -422,12 +453,12 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
           </section>
           <section className={styles.proposalPart} aria-labelledby="kickstart-cast">
             <header className={styles.partHeading}><h3 id="kickstart-cast"><StudioIcon name="user" size={20} />核心人物组</h3>
-              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} onClick={() => void prepare('cast')} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成人物组')}><StudioIcon name="refresh" size={16} />重掷</button>
-                <button type="button" className={styles.selectButton} disabled={!proposal || proposalLocked} title={proposalDisabledReason} onClick={() => chooseGroup('cast')}><StudioIcon name="check" size={16} />{proposal?.cast.every((item) => visibleSelection.has(item.candidateId)) ? '已选' : '选用'}</button></div>
+              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} aria-busy={processing('prepare:cast')} onClick={() => void perform('prepare:cast', () => prepare('cast'))} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成人物组')}><StudioIcon name="refresh" size={16} />{processing('prepare:cast') ? '正在准备…' : '重掷'}</button>
+                <button type="button" className={styles.selectButton} disabled={!proposal || proposalLocked} aria-busy={processing('select:cast')} title={proposalDisabledReason} onClick={() => void perform('select:cast', () => chooseGroup('cast'))}><StudioIcon name="check" size={16} />{processing('select:cast') ? '正在保存…' : proposal?.cast.every((item) => visibleSelection.has(item.candidateId)) ? '已选' : '选用'}</button></div>
             </header>
             {proposal ? <div className={styles.castCards}>{proposal.cast.map((candidate) => <article key={candidate.candidateId} className={styles.person} data-selected={visibleSelection.has(candidate.candidateId)}>
               <div className={styles.portrait} aria-hidden="true"><StudioIcon name="user" size={48} /></div>
-              <div className={styles.personBody}><label className={styles.check}><input type="checkbox" disabled={proposalLocked} title={proposalDisabledReason} checked={visibleSelection.has(candidate.candidateId)} onChange={() => void choose(candidate.candidateId)} /><strong>{candidate.value.name}</strong></label>
+              <div className={styles.personBody}><label className={styles.check}><input type="checkbox" disabled={proposalLocked} title={proposalDisabledReason} aria-busy={processing(`select:${candidate.candidateId}`)} checked={visibleSelection.has(candidate.candidateId)} onChange={() => void perform(`select:${candidate.candidateId}`, () => choose(candidate.candidateId))} /><strong>{candidate.value.name}</strong></label>
                 <span className={styles.candidateState}>{candidate.value.slot === 'protagonist' ? '主角' : candidate.value.slot} · {visibleSelection.has(candidate.candidateId) ? '已选' : '待定'}</span>
                 <p>{candidate.value.summary}</p>
                 <details><summary>人物动机与表达</summary><dl>
@@ -439,17 +470,17 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
           </section>
           <section className={styles.proposalPart} aria-labelledby="kickstart-rules">
             <header className={styles.partHeading}><h3 id="kickstart-rules"><StudioIcon name="globe" size={20} />世界底色与铁律</h3>
-              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} onClick={() => void prepare('rules')} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成世界规则')}><StudioIcon name="refresh" size={16} />重掷</button>
-                <button type="button" className={styles.selectButton} disabled={!proposal || proposalLocked} title={proposalDisabledReason} onClick={() => chooseGroup('rules')}><StudioIcon name="check" size={16} />{proposal?.rules.every((item) => visibleSelection.has(item.candidateId)) ? '已选' : '选用'}</button></div>
+              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} aria-busy={processing('prepare:rules')} onClick={() => void perform('prepare:rules', () => prepare('rules'))} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成世界规则')}><StudioIcon name="refresh" size={16} />{processing('prepare:rules') ? '正在准备…' : '重掷'}</button>
+                <button type="button" className={styles.selectButton} disabled={!proposal || proposalLocked} aria-busy={processing('select:rules')} title={proposalDisabledReason} onClick={() => void perform('select:rules', () => chooseGroup('rules'))}><StudioIcon name="check" size={16} />{processing('select:rules') ? '正在保存…' : proposal?.rules.every((item) => visibleSelection.has(item.candidateId)) ? '已选' : '选用'}</button></div>
             </header>
             {proposal ? <ol className={styles.rules}>{proposal.rules.map((candidate, index) => <li key={candidate.candidateId}>
-              <span className={styles.ruleNumber}>{index + 1}</span><div><label className={styles.check}><input type="checkbox" disabled={proposalLocked} title={proposalDisabledReason} checked={visibleSelection.has(candidate.candidateId)} onChange={() => void choose(candidate.candidateId)} /><strong>{candidate.value.name}</strong><small>{visibleSelection.has(candidate.candidateId) ? '已选' : '待定'}</small></label><p>{candidate.value.summary}</p></div>
+              <span className={styles.ruleNumber}>{index + 1}</span><div><label className={styles.check}><input type="checkbox" disabled={proposalLocked} title={proposalDisabledReason} aria-busy={processing(`select:${candidate.candidateId}`)} checked={visibleSelection.has(candidate.candidateId)} onChange={() => void perform(`select:${candidate.candidateId}`, () => choose(candidate.candidateId))} /><strong>{candidate.value.name}</strong><small>{visibleSelection.has(candidate.candidateId) ? '已选' : '待定'}</small></label><p>{candidate.value.summary}</p></div>
             </li>)}</ol> : <div className={styles.partEmpty}><StudioIcon name="globe" size={28} /><p>{run?.state === 'running' ? '正在推演世界的规则与代价…' : '生成后选择世界规则'}</p></div>}
           </section>
           <section className={styles.proposalPart} aria-labelledby="kickstart-outline">
             <header className={styles.partHeading}><h3 id="kickstart-outline"><StudioIcon name="workflow" size={20} />初版三层大纲</h3>
-              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} onClick={() => void prepare('outline')} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成大纲')}><StudioIcon name="refresh" size={16} />重掷</button>
-                <button type="button" className={styles.selectButton} disabled={!proposal || proposalLocked} title={proposalDisabledReason} onClick={() => { if (proposal) void choose(proposal.outline.candidateId) }}><StudioIcon name="check" size={16} />{proposal && visibleSelection.has(proposal.outline.candidateId) ? '已选' : '选用'}</button></div>
+              <div className={styles.partActions}><button type="button" disabled={!proposal || rerollDisabled} aria-busy={processing('prepare:outline')} onClick={() => void perform('prepare:outline', () => prepare('outline'))} title={rerollReason ?? (!proposal ? '请先生成有效提案' : '重新生成大纲')}><StudioIcon name="refresh" size={16} />{processing('prepare:outline') ? '正在准备…' : '重掷'}</button>
+                <button type="button" className={styles.selectButton} disabled={!proposal || proposalLocked} aria-busy={processing('select:outline')} title={proposalDisabledReason} onClick={() => { if (proposal) void perform('select:outline', () => choose(proposal.outline.candidateId)) }}><StudioIcon name="check" size={16} />{processing('select:outline') ? '正在保存…' : proposal && visibleSelection.has(proposal.outline.candidateId) ? '已选' : '选用'}</button></div>
             </header>
             {proposal ? <div className={styles.outline}>
               <details className={styles.outlineLevel}><summary><span className={styles.outlineLabel}><StudioIcon name="spark" size={16} />总纲</span><span className={styles.outlinePreview}>{proposal.outline.value.acts.map((act) => act.title).join(' → ')}</span></summary><ol>{proposal.outline.value.acts.map((act, index) => <li key={index}><strong>{act.title}</strong><p>{act.summary}</p></li>)}</ol><p>{proposal.outline.value.acts.map((act) => act.title).join(' → ')}</p></details>
@@ -458,7 +489,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
                 <summary><small>第 {index + 1} 章</small><strong>{chapter.title}</strong></summary><p>目标：{chapter.goal}</p><p>冲突：{chapter.conflict}</p><p>章末悬念：{chapter.hook}</p><p>紧张度：{chapter.tension === null ? '未评估' : `${chapter.tension}/100`}</p>
                 <ol>{chapter.beats.map((beat) => <li key={beat.id}><strong>{beat.title}</strong> · {beat.action} → {beat.outcome}</li>)}</ol>
               </details>)}</div></div>
-              <label className={styles.check}><input type="checkbox" disabled={proposalLocked} title={proposalDisabledReason} checked={visibleSelection.has(proposal.outline.candidateId)} onChange={() => void choose(proposal.outline.candidateId)} />采用大纲与章纲</label>
+              <label className={styles.check}><input type="checkbox" disabled={proposalLocked} title={proposalDisabledReason} aria-busy={processing('select:outline')} checked={visibleSelection.has(proposal.outline.candidateId)} onChange={() => void perform('select:outline', () => choose(proposal.outline.candidateId))} />采用大纲与章纲</label>
               <p className={styles.hint}>不采用大纲时只建立空白第一章。</p>
             </div> : <div className={styles.partEmpty}><StudioIcon name="workflow" size={28} /><p>{run?.state === 'running' ? '正在推演总纲、首卷与章纲…' : '生成后查看三层大纲'}</p></div>}
           </section>
@@ -471,37 +502,37 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
             {proposal.rules.filter((item) => visibleSelection.has(item.candidateId)).map((item) => <li key={item.candidateId}><StudioIcon name="check" size={16} />{item.value.name}</li>)}
             {visibleSelection.has(proposal.outline.candidateId) && <li><StudioIcon name="check" size={16} />三层大纲 · {proposal.outline.value.chapters.length} 章</li>}
           </ul> : <p className={styles.selectionEmpty}>尚未选入候选</p>}
-          {snapshot?.adoption ? <footer className={styles.adoption}><strong>开书包已采用</strong><p>书名、所选人物与规则、卷章已保存。</p><button className={styles.primary} type="button" disabled={locked} title={lockedReason} onClick={() => void enter(snapshot)}>打开第一章<StudioIcon name="arrow" size={16} /></button></footer>
+          {snapshot?.adoption ? <footer className={styles.adoption}><strong>开书包已采用</strong><p>书名、所选人物与规则、卷章已保存。</p><button className={styles.primary} type="button" disabled={locked} aria-busy={opening} title={lockedReason} onClick={() => void enter(snapshot)}>{opening ? '正在打开第一章…' : '打开第一章'}<StudioIcon name="arrow" size={16} /></button></footer>
             : <footer className={styles.adoption}><p>采纳前将核对作品与提案版本。</p><button className={styles.primary} type="button" disabled={!canAdopt} title={adoptReason}
               onClick={() => setConfirmAdopt(true)}><StudioIcon name="spark" size={18} />采纳所选 · 进入第一章</button></footer>}
         </aside>
       </div>
-      {snapshot && snapshot.history.length > 1 && <label className={styles.history}>最近的开书尝试（最多 100 次）<select value={run?.id ?? ''} disabled={locked || seedDirty || configDirty || Boolean(snapshot.adoption)} title={lockedReason ?? adoptedReason ?? changedReason} onChange={(event) => void reload(true, event.target.value)}>{snapshot.history.map((item) => <option key={item.id} value={item.id}>{partLabels[item.part]} · {stateLabels[item.state]} · {new Date(item.createdAt).toLocaleString('zh-CN')}</option>)}</select></label>}
+      {snapshot && snapshot.history.length > 1 && <label className={styles.history}>最近的开书尝试（最多 100 次）<select value={run?.id ?? ''} disabled={locked || seedDirty || configDirty || Boolean(snapshot.adoption)} aria-busy={processing('read')} title={lockedReason ?? adoptedReason ?? changedReason} onChange={(event) => void perform('read', () => reload(true, event.target.value))}>{snapshot.history.map((item) => <option key={item.id} value={item.id}>{partLabels[item.part]} · {stateLabels[item.state]} · {new Date(item.createdAt).toLocaleString('zh-CN')}</option>)}</select></label>}
       {run && <details className={styles.output} open={['failed', 'cancelled', 'interrupted'].includes(run.state)}><summary>生成记录与原始输出 · {stateLabels[run.state]}</summary>
         {run.outputText && <pre className={styles.raw}>{run.outputText}</pre>}
         {run.state !== 'prepared' && <details><summary>查看实际发送内容</summary>{run.messages.map((message, index) => <div key={index}><strong>{message.role}</strong><pre className={styles.raw}>{message.content}</pre></div>)}</details>}
         {run.usage && <p className={styles.hint}>服务方报告用量：输入 {run.usage.inputTokens ?? '未知'} / 输出 {run.usage.outputTokens ?? '未知'} / 合计 {run.usage.totalTokens ?? '未知'} token</p>}
         <div className={styles.actions}>
-          {run.parentRunId && !snapshot?.adoption && <button type="button" disabled={locked || seedDirty || configDirty} title={lockedReason ?? changedReason} onClick={() => void reload(true, run.parentRunId!)}>查看上一份提案</button>}
+          {run.parentRunId && !snapshot?.adoption && <button type="button" disabled={locked || seedDirty || configDirty} aria-busy={processing('read')} title={lockedReason ?? changedReason} onClick={() => void perform('read', () => reload(true, run.parentRunId!))}>{processing('read') ? '正在读取上一份提案…' : '查看上一份提案'}</button>}
           <button type="button" onClick={() => void copyRecovery()}>复制草稿与输出</button>
           <button type="button" disabled={!copied || tool.busy} title={recoveryReason} onClick={onRecover}>已留存，进入恢复</button>
         </div>
       </details>}
     </>}
-    {leave.confirming && <DialogDisplayContext.Provider value="modal"><Dialog title="离开开书房？" onClose={leave.keepEditing} busy={tool.busy}>
+    {leave.confirming && <DialogDisplayContext.Provider value="modal"><Dialog title="离开开书房？" onClose={leave.keepEditing} busy={tool.busy || operation !== null}>
       <div className={styles.leaveContent}><p>故事种子或模型配置有未保存修改。已经保存的草稿和提案会保留。</p>
         {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
-        {tool.pending && <button type="button" disabled={tool.busy || !tool.pending.error.requestId} title={tool.busy ? '正在核对原请求，请稍候' : !tool.pending.error.requestId ? '原请求没有可查询编号，请先留存草稿并进入恢复' : undefined} onClick={() => void tool.checkReceipt()}>核对原请求</button>}
+        {tool.pending && <button type="button" disabled={tool.busy || !tool.pending.error.requestId} aria-busy={processing('writeReceipt')} title={tool.busy ? '正在核对原请求，请稍候' : !tool.pending.error.requestId ? '原请求没有可查询编号，请先留存草稿并进入恢复' : undefined} onClick={() => void perform('writeReceipt', () => tool.checkReceipt())}>{processing('writeReceipt') ? '正在核对原请求…' : '核对原请求'}</button>}
         <div className={styles.actions}><button type="button" disabled={tool.busy} title={tool.busy ? '正在处理开书操作，请稍候再继续编辑' : undefined} onClick={leave.keepEditing}>{leave.source === 'window' ? '返回保存' : '继续编辑'}</button>
           <button type="button" disabled={locked} title={lockedReason} onClick={leave.discardAndLeave}>放弃未保存修改并离开</button>
-          {leave.source !== 'window' && <button className={styles.primary} type="button" disabled={locked || configDirty && replacingDefault && !defaultConfirmed || seedDirty && (!seed.idea.trim() || !seed.genre.trim())} title={lockedReason ?? (configDirty && replacingDefault && !defaultConfirmed ? '请先返回确认默认连接替换' : seedDirty && (!seed.idea.trim() || !seed.genre.trim()) ? '脑洞和题材不完整，可返回补全或明确放弃修改' : undefined)} onClick={() => void saveAndLeave()}>保存并离开</button>}</div>
+          {leave.source !== 'window' && <button className={styles.primary} type="button" disabled={locked || configDirty && replacingDefault && !defaultConfirmed || seedDirty && (!seed.idea.trim() || !seed.genre.trim())} aria-busy={processing('leave')} title={lockedReason ?? (configDirty && replacingDefault && !defaultConfirmed ? '请先返回确认默认连接替换' : seedDirty && (!seed.idea.trim() || !seed.genre.trim()) ? '脑洞和题材不完整，可返回补全或明确放弃修改' : undefined)} onClick={() => void perform('leave', saveAndLeave)}>{processing('leave') ? '正在保存并离开…' : '保存并离开'}</button>}</div>
       </div>
     </Dialog></DialogDisplayContext.Provider>}
-    {confirmAdopt && snapshot && run && <DialogDisplayContext.Provider value="modal"><Dialog title="采纳所选开书提案？" onClose={() => setConfirmAdopt(false)} busy={tool.busy || opening}>
+    {confirmAdopt && snapshot && run && <DialogDisplayContext.Provider value="modal"><Dialog title="采纳所选开书提案？" onClose={() => setConfirmAdopt(false)} busy={tool.busy || operation !== null || opening}>
       <div className={styles.leaveContent}><p>将建立《{selectedTitle?.value.title}》，写入所选人物、规则和大纲，并打开第一章。</p>
         <p className={styles.hint}>作品版本 {snapshot.book.book.revision} · 提案版本 {run.version} · 知识版本 {run.knowledgeRevision}。版本变化时停止采用，不覆盖现有修改。</p>
         {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
-        <div className={styles.actions}><button type="button" disabled={tool.busy} title={tool.busy ? '正在处理开书操作，请稍候再返回' : undefined} onClick={() => setConfirmAdopt(false)}>返回核对</button><button className={styles.primary} type="button" disabled={!canAdopt} title={adoptReason} onClick={() => void adopt()}>确认采纳</button></div>
+        <div className={styles.actions}><button type="button" disabled={tool.busy || operation !== null} title={tool.busy || operation !== null ? '正在处理开书操作，请稍候再返回' : undefined} onClick={() => setConfirmAdopt(false)}>返回核对</button><button className={styles.primary} type="button" disabled={!canAdopt} aria-busy={processing('adopt')} title={adoptReason} onClick={() => void perform('adopt', adopt)}>{processing('adopt') ? '正在采纳并建立作品…' : '确认采纳'}</button></div>
       </div>
     </Dialog></DialogDisplayContext.Provider>}
   </section>
