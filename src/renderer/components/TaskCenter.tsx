@@ -151,6 +151,7 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
     <h2 id={headingId} className={styles.visuallyHidden}>通知与任务</h2>
     <header className={styles.heading}><div className={styles.tabs} role="tablist" aria-label="通知任务视图" onKeyDown={(event) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || confirmStop) return
+      if (event.defaultPrevented || event.repeat || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
       event.preventDefault()
       const next = event.key === 'Home' ? 'notices' : event.key === 'End' ? 'tasks' : tab === 'notices' ? 'tasks' : 'notices'
       setTab(next); dialog.current?.querySelector<HTMLButtonElement>(`[id="${panelId}-${next}"]`)?.focus()
@@ -158,7 +159,7 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
       <button type="button" id={`${panelId}-notices`} role="tab" aria-selected={tab === 'notices'} aria-controls={panelId} tabIndex={tab === 'notices' ? 0 : -1} disabled={Boolean(confirmStop)} onClick={() => setTab('notices')}><StudioIcon name="bell" size={22} />通知 <span>{allNotices.filter((item) => !seen.has(item.id)).length}</span></button>
       <button type="button" id={`${panelId}-tasks`} role="tab" aria-selected={tab === 'tasks'} aria-controls={panelId} tabIndex={tab === 'tasks' ? 0 : -1} disabled={Boolean(confirmStop)} onClick={() => setTab('tasks')}><StudioIcon name="check" size={22} />任务 <span>{tasks.length}</span></button>
     </div><StellarTooltip><button className={styles.close} type="button" onClick={onClose} aria-label="关闭通知与任务" title="关闭"><StudioIcon name="close" size={20} /></button></StellarTooltip></header>
-    {pendingMessage && <section className={styles.pending} role="alert"><p>{pendingMessage}</p><div><button type="button" className={styles.button} disabled={checkingReceipt} onClick={onCheckReceipt}>{checkingReceipt ? '正在核对…' : '查询原回执'}</button><button type="button" className={styles.button} disabled={checkingReceipt} onClick={onRecover}>进入草稿与恢复</button></div></section>}
+    {pendingMessage && <section className={styles.pending} role="alert"><p>{pendingMessage}</p><div><button type="button" className={styles.button} aria-busy={checkingReceipt} disabled={checkingReceipt} onClick={onCheckReceipt}>{checkingReceipt ? '正在核对…' : '查询原回执'}</button><button type="button" className={styles.button} disabled={checkingReceipt} onClick={onRecover}>进入草稿与恢复</button></div></section>}
     <div id={panelId} className={styles.content} role="tabpanel" aria-labelledby={`${panelId}-${tab}`} tabIndex={0} inert={Boolean(confirmStop)}>
       {errors.map((error) => <p className={styles.error} role="alert" key={error}>{error}</p>)}
       {reading && <p className={styles.note} role="status">正在读取本书任务…</p>}
@@ -172,14 +173,14 @@ export function TaskCenter({ api, bookId, notices, seen, onSeen, onClose, onNavi
           onClick={() => { onSeen([item.id]); if (item.destination) onNavigate(item.destination, item.aiTarget, item.taskId) }}><StudioIcon name={item.destination ? 'chevron' : 'check'} size={20} /></button></StellarTooltip>
       </li>)}</ul></section>)}
       {!reading && !allNotices.length && <div className={styles.empty}><StudioIcon name="bell" size={28} /><p>{errors.length ? '通知暂时无法完整读取' : '暂无通知'}</p></div>}
-      {activeTasks.length > 0 && <section className={styles.active}><h3>运行中的任务</h3><ul className={styles.tasks}>{activeTasks.slice(0, 3).map(taskRow)}</ul>{activeTasks.length > 3 && <button type="button" className={styles.button} onClick={() => setTab('tasks')}>查看全部 {activeTasks.length} 项任务</button>}</section>}
+      {activeTasks.length > 0 && <section className={styles.active}><h3>运行中的任务</h3><ul className={styles.tasks}>{activeTasks.slice(0, 3).map(taskRow)}</ul>{activeTasks.length > 3 && <button type="button" className={styles.button} onClick={() => { setTab('tasks'); dialog.current?.querySelector<HTMLButtonElement>(`[id="${panelId}-tasks"]`)?.focus() }}>查看全部 {activeTasks.length} 项任务</button>}</section>}
     </> : <><ul className={styles.tasks}>{tasks.map(taskRow)}</ul>{!reading && !tasks.length && <div className={styles.empty}><StudioIcon name="list" size={28} /><p>{bookId ? errors.length ? '任务暂时无法完整读取' : '暂无任务记录' : '打开作品后查看任务'}</p></div>}</>}</div>
     {confirmStop && <section className={styles.confirmation} role="alert"><strong>停止“{confirmStop.title}”？</strong><p>{confirmStop.destination === 'media' ? '只停止这次图片请求，并核对原任务终态；已有结果仍保留，不会自动重发或保存到本书。'
       : confirmStop.stop?.kind === 'vector' ? confirmStop.state === 'prepared' ? '取消这份尚未发送的预览，不会发送模型请求。'
         : confirmStop.stop.task.active ? '取消这次向量网络请求并核对原任务终态；已保存的批次仍保留，不会自动开始下一批。'
           : '这条运行记录已无本机活动请求，将明确标记为中断；已有向量和检索快照仍保留，不会重发。'
-      : confirmStop.destination === 'ai' ? '已生成的输出仍保留，不会自动重发请求。' : '已保存的记录和作者决定仍保留。若模型仍在生成，须先停止对应生成。'}</p><div><button ref={keepTask} type="button" className={styles.button} disabled={stopping} onClick={() => setConfirmStop(null)}>继续保留</button><button type="button" className={styles.stopButton} disabled={disabled || stopping || Boolean(pendingMessage)} onClick={() => void stopConfirmed()}>{stopping ? '正在停止…' : '确认停止'}</button></div></section>}
-    <footer className={styles.footer} inert={Boolean(confirmStop)}><StellarTooltip><button type="button" className={styles.refreshButton} aria-label="刷新任务与通知" title={readAt ? `最近读取 ${displayTime(readAt)}` : '刷新'} disabled={reading || stopping || !bookId || !api || Boolean(pendingMessage)} onClick={() => setRefresh((value) => value + 1)}><StudioIcon name="refresh" size={18} /></button></StellarTooltip>
+      : confirmStop.destination === 'ai' ? '已生成的输出仍保留，不会自动重发请求。' : '已保存的记录和作者决定仍保留。若模型仍在生成，须先停止对应生成。'}</p><div><button ref={keepTask} type="button" className={styles.button} disabled={stopping} onClick={() => setConfirmStop(null)}>继续保留</button><button type="button" className={styles.stopButton} aria-busy={stopping} disabled={disabled || stopping || Boolean(pendingMessage)} onClick={() => void stopConfirmed()}>{stopping ? '正在停止…' : '确认停止'}</button></div></section>}
+    <footer className={styles.footer} inert={Boolean(confirmStop)}><StellarTooltip><button type="button" className={styles.refreshButton} aria-label="刷新任务与通知" aria-busy={reading} title={reading ? '正在读取任务与通知' : readAt ? `最近读取 ${displayTime(readAt)}` : '刷新'} disabled={reading || stopping || !bookId || !api || Boolean(pendingMessage)} onClick={() => setRefresh((value) => value + 1)}><StudioIcon name="refresh" size={18} /></button></StellarTooltip>
       {tab === 'notices' && <button type="button" className={styles.readAll} disabled={!allNotices.some((item) => !seen.has(item.id))} onClick={() => onSeen(allNotices.map((item) => item.id))}><span className={styles.readMark} aria-hidden="true"><StudioIcon name="check" size={20} /></span>全部标为已读</button>}
     </footer>
   </dialog>
