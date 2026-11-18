@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { OrphanScan, StudioApi } from '../../contracts/api'
 import { request } from '../request'
 import { Dialog } from './Dialog'
@@ -31,6 +31,7 @@ export function OrphanBooksDialog({ api, busy, error, onClose, onRegister }: Orp
 
 interface RecoveryProps {
   busy: boolean
+  operation: 'copy' | 'reload' | 'reconnect' | null
   error?: string | null
   hasDraft: boolean
   copiedPath: string | null
@@ -41,22 +42,35 @@ interface RecoveryProps {
   onClose: () => void
 }
 
-export function RecoveryDialog({ busy, error, hasDraft, copiedPath, uncertainMutation, canReloadWithoutRestart, onCopy, onRecover, onClose }: RecoveryProps) {
+export function RecoveryDialog({ busy, operation, error, hasDraft, copiedPath, uncertainMutation, canReloadWithoutRestart, onCopy, onRecover, onClose }: RecoveryProps) {
   const [acknowledged, setAcknowledged] = useState(false)
+  const failureNotice = useRef<HTMLParagraphElement>(null)
+  const copyNotice = useRef<HTMLParagraphElement>(null)
+  const content = useRef<HTMLDivElement>(null)
   useEffect(() => setAcknowledged(false), [copiedPath])
+  useEffect(() => {
+    // 按钮禁用后的焦点回退结束后，保留忙态焦点或交给实际操作结果。
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => {
+      const target = busy ? content.current : error ? failureNotice.current : copiedPath ? copyNotice.current : null
+      const modal = target?.closest('dialog')
+      if (modal?.open && [...document.querySelectorAll('dialog:modal')].at(-1) === modal) target?.focus({ preventScroll: busy })
+    }) })
+    return () => cancelAnimationFrame(frame)
+  }, [busy, error, copiedPath])
   const permitted = acknowledged && (!hasDraft || Boolean(copiedPath)) && !busy
-  return <Dialog title="保留草稿与恢复工作室" busy={busy} error={error} onClose={onClose}>
-    <div className={styles.fieldStack}>
+  return <Dialog title="保留草稿与恢复工作室" className={styles.recoveryDialog} busy={busy} onClose={onClose}>
+    {error && <p ref={failureNotice} className={styles.formError} role="alert" tabIndex={-1}>{error}</p>}
+    <div ref={content} tabIndex={-1} className={styles.fieldStack}>
       <p className={styles.helpText}>先把当前窗口的正文另存为草稿副本，再决定是否重新读取磁盘。副本由桌面程序直接写出，不依赖写作服务。</p>
-      {hasDraft && <button className={styles.button} type="button" onClick={onCopy} disabled={busy}>{busy ? '处理中…' : copiedPath ? '再次另存当前草稿' : '另存当前草稿副本'}</button>}
-      {copiedPath && <p className={styles.copyReceipt} role="status">草稿副本已保存：<span>{copiedPath}</span></p>}
+      {hasDraft && <button className={styles.button} type="button" onClick={onCopy} disabled={busy} aria-busy={operation === 'copy'}>{operation === 'copy' ? '正在另存…' : copiedPath ? '再次另存当前草稿' : '另存当前草稿副本'}</button>}
+      {copiedPath && <p ref={copyNotice} className={styles.copyReceipt} role="status" tabIndex={-1}>草稿副本已保存：<span>{copiedPath}</span></p>}
       {hasDraft && !copiedPath && <p className={styles.helpText}>成功保存当前编辑状态的副本后，才能继续重载。取消另存不会放弃草稿。</p>}
       <label className={styles.checkLabel}><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} disabled={busy || (hasDraft && !copiedPath)} />我确认以磁盘版本替换窗口草稿，并重新核对书架和目录。</label>
       {uncertainMutation && <p className={styles.formError}>上次操作可能已经写入。恢复后请先核对作品和章节，不要立即重复建立或导入。</p>}
       <p className={styles.helpText}>重新连接仅在旧服务已退出后可用。无法确认服务状态或读取失败时，当前窗口内容和副本仍保留。</p>
     </div>
     <div className={styles.formActions}><button className={styles.button} type="button" onClick={onClose} disabled={busy}>取消</button>
-      {canReloadWithoutRestart && <button className={styles.button} type="button" disabled={!permitted} onClick={() => onRecover(false)}>重载已保存版本</button>}
-      <button className={styles.primaryButton} type="button" disabled={!permitted} onClick={() => onRecover(true)}>重新连接并重载</button></div>
+      {canReloadWithoutRestart && <button className={styles.button} type="button" disabled={!permitted} aria-busy={operation === 'reload'} onClick={() => onRecover(false)}>{operation === 'reload' ? '正在重载…' : '重载已保存版本'}</button>}
+      <button className={styles.primaryButton} type="button" disabled={!permitted} aria-busy={operation === 'reconnect'} onClick={() => onRecover(true)}>{operation === 'reconnect' ? '正在重新连接…' : '重新连接并重载'}</button></div>
   </Dialog>
 }

@@ -33,12 +33,28 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
   const requestSequence = useRef(0)
   const operation = useRef<number | null>(null)
   const submitted = useRef<string | null>(null)
+  const failureNotice = useRef<HTMLParagraphElement>(null)
+  const previewPane = useRef<HTMLElement>(null)
   const context = `${scope}:${book.id}:${book.revision}`
   const current = useRef({ context, busy, archived: Boolean(book.archivedAt) })
   current.current = { context, busy, archived: Boolean(book.archivedAt) }
   const locked = busy || reading !== null
+  const failure = error ?? readError
   const previewMatches = Boolean(preview && preview.targetBookId === book.id && preview.expectedBookRevision === book.revision)
   const canCommit = Boolean(previewMatches && acknowledged && title.trim() && !locked && !book.archivedAt && submittedToken !== preview?.token)
+
+  useEffect(() => {
+    // 禁用按钮的原生焦点回退可能晚于提交；等它完成后再返回当前模态内。
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => {
+      const modal = previewPane.current?.closest('dialog')
+      if (!modal?.open || [...document.querySelectorAll('dialog:modal')].at(-1) !== modal) return
+      // 失败返回可读提示，成功返回可滚动正文；不夺取后来打开的确认层焦点。
+      if (locked && !modal.contains(document.activeElement)) previewPane.current?.focus({ preventScroll: true })
+      else if (!locked && failure) failureNotice.current?.focus()
+      else if (!locked && preview) previewPane.current?.focus({ preventScroll: true })
+    }) })
+    return () => cancelAnimationFrame(frame)
+  }, [locked, failure, preview])
 
   useEffect(() => {
     mounted.current = true
@@ -113,12 +129,13 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
     if (!current.current.busy && operation.current === null) onClose()
   }
 
-  return <Dialog title="从草稿副本恢复" className={styles.draftImport} wide busy={locked} error={error ?? readError} onClose={close}>
+  return <Dialog title="从草稿副本恢复" className={styles.draftImport} wide busy={locked} onClose={close}>
+    {failure && <p ref={failureNotice} className={styles.formError} role="alert" tabIndex={-1}>{failure}</p>}
     <p className={styles.helpText}>恢复目标：《{book.title}》。检查点来自当前作品库；也可以选择另存的 JSON 草稿。确认后会在目标作品中建立新章节，保留原章节、版本和草稿副本。</p>
     {book.archivedAt && <p className={styles.formError}>目标作品已归档，可以预览草稿。请解除归档后再恢复。</p>}
     <div className={styles.importOptions}>
-      <button type="button" className={styles.button} disabled={locked} onClick={() => void prepare()}>{reading === 'file' ? '正在选择与读取…' : '选择 JSON 草稿副本'}</button>
-      <button type="button" className={styles.button} disabled={locked} onClick={() => setAttempt((value) => value + 1)}>重新检查恢复草稿</button>
+      <button type="button" className={styles.button} disabled={locked} aria-busy={reading === 'file'} onClick={() => void prepare()}>{reading === 'file' ? '正在选择与读取…' : '选择 JSON 草稿副本'}</button>
+      <button type="button" className={styles.button} disabled={locked} aria-busy={reading === 'list'} onClick={() => setAttempt((value) => value + 1)}>{reading === 'list' ? '正在检查草稿…' : '重新检查恢复草稿'}</button>
     </div>
     {drafts && <details className={styles.draftDetails}><summary>检查点容量与分代 · {drafts.capacity.files.toLocaleString()} 项</summary><section className={styles.fieldStack} aria-label="检查点容量与分代">
       <p className={styles.helpText}>当前写入代：{drafts.capacity.generationId === 'legacy' ? '初始代' : drafts.capacity.generationId} ·
@@ -129,23 +146,24 @@ export function DraftImportDialog({ api, scope, book, busy, error, onClose, onCo
         {drafts.generations.map((item) => <option key={item.id} value={item.id}>{item.createdAt ? formatTime(item.createdAt) : '初始代'}{item.active ? '（当前写入）' : '（保留）'}</option>)}
       </select></label>
       <label className={styles.checkLabel}><input type="checkbox" checked={confirmRotation} disabled={locked} onChange={(event) => setConfirmRotation(event.target.checked)} />保留全部旧检查点，新建一代承接后续自动保护</label>
-      <button type="button" className={styles.button} disabled={locked || !confirmRotation} onClick={() => void rotate()}>{reading === 'rotate' ? '正在建立新代…' : '建立检查点新代'}</button>
+      <button type="button" className={styles.button} disabled={locked || !confirmRotation} aria-busy={reading === 'rotate'} onClick={() => void rotate()}>{reading === 'rotate' ? '正在建立新代…' : '建立检查点新代'}</button>
     </section></details>}
     {drafts && drafts.warnings.length > 0 && <ul className={styles.warningList}>{drafts.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
     {drafts && drafts.skipped > 0 && <p className={styles.helpText}>{drafts.skipped} 项无法读取或不符合草稿格式，未作修改。</p>}
     <div className={styles.previewLayout}>
-      <section className={styles.previewList} aria-label="可恢复草稿">
+      <section className={styles.previewList} aria-label="可恢复草稿" aria-busy={reading === 'list'}>
         {reading === 'list' && <p className={styles.helpText} role="status">正在检查本地草稿…</p>}
         {drafts?.items.length === 0 && <p className={styles.helpText}>当前没有可列出的恢复草稿。可以从 JSON 文件选择已另存的副本。</p>}
         <ol>{drafts?.items.map((item) => <li key={item.checkpointId}>
           <button type="button" className={selectedId === item.checkpointId ? styles.selectedPreview : undefined}
-            aria-pressed={selectedId === item.checkpointId} disabled={locked} onClick={() => void prepare(item.checkpointId)}>
+            aria-pressed={selectedId === item.checkpointId} aria-busy={reading === 'preview' && selectedId === item.checkpointId} disabled={locked} onClick={() => void prepare(item.checkpointId)}>
             <strong>{item.title}</strong><span>{item.characterCount.toLocaleString()} 字 · {item.bookId === book.id ? '本作品' : '其他作品'}</span>
             <time dateTime={item.createdAt}><small>{formatTime(item.createdAt)}</small></time>
+            {reading === 'preview' && selectedId === item.checkpointId && <small className={styles.checkpointProgress}><span className={styles.spinner} aria-hidden="true" />正在读取…</small>}
           </button>
         </li>)}</ol>
       </section>
-      <section className={styles.previewPane} aria-label="草稿正文预览" aria-busy={reading === 'file' || reading === 'preview'}>
+      <section ref={previewPane} className={styles.previewPane} aria-label="草稿正文预览" tabIndex={0} aria-busy={reading === 'file' || reading === 'preview'}>
         {(reading === 'file' || reading === 'preview') ? <p role="status">正在读取草稿预览…</p> : preview ? <><h3>{preview.title}</h3><pre>{preview.plainText}</pre></> : <p>选择一个检查点或 JSON 草稿，检查正文后再确认恢复。</p>}
       </section>
     </div>

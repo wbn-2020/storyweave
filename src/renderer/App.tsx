@@ -182,7 +182,8 @@ export function App({ api }: Props) {
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [checkingReceipt, setCheckingReceipt] = useState(false)
   const receiptCheck = useRef(false)
-  const [recoveryBusy, setRecoveryBusy] = useState(false)
+  const [recoveryOperation, setRecoveryOperation] = useState<'copy' | 'reload' | 'reconnect' | null>(null)
+  const recoveryBusy = recoveryOperation !== null
   const recoveryLock = useRef(false)
   const [draftReceipt, setDraftReceipt] = useState<DraftReceipt | null>(null)
   const [aiWritingReceipt, setAiWritingReceipt] = useState<AiWritingReceipt | null>(null)
@@ -1232,7 +1233,7 @@ export function App({ api }: Props) {
   async function saveDraftCopy() {
     if (!api || recoveryLock.current || session.isComposing() || session.getCurrent().saving) return
     recoveryLock.current = true
-    flushSync(() => { setBusy(true); setRecoveryBusy(true) })
+    flushSync(() => { setBusy(true); setRecoveryOperation('copy'); setMessage(null) })
     try {
       const current = session.getCurrent()
       if (!current.chapter) return
@@ -1241,7 +1242,7 @@ export function App({ api }: Props) {
       if (!result.ok) { setMessage(result.error.message); return }
       if (result.data) setDraftReceipt({ bookId: current.chapter.bookId, chapterId: current.chapter.id, editSequence: current.editSequence, loadEpoch: current.loadEpoch, filePath: result.data.filePath })
     } catch { setMessage('无法生成当前草稿副本。当前内容仍保留，请先选中正文复制留存。') }
-    finally { recoveryLock.current = false; setRecoveryBusy(false); setBusy(Boolean(pendingMutation.current)) }
+    finally { recoveryLock.current = false; setRecoveryOperation(null); setBusy(Boolean(pendingMutation.current)) }
   }
 
   async function recoverWorkspace(restart: boolean) {
@@ -1250,7 +1251,7 @@ export function App({ api }: Props) {
     if (captured.chapter && !currentCopy()) { setMessage('草稿已变化，请先另存当前版本的副本。'); return }
     if (!restart && (pendingMutation.current || bookRecoveryDirty.current || captured.error?.code !== 'REVISION_CONFLICT')) return
     recoveryLock.current = true
-    flushSync(() => { setBusy(true); setRecoveryBusy(true) })
+    flushSync(() => { setBusy(true); setRecoveryOperation(restart ? 'reconnect' : 'reload') })
     setMessage(null)
     try {
       // 主进程掌握服务实例身份：恢复服务上的重试只读工作室，旧实例退出后才重建。
@@ -1277,7 +1278,7 @@ export function App({ api }: Props) {
       session.pauseAutoSave(false)
       setMessage('已重新读取磁盘内容。此前未确认的操作可能已写入，请先核对书架和目录；草稿副本已保留在另存位置。')
     } catch { setMessage('恢复尚未完成，窗口草稿和已保存副本仍保留，请再次核对后重试。') }
-    finally { recoveryLock.current = false; setRecoveryBusy(false); setBusy(Boolean(pendingMutation.current)) }
+    finally { recoveryLock.current = false; setRecoveryOperation(null); setBusy(Boolean(pendingMutation.current)) }
   }
 
   useEffect(() => {
@@ -1820,7 +1821,7 @@ export function App({ api }: Props) {
     {modal?.kind === 'import' && api && <TextImportDialog api={api} onCommit={(token, title) => void commitImport(token, title)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'orphans' && api && <OrphanBooksDialog api={api} onRegister={(id) => void registerBook(id)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'draftImport' && api && book && workspace.recoveryScope && <DraftImportDialog key={workspace.recoveryScope + ':' + book.book.id} api={api} scope={workspace.recoveryScope} book={book.book} busy={busy} error={modalError} onClose={closeModal} onRotated={protection.retry} onCommit={(token, title) => void commitDraftImport(token, title)} />}
-    {modal?.kind === 'recovery' && <RecoveryDialog busy={recoveryBusy} error={message} hasDraft={Boolean(chapter)} copiedPath={currentCopy()?.filePath ?? null} uncertainMutation={Boolean(pendingMutation.current) || bookRecoveryLocked} canReloadWithoutRestart={!pendingMutation.current && !bookRecoveryLocked && session.session.error?.code === 'REVISION_CONFLICT'} onCopy={() => void saveDraftCopy()} onRecover={(restart) => void recoverWorkspace(restart)} onClose={closeModal} />}
+    {modal?.kind === 'recovery' && <RecoveryDialog busy={recoveryBusy} operation={recoveryOperation} error={message} hasDraft={Boolean(chapter)} copiedPath={currentCopy()?.filePath ?? null} uncertainMutation={Boolean(pendingMutation.current) || bookRecoveryLocked} canReloadWithoutRestart={!pendingMutation.current && !bookRecoveryLocked && session.session.error?.code === 'REVISION_CONFLICT'} onCopy={() => void saveDraftCopy()} onRecover={(restart) => void recoverWorkspace(restart)} onClose={closeModal} />}
   </div>
 }
 
