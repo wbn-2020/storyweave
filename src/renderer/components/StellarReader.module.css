@@ -58,7 +58,7 @@
 .paper[data-paper-tone='theme'] { background: transparent; }
 .readingWidth { width: min(720px,100%); min-width: 0; margin-inline: auto; font-size: var(--manuscript-font-size); line-height: var(--manuscript-line-height); }
 .paperHeader { margin-bottom: var(--space-8); text-align: center; overflow-wrap: anywhere; }
-.panel .paperHeader h3 { font: 600 var(--text-title)/1.5 var(--font-manuscript); white-space: pre-wrap; }
+.panel .paperHeader h3 { font: 600 clamp(var(--text-title),2.4vw,32px)/1.5 var(--font-manuscript); white-space: pre-wrap; }
 .volume,.paperMeta,.version { color: var(--color-paper-muted); font: var(--text-xs)/1.8 var(--font-ui); margin-top: var(--space-2); }
 .version { text-align: center; }
 .panel .paper summary { color: var(--paper-control-ink); }
@@ -117,9 +117,11 @@
   .bookIdentity { flex-basis: 100%; }
   .brand { font-size: var(--text-lg); padding-right: var(--space-3); }
   .scopes { margin-right: auto; }
-  .layout:has(.catalog[data-open='true']) { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) minmax(0,2fr); }
+  .layout:has(.catalog[data-open='true']) { grid-template-columns: minmax(0,1fr); }
   .paper { padding: var(--space-5) var(--space-4); }
-  .catalog { border-right: 0; border-bottom: 1px solid var(--color-line); }
+  /* 窄屏目录使用完整阅读区域，不透底的表面色避免正文文字透出；收起后恢复正文。 */
+  .catalog { position: absolute; inset: 0; z-index: var(--z-dropdown); border-right: 0; border-bottom: 1px solid var(--color-line); background: var(--bg-surface); }
+  .settings { position: fixed; top: calc(var(--topbar-height) + var(--space-12)); right: var(--space-3); max-height: calc(100dvh - var(--topbar-height) - var(--space-12) - var(--space-4)); }
   .catalogHeading,.catalogList { margin-block: var(--space-2); }
   .catalogHeading { margin-top: 0; }
   .directoryPaging { margin-top: var(--space-2); padding-top: var(--space-2); }
@@ -128,7 +130,6 @@
 }
 @container (max-width:479px) {
   .workingOnly { flex-basis: 100%; order: 1; }
-  .settings { position: fixed; top: calc(var(--topbar-height) + var(--space-12)); right: var(--space-3); max-height: calc(100dvh - var(--topbar-height) - var(--space-12) - var(--space-4)); }
   .chapterNavigation { grid-template-columns: repeat(4,minmax(0,1fr)) var(--control-height); gap: var(--space-1); }
   .panel .chapterNavigation > button { gap: var(--space-1); padding: var(--space-1); font-size: var(--text-xs); }
   .chapterNavigation > button:is(:first-child,:nth-child(4)) svg { display: none; }

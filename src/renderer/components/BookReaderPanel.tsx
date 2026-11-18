@@ -301,7 +301,7 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
   }
 
   return <section className={styles.panel} aria-label="作品阅读" onKeyDown={(event) => {
-    if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (event.key !== 'Escape' || event.defaultPrevented || event.repeat || event.nativeEvent.isComposing || event.keyCode === 229) return
     const target = event.target as HTMLElement
     // 原生选择器先处理自身的退出；先收起批注或设置，下一次 Esc 才离开阅读。
     if (target.closest('select')) return
@@ -346,12 +346,13 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
               <button type="button" className={shared.button} disabled={busy || annotations.checking} aria-busy={annotations.checking}
                 onClick={() => void annotations.queryOriginal()}>{annotations.checking ? '核对中…' : '核对原请求'}</button>
               <details><summary>请求详情</summary><p>workbench.get · {annotations.state.requestId}</p></details>
-            </> : (annotations.state.kind === 'ready' || annotations.state.kind === 'failed') &&
-              <button type="button" className={shared.button} disabled={busy} onClick={() => void annotations.load()}>{annotations.state.kind === 'ready' ? '刷新批注' : '重试读取批注'}</button>}
+            </> : (annotations.state.kind === 'ready' || annotations.state.kind === 'failed' || annotations.state.kind === 'loading') &&
+              <button type="button" className={shared.button} disabled={busy || annotations.state.kind === 'loading'} aria-busy={annotations.state.kind === 'loading'}
+                onClick={() => void annotations.load()}>{annotations.state.kind === 'loading' ? '读取批注…' : annotations.state.kind === 'ready' ? '刷新批注' : '重试读取批注'}</button>}
           </div>}
           <p className={styles.help}>只读阅读 · 更新内容请刷新版本</p>
           {catalog && <p className={styles.scopeNote}>共 {catalog.chapters.length} 章，{unfinalizedCount} 章未定稿。{scope === 'finalized' ? '当前仅阅读作者定稿。' : '当前阅读工作稿。'}</p>}
-          <button type="button" className={shared.button} disabled={blocked} onClick={refreshCatalog}>{loading === 'catalog' ? '读取目录…' : '刷新版本'}</button>
+          <button type="button" className={shared.button} disabled={blocked} aria-busy={loading === 'catalog'} onClick={refreshCatalog}>{loading === 'catalog' ? '读取目录…' : '刷新版本'}</button>
           <p className={styles.help}>显示偏好与写作共用，更改即时应用并自动保存，仅影响显示。</p>
           </div>
         </details>
@@ -366,7 +367,7 @@ function ReaderContent({ api, book, initialChapterId, busy, error, displayPrefer
       </section>}
       {pending && <section className={styles.pending} aria-label="读取等待确认">
         <p role="alert">{pendingMessage}</p>
-        <button ref={statusButton} type="button" className={shared.button} disabled={busy || checkingStatus} onClick={() => void queryRequest()}>{checkingStatus ? '查询中…' : '查询原请求'}</button>
+        <button ref={statusButton} type="button" className={shared.button} disabled={busy || checkingStatus} aria-busy={checkingStatus} onClick={() => void queryRequest()}>{checkingStatus ? '查询中…' : '查询原请求'}</button>
         <details><summary>请求详情</summary><p>{pending.command} · {pending.requestId}</p></details>
       </section>}
       {notice && <p className={styles.notice} role="status">{notice}</p>}

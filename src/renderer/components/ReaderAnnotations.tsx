@@ -80,7 +80,7 @@ export function AnnotationMarker({ issues, label, group, bookRevision, schemaVer
     }
     const outside = (event: PointerEvent) => { if (event.target instanceof Node && !details.contains(event.target)) details.open = false }
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || !details.open
+      if (event.key !== 'Escape' || event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229 || !details.open
         || document.querySelector('dialog[open], [data-stellar-tooltip]:popover-open')) return
       event.preventDefault(); event.stopPropagation()
       const nested = panel.querySelector<HTMLDetailsElement>('details[open]')
