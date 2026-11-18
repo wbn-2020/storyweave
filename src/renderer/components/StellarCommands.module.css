@@ -26,8 +26,11 @@
 .footer button { min-height: var(--control-compact); max-width: 100%; padding: var(--space-1) var(--space-2); background: transparent; border: 0; border-radius: var(--radius-md); color: var(--color-accent-text); overflow-wrap: anywhere; }
 .footer button:hover { background: var(--color-accent-soft); }
 .pages { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.keyboardHints { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); min-width: 0; }.keyboardHints > span { display: inline-flex; align-items: center; gap: var(--space-1); }.keyboardHints kbd { min-height: var(--space-6); padding-block: 0; }
 .palette :is(button,input):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* 宽屏短说明与名称同排，保留禁用原因并避免常用分组被额外行高挤出首屏。 */
+@media (min-width:600px) { .results button > span:has(small) { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }.results button small { margin-top: 0; } }
 @media (max-width:599px) { .palette { --palette-offset: var(--space-4); width: calc(100vw - var(--space-6)); }.heading { gap: var(--space-2); padding: var(--space-3); }.heading kbd { display: none; }.palette .heading > input.search[role='combobox'] { font-size: var(--text-md); }.results { padding-inline: var(--space-2); }.results button { padding-left: var(--space-6); gap: var(--space-3); }.footer,.empty { padding-inline: var(--space-4); } }
 @media (max-width:399px) { .results button { grid-template-columns: var(--space-5) minmax(0,1fr); padding-left: var(--space-4); }.results kbd { grid-column: 2; justify-self: start; } }
 @media (max-height:479px) { .palette { --palette-offset: var(--space-3); }.heading { padding-block: var(--space-2); } }

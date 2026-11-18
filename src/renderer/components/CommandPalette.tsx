@@ -43,7 +43,7 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
   const [showAll, setShowAll] = useState(false)
   const [page, setPage] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const heading = useId(), listId = useId()
+  const heading = useId(), listId = useId(), keyboardHint = useId()
   const matches = useMemo(() => {
     const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean)
     return commands.map((command) => ({ ...command, group: commandGroup(command) }))
@@ -103,7 +103,7 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
     }}>
     <h2 id={heading} className={styles.visuallyHidden}>搜索与命令</h2>
     <header className={styles.heading}><StudioIcon name="search" size={24} />
-      <input ref={input} className={styles.search} role="combobox" aria-label="搜索命令、章节或主题" aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
+      <input ref={input} className={styles.search} role="combobox" aria-label="搜索命令、章节或主题" aria-describedby={keyboardHint} aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
       aria-activedescendant={activeIndex < 0 ? undefined : `${listId}-${activeIndex}`} value={query} maxLength={200} placeholder="章节、人物、伏笔、主题…" onChange={(event) => { setQuery(event.target.value); setPage(0); setSelectedId(null) }}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
@@ -116,7 +116,8 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
       }} />
       <kbd>Ctrl+K</kbd><button type="button" onClick={onClose} aria-label="关闭命令面板" title="关闭 · Esc"><StudioIcon name="close" size={20} /></button>
     </header>
-    <ul id={listId} className={styles.results} role="listbox" aria-label="匹配命令">{results.map((command, index) => <Fragment key={command.id}>
+    {/* 选项由搜索框统一处理上下键，列表不另占 Tab 焦点。 */}
+    <ul id={listId} className={styles.results} role="listbox" tabIndex={-1} aria-label="匹配命令">{results.map((command, index) => <Fragment key={command.id}>
       {(index === 0 || results[index - 1].group !== command.group) && <li className={styles.groupHeading} role="presentation"><StudioIcon name={groupIcons[command.group]} size={18} />{command.group}</li>}
       <li id={`${listId}-${index}`} role="option" aria-label={`${command.group}，${command.label}${command.disabledReason ? `，${command.disabledReason}` : ''}`} aria-selected={command.id === active?.id} aria-disabled={Boolean(command.disabledReason)}>
       <button type="button" tabIndex={-1} disabled={Boolean(command.disabledReason)} onPointerMove={() => { if (!command.disabledReason) setSelectedId(command.id) }} onClick={() => execute(command)}>
@@ -124,7 +125,9 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
       </button>
     </li></Fragment>)}</ul>
     {!results.length && <p className={styles.empty}>没有匹配命令，试试“章节”“伏笔”或“主题”。</p>}
-    <footer className={styles.footer}><span aria-live="polite" aria-atomic="true">{expanded ? `${matches.length} 项匹配${pageCount > 1 ? ` · 第 ${currentPage + 1} / ${pageCount} 页` : ''}` : `${results.length} 项常用命令`}</span>
+    <footer className={styles.footer}>
+      <span id={keyboardHint} className={styles.keyboardHints}><span><kbd>↑ ↓</kbd> 选择</span>{' '}<span><kbd>Enter</kbd> 执行</span>{' '}<span><kbd>Esc</kbd> 关闭</span></span>
+      <span aria-live="polite" aria-atomic="true">{expanded ? `${matches.length} 项匹配${pageCount > 1 ? ` · 第 ${currentPage + 1} / ${pageCount} 页` : ''}` : `${results.length} 项常用命令`}</span>
       {expanded && pageCount > 1 && <div className={styles.pages} role="group" aria-label="命令结果分页">
         <button type="button" aria-controls={listId} disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); setSelectedId(null); input.current?.focus() }}>上一页</button>
         <button type="button" aria-controls={listId} disabled={currentPage === pageCount - 1} onClick={() => { setPage(currentPage + 1); setSelectedId(null); input.current?.focus() }}>下一页</button>
