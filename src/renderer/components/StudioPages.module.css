@@ -61,7 +61,7 @@
 .bookProgress { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .bookProgress > progress { accent-color: var(--genre-accent); }
 .bookProgress > progress::-webkit-progress-value { background: var(--genre-accent); }
-.bookProgress > span { flex-shrink: 0; color: var(--genre-accent); font: var(--text-xs)/1.4 var(--font-num); }
+.bookProgress > span { flex-shrink: 0; color: var(--genre-decoration-text); font: var(--text-xs)/1.4 var(--font-num); }
 .bookFoot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-4); border-top: 1px solid var(--color-line); }
 .bookFoot > span { color: var(--color-muted); font-size: var(--text-xs); }
 .bookFoot button { font-size: var(--text-xs); }

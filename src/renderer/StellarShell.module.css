@@ -5,7 +5,7 @@
 .nav { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-2); flex: 1; width: 100%; min-height: 0; overflow: auto; }
 .navItem { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: var(--space-1); flex: 0 0 auto; min-height: 56px; width: 100%; padding: var(--space-2) 0; background: transparent; color: var(--color-muted); border: 1px solid transparent; border-radius: var(--radius-md); font-size: var(--text-xs); }
 .navItem:hover:not(:disabled) { background: var(--bg-raised); color: var(--color-ink); }
-.navItemActive { color: var(--genre-decoration); background: var(--genre-decoration-soft); border-color: var(--color-line-strong); }
+.navItemActive { color: var(--genre-decoration-text); background: var(--genre-decoration-soft); border-color: var(--color-line-strong); }
 .navItemActive::before { position: absolute; content: ""; width: 2px; inset: var(--space-3) auto var(--space-3) calc(-1 * var(--space-2)); background: var(--genre-decoration); }
 .navBottom { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; padding-top: var(--space-3); border-top: 1px solid var(--color-line); }
 .main { grid-row: 2; grid-column: 2; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: transparent; }
@@ -51,7 +51,8 @@
 .actionRow { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
 .localBadge { color: var(--color-muted); font-size: var(--text-xs); white-space: nowrap; }
 .statusDot { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: currentColor; display: inline-block; flex-shrink: 0; }
-.saveState { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--color-success); white-space: nowrap; font-size: var(--text-xs); }
+.saveState { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--color-success-text); white-space: nowrap; font-size: var(--text-xs); }
+.saveState > svg { color: var(--color-success); }
 .savePending { color: var(--color-warning); }
 .saveError { color: var(--color-danger); }
 .statusbar { grid-row: 3; grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-5); height: var(--statusbar-height); padding: 0 var(--space-5); background: var(--bg-sidebar); border-top: 1px solid var(--color-line); color: var(--color-muted); font-size: var(--text-xs); z-index: var(--z-sticky); }
@@ -76,13 +77,13 @@
 .chapterTools summary::-webkit-details-marker { display: none; }
 .chapterToolItems { position: fixed; right: var(--space-5); top: var(--topbar-height); z-index: var(--z-dropdown); width: min(280px,calc(100vw - var(--space-8))); max-height: calc(100dvh - var(--topbar-height) - var(--statusbar-height) - var(--space-4)); overflow: auto; display: grid; gap: var(--space-1); padding: var(--space-2); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--bg-surface); box-shadow: var(--shadow-md); }
 .chapterToolItems button { padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-ink-secondary); text-align: left; font-size: var(--text-xs); }
-.chapterToolItems button:hover:not(:disabled) { background: var(--color-accent-soft); color: var(--color-accent); }
+.chapterToolItems button:hover:not(:disabled) { background: var(--color-accent-soft); color: var(--color-accent-text); }
 .saveButton { composes: button from './components/stellar/Workspace.module.css'; }
 .standaloneSave { display: inline-flex; flex-shrink: 0; }
 .saveActions { display: inline-flex; align-items: stretch; min-width: 0; flex-shrink: 0; border-radius: var(--radius-md); }
 .saveActions > .saveButton { display: inline-flex; gap: var(--space-2); width: auto; height: var(--control-height); padding-inline: var(--space-3); border: 1px solid var(--color-line-strong); border-start-end-radius: 0; border-end-end-radius: 0; background: var(--bg-surface); color: var(--color-ink-secondary); }
 .saveActions > .chapterTools > summary { justify-content: center; min-width: var(--control-compact); height: var(--control-height); border: 1px solid var(--color-line-strong); border-inline-start-width: 0; border-radius: 0 var(--radius-md) var(--radius-md) 0; background: var(--bg-surface); }
-.saveActions > .saveButton:hover:not(:disabled),.saveActions > .chapterTools > summary:hover { background: var(--bg-raised); color: var(--color-accent); }
+.saveActions > .saveButton:hover:not(:disabled),.saveActions > .chapterTools > summary:hover { background: var(--bg-raised); color: var(--color-accent-text); }
 .saveActions > .chapterTools[open] > summary { background: var(--color-accent-soft); color: var(--color-accent); }
 .saveActions > .chapterTools > summary:active { filter: brightness(.82); }
 @media (prefers-reduced-motion: reduce) { .saveActions > .saveButton { transition: none; } }
@@ -116,7 +117,7 @@
 .copilotToolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); border-bottom: 1px solid var(--color-line); padding: var(--space-2) var(--space-3); flex-shrink: 0; }
 .copilotTabs { display: flex; flex: 1; gap: var(--space-1); }
 .copilotTabs button { display: flex; justify-content: center; align-items: center; gap: var(--space-2); flex: 1; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-muted); padding: var(--space-2); }
-.copilotTabs button[aria-pressed='true'] { color: var(--color-accent); background: var(--color-accent-soft); }
+.copilotTabs button[aria-pressed='true'] { color: var(--color-accent-text); background: var(--color-accent-soft); }
 .copilotActions { display: flex; gap: var(--space-1); }
 .copilotExpandBtn { border: 0; padding: var(--space-1) var(--space-2); background: transparent; color: var(--color-muted); font-size: var(--text-xs); }
 .asideHeadingRow { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding-bottom: var(--space-4); }

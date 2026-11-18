@@ -19,7 +19,7 @@
   --color-line-strong: #D5CEBF;
   --color-ink: #1C1917;
   --color-ink-secondary: #575249;
-  --color-muted: #787165;
+  --color-muted: #696256;
   --color-faint: #A39B8E;
   --color-accent: #BE5718;
   --color-accent-hover: #A84912;
@@ -27,6 +27,7 @@
   --color-accent-ink: #FFFFFF;
   --color-accent-2: #3E6B58;
   --color-success: #2E7D5B;
+  --color-success-text: #276C4E;
   --color-success-soft: #EBF6F0;
   --color-warning: #C2822A;
   --color-warning-soft: #FCF5E8;
@@ -65,7 +66,7 @@
   --color-line-strong: rgba(38, 35, 29, 0.24);
   --color-ink: #201F1B;
   --color-ink-secondary: #47443C;
-  --color-muted: #7C7568;
+  --color-muted: #676054;
   --color-faint: #A49B8A;
   --color-accent: #B2462B;
   --color-accent-hover: #8F3621;
@@ -80,7 +81,7 @@
   --color-danger-soft: rgba(168, 56, 43, 0.11);
   --color-paper: #FDFAF4;
   --color-paper-ink: #201F1B;
-  --color-paper-muted: #7C7568;
+  --color-paper-muted: #676054;
   --home-bg: var(--bg-subtle);
   --home-ink: var(--color-ink);
   --home-muted: var(--color-muted);
@@ -111,7 +112,7 @@
   --color-line-strong: rgba(233, 226, 212, 0.23);
   --color-ink: #E9E2D4;
   --color-ink-secondary: #C7C0B1;
-  --color-muted: #928C7F;
+  --color-muted: #9B9589;
   --color-faint: #6F6B61;
   --color-accent: #D77857;
   --color-accent-hover: #E68C6C;
@@ -157,7 +158,7 @@
   --color-line-strong: rgba(54, 28, 40, 0.23);
   --color-ink: #261B21;
   --color-ink-secondary: #543F4A;
-  --color-muted: #826B77;
+  --color-muted: #715D69;
   --color-faint: #AA94A0;
   --color-accent: #C83E6B;
   --color-accent-hover: #A92E57;
@@ -203,7 +204,7 @@
   --color-line-strong: rgba(36, 28, 64, 0.23);
   --color-ink: #1F1B2C;
   --color-ink-secondary: #494262;
-  --color-muted: #766F91;
+  --color-muted: #655E7B;
   --color-faint: #9E97B8;
   --color-accent: #634EC2;
   --color-accent-hover: #4F3BA8;
@@ -211,6 +212,7 @@
   --color-accent-ink: #FAF8FF;
   --color-accent-2: #B8472A;
   --color-success: #397561;
+  --color-success-text: #316956;
   --color-success-soft: rgba(57, 117, 97, 0.11);
   --color-warning: #A37435;
   --color-warning-soft: rgba(163, 116, 53, 0.12);
@@ -249,7 +251,7 @@
   --color-line-strong: rgba(28, 44, 36, 0.23);
   --color-ink: #1B241F;
   --color-ink-secondary: #3E4F46;
-  --color-muted: #687B70;
+  --color-muted: #596A60;
   --color-faint: #92A49A;
   --color-accent: #3B6352;
   --color-accent-hover: #2C4E40;
@@ -279,6 +281,7 @@
 
 :root {
   --color-accent-text: var(--color-accent-hover);
+  --color-success-text: var(--color-success);
   --color-warning-text: #805815;
   --overlay-backdrop: rgba(18, 15, 12, 0.5);
   --galaxy-person: #315F9C;
@@ -373,6 +376,7 @@
   --genre-system: #57D68A;
   --genre-accent: var(--genre-stellar);
   --genre-decoration: var(--color-accent);
+  --genre-decoration-text: var(--color-accent-text);
   --genre-decoration-soft: var(--color-accent-soft);
   --genre-decoration-haze: var(--stellar-haze);
   --stellar-star: transparent;
@@ -433,6 +437,7 @@
   --stellar-ai-haze: rgba(139, 124, 255, .10);
   /* 题材只改变装饰；保存、警告、错误和主操作继续使用原语义色。 */
   --genre-decoration: var(--genre-accent);
+  --genre-decoration-text: var(--genre-accent);
   --genre-decoration-soft: color-mix(in srgb,var(--genre-accent) 12%,transparent);
   --genre-decoration-haze: color-mix(in srgb,var(--genre-accent) 10%,transparent);
   --progress-track: rgba(255, 255, 255, .08);

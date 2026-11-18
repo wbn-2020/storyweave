@@ -1,10 +1,10 @@
 .panel { min-width: 0; color: var(--color-ink); }
 .panel button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-width: var(--control-compact); min-height: var(--control-height); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius-md); color: var(--color-ink-secondary); background: var(--bg-raised); font-size: var(--text-sm); line-height: 1.5; }
-.panel button:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.panel button:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent-text); }
 .panel button.primary { background: var(--color-accent); color: var(--color-accent-ink); border-color: var(--color-accent); font-weight: 600; }
 .panel button.primary:hover:not(:disabled) { background: var(--color-accent-hover); }
 .panel button.textButton { border-color: transparent; background: transparent; color: var(--color-muted); }
-.panel button.selectButton { background: var(--color-accent-soft); color: var(--color-accent); border-color: var(--color-line-strong); }
+.panel button.selectButton { background: var(--color-accent-soft); color: var(--color-accent-text); border-color: var(--color-line-strong); }
 .panel button[aria-busy='true'] { opacity: 1; cursor: progress; }
 .panel button[aria-busy='true']::before { content: ''; width: var(--control-spinner-size); height: var(--control-spinner-size); flex: 0 0 var(--control-spinner-size); border: 2px solid currentColor; border-right-color: transparent; border-radius: var(--radius-pill); animation: kickstartSpin 800ms linear infinite; }
 .panel button[aria-busy='true'] > svg { display: none; }
@@ -131,14 +131,12 @@
 .steps span { display: grid; place-items: center; width: var(--control-height); height: var(--control-height); border: 1px solid var(--color-line-strong); border-radius: var(--radius-pill); font-family: var(--font-num); }
 .steps [aria-current='step'] { color: var(--color-accent); }
 .steps [aria-current='step'] span { background: linear-gradient(135deg,var(--color-accent-hover),var(--color-accent)); color: var(--color-accent-ink); border-color: var(--color-accent); box-shadow: var(--shadow-glow); }
-.steps [data-complete='true'] { color: var(--color-accent); }
-.steps [data-complete='true'] span { color: var(--color-accent); border-color: var(--color-accent); }
+.steps [data-complete='true'] { color: var(--color-accent-text); }
+.steps [data-complete='true'] span { color: var(--color-accent-text); border-color: var(--color-accent); }
 .steps [data-complete='true'] + button::before { background: linear-gradient(90deg,var(--color-accent),var(--color-line-strong)); }
 .genreStep { display: grid; gap: var(--space-5); padding-block: var(--space-3); }
 .genreStep > [role='group'] { grid-template-columns: repeat(5,minmax(0,1fr)); gap: var(--space-6); }
-.genreStep > [role='group'] > button { --genre-accent: var(--color-accent-2); position: relative; min-width: 0; min-height: 280px; aspect-ratio: 3/4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-5); padding: var(--space-6) var(--space-4); background: var(--bg-subtle); border-radius: var(--radius-lg); text-align: center; overflow: hidden; }
-.genreStep > [role='group'] > button[data-genre='stellar'] { --genre-accent: var(--color-accent); }
-.genreStep > [role='group'] > button[data-genre='system'] { --genre-accent: var(--color-warning); }
+.genreStep > [role='group'] > button { position: relative; min-width: 0; min-height: 280px; aspect-ratio: 3/4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-5); padding: var(--space-6) var(--space-4); background: var(--bg-subtle); border-radius: var(--radius-lg); text-align: center; overflow: hidden; }
 .genreStep > [role='group'] > button > svg { width: calc(var(--space-12) * 2); height: calc(var(--space-12) * 2); color: var(--genre-accent); flex-shrink: 0; }
 .genreStep > [role='group'] > button strong { font-size: var(--text-title); color: var(--color-ink); overflow-wrap: anywhere; }
 .genreStep > [role='group'] > button small { font-size: var(--text-md); color: var(--color-ink-secondary); white-space: pre-line; line-height: 1.8; }
