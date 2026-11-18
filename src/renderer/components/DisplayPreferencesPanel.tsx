@@ -1,4 +1,4 @@
-import { useId, useState, type CSSProperties } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import {
   DISPLAY_FONT_SIZES, DISPLAY_LINE_HEIGHTS, PAPER_TONE_LABELS,
   STUDIO_THEMES, STUDIO_THEME_META,
@@ -19,6 +19,7 @@ export interface DisplayPreferencesPanelProps {
   onReset: () => void
   onRetrySave: () => void
   onClose: () => void
+  returnFocusTo?: HTMLElement | null
   workspacePath?: string | null
   onChooseWorkspace?: () => void
   onBackup?: () => void
@@ -29,14 +30,27 @@ export interface DisplayPreferencesPanelProps {
   saveStatus?: string
 }
 
-export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, onReset, onRetrySave, onClose, workspacePath, onChooseWorkspace, onBackup, onRecovery, onModels, focused = false, onFocusChange, saveStatus }: DisplayPreferencesPanelProps) {
+export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, onReset, onRetrySave, onClose, returnFocusTo, workspacePath, onChooseWorkspace, onBackup, onRecovery, onModels, focused = false, onFocusChange, saveStatus }: DisplayPreferencesPanelProps) {
   const helpId = useId()
   const themeId = useId()
   const previewId = useId()
+  const closing = useRef(false)
   const [section, setSection] = useState<'appearance' | 'storage'>('appearance')
   const primaryThemes: readonly StudioTheme[] = ['stellar', 'night', 'paper']
   const primaryThemeLabels: Partial<Record<StudioTheme, string>> = { stellar: '星穹', night: '极简', paper: '纸墨' }
   const genreColorLabels = { fantasy: '玄幻赤金', stellar: '星空星青', urban: '都市高武', galaxy: '银河紫', system: '系统绿' }
+
+  useEffect(() => {
+    const trigger = returnFocusTo ?? document.activeElement
+    return () => {
+      // 画布设置卸载后只修正 BODY 失焦，保留后来打开的面板或对话框焦点。
+      if (!closing.current || document.activeElement !== document.body) return
+      const target = trigger !== document.body && trigger instanceof HTMLElement && trigger.isConnected && !trigger.matches(':disabled')
+        ? trigger : document.querySelector<HTMLElement>('nav[aria-label="工作室主导航"] button[aria-label="设置"]')
+      target?.focus()
+    }
+  }, [returnFocusTo])
+  function closeSettings() { closing.current = true; onClose() }
 
   function themeChoice(theme: StudioTheme) {
     const meta = STUDIO_THEME_META[theme]
@@ -53,7 +67,7 @@ export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, 
   }
 
   // 设置始终由父层即时应用；面板没有独立草稿，保存失败也不阻止关闭。
-  return <Dialog className={styles.page} title="设置" wide busy={busy} onClose={onClose}>
+  return <Dialog className={styles.page} title="设置" wide busy={busy} onClose={closeSettings}>
     <div className={styles.panel}>
       <nav className={styles.navigation} aria-label="设置分组"><button type="button" aria-pressed={section === 'appearance'} onClick={() => setSection('appearance')}><StudioIcon name="palette" size={20} />外观与排版</button><button type="button" aria-pressed={section === 'storage'} onClick={() => setSection('storage')}><StudioIcon name="archive" size={20} />本地存储</button>{onModels && <button type="button" onClick={onModels} disabled={busy}><StudioIcon name="workflow" size={20} />模型连接</button>}</nav>
       <div className={styles.content} hidden={section !== 'appearance'}>
@@ -87,7 +101,7 @@ export function DisplayPreferencesPanel({ preferences, warning, busy, onChange, 
       <p id={helpId} className={styles.help}>{warning ? '当前显示仍可使用，可重新保存偏好。' : '更改即时应用，自动保存到本机。'}</p>
       <div className={styles.actions}>
         <button type="button" className={shared.button} disabled={busy} onClick={onReset}>恢复默认</button>
-        <button type="button" className={shared.primaryButton} disabled={busy} onClick={onClose}>完成设置</button>
+        <button type="button" className={shared.primaryButton} disabled={busy} onClick={closeSettings}>完成设置</button>
       </div>
       </footer>
       </div>

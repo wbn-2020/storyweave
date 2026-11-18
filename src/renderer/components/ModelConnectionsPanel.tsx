@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { DomainError, failure, type BookSnapshot, type Result, type StudioApi } from '../../contracts/api'
 import { parseAiConnectionConfig, type AiConnection, type AiConnectionConfig, type AiConnectionPage } from '../../contracts/ai'
 import type { StudioAiConnection } from '../../contracts/generation'
@@ -32,6 +32,7 @@ function fieldsOf(connection: AiConnection): AiConnectionConfig {
   return { id, name, baseUrl, model, contextWindow, maxOutputTokens }
 }
 type ProbeState = Pick<AiConnectionProbeResult, 'state' | 'latencyMs' | 'message'> | { state: 'loading'; latencyMs: null; message: string }
+type ConnectionAction = 'read' | 'save' | 'readReceipt' | 'writeReceipt'
 
 export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyChange, onBookChange, onApply, onConfigureBook, onSummary, onRecover, registerLeaveGuard }: Props) {
   const [scope, setScope] = useState<'studio' | 'book'>(book ? 'book' : 'studio')
@@ -46,12 +47,16 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   const [defaultConfirmed, setDefaultConfirmed] = useState(false)
   const [discard, setDiscard] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [action, setAction] = useState<ConnectionAction | null>(null)
   const [preserved, setPreserved] = useState<string | null>(null)
   const [probes, setProbes] = useState<Record<string, ProbeState>>({})
   const probeRequests = useRef(new Map<string, string>())
   const probeEpoch = useRef(0)
   const keyPage = useRef<AiKeySessionInput | null>(null)
   const needsRead = useRef(true)
+  const actionLock = useRef(false)
+  const editorTrigger = useRef<HTMLButtonElement | null>(null)
+  const returnEditorFocus = useRef(false)
   const guard = useRef({ connection: false, presets: false })
   const callback = useRef(onDirtyChange)
   callback.current = onDirtyChange
@@ -75,6 +80,14 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
     onDiscard: () => { setDraft(null); setSecret(''); setDiscard(false); tool.setDirty(false) },
   })
 
+  // 保留原请求锁与回执流程，操作状态只决定当前按钮的反馈。
+  async function runAction<T>(next: ConnectionAction, operation: () => Promise<T>): Promise<T | undefined> {
+    if (actionLock.current) return
+    actionLock.current = true; setAction(next)
+    try { return await operation() }
+    finally { actionLock.current = false; setAction(null) }
+  }
+
   useEffect(() => {
     const page: AiKeySessionInput = scope === 'book' && book ? { sessionId: crypto.randomUUID(), scope, bookId: book.book.id }
       : { sessionId: crypto.randomUUID(), scope: 'studio' }
@@ -86,8 +99,14 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   }, [scope, api, book?.book.id])
   useEffect(() => { needsRead.current = true; setLoaded(false); setStudioKeys([]); setBookPage(null) }, [scope, api, book?.book.id])
   useEffect(() => {
-    if (!disabled && needsRead.current) { needsRead.current = false; void reload() }
+    if (!disabled && needsRead.current) { needsRead.current = false; void runAction('read', reload) }
   }, [scope, api, book?.book.id, disabled])
+  useLayoutEffect(() => {
+    if (draft || !returnEditorFocus.current) return
+    returnEditorFocus.current = false
+    const trigger = editorTrigger.current
+    if (trigger?.isConnected && !trigger.disabled) trigger.focus()
+  }, [draft?.id])
   useEffect(() => () => callback.current(false), [])
   useEffect(() => {
     probeEpoch.current += 1
@@ -152,9 +171,10 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
     if (!tool.canLeave() || guard.current.presets) { tool.setError('请先处理当前连接或预设修改。'); return }
     setDraft(null); setSecret(''); setLoaded(false); tool.setNotice(null); tool.setError(null); setScope(value)
   }
-  function edit(connection?: AiConnection) {
+  function edit(connection?: AiConnection, trigger?: HTMLButtonElement) {
     if (!loaded || tool.locked || tool.hasChanges() || guard.current.presets || readOnly) return
     if (scope === 'book') { onConfigureBook(); return }
+    editorTrigger.current = trigger ?? null
     setDraft(connection ? fieldsOf(connection) : { id: crypto.randomUUID(), name: '', baseUrl: '', model: '', contextWindow: 32_000, maxOutputTokens: 2048 })
     setDefault(scope === 'studio' && (studioConnections.find((item) => item.id === connection?.id)?.isDefault ?? !connections.length))
     setSecret(''); setDefaultConfirmed(false); setDiscard(false); tool.setDirty(!connection)
@@ -162,6 +182,13 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
   function change(value: Partial<AiConnectionConfig>) {
     if (!draft || tool.locked) return
     setDraft({ ...draft, ...value }); tool.setDirty(true); setPreserved(null); setDiscard(false)
+  }
+  function closeDraft() {
+    if (tool.locked) return
+    if (tool.hasChanges() && !discard) { setDiscard(true); return }
+    // 表单卸载后返回实际编辑入口；首次放弃确认继续留在当前输入。
+    returnEditorFocus.current = true
+    setDraft(null); setSecret(''); setDiscard(false); tool.setDirty(false)
   }
   async function save(event?: FormEvent): Promise<boolean> {
     event?.preventDefault()
@@ -203,28 +230,28 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
           <button type="button" aria-pressed={scope === 'studio'} disabled={tool.locked} onClick={() => changeScope('studio')}>工作室 · 开书模型</button>
           {book && <button type="button" aria-pressed={scope === 'book'} disabled={tool.locked} onClick={() => changeScope('book')}>《{book.book.title}》</button>}
         </div>
-        <div className={styles.actions}><button className={styles.button} type="button" disabled={tool.locked || tool.dirty || guard.current.presets} onClick={() => void reload()}>刷新</button>
-          <button className={styles.primaryButton} type="button" disabled={!loaded || tool.locked || tool.dirty || guard.current.presets || readOnly} onClick={() => edit()}><StudioIcon name="plus" />新增连接</button></div>
+        <div className={styles.actions}><button className={styles.button} type="button" aria-label="刷新" aria-busy={tool.busy && action === 'read'} disabled={tool.locked || tool.dirty || guard.current.presets} onClick={() => void runAction('read', reload)}>{tool.busy && action === 'read' ? '正在刷新连接…' : '刷新'}</button>
+          <button className={styles.primaryButton} type="button" disabled={!loaded || tool.locked || tool.dirty || guard.current.presets || readOnly} onClick={(event) => edit(undefined, event.currentTarget)}><StudioIcon name="plus" />新增连接</button></div>
       </div>}>
     <div className={styles.panel}>
       {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
       {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
-      {tool.busy && <p className={styles.muted} role="status">正在读取或保存连接…</p>}
+      {tool.busy && <p className={styles.muted} role="status">{saving ? '正在保存连接…' : action === 'writeReceipt' ? '正在核对保存回执…' : action === 'readReceipt' ? '正在核对读取回执…' : '正在读取连接…'}</p>}
       {tool.readFailure && <p className={styles.warning}>连接读取尚未确认。
-        <button type="button" className={styles.button} disabled={tool.locked || !tool.readFailure.requestId} onClick={() => void tool.checkReadReceipt()}>核对原读取请求</button>
+        <button type="button" className={styles.button} aria-busy={tool.busy && action === 'readReceipt'} disabled={tool.locked || !tool.readFailure.requestId} onClick={() => void runAction('readReceipt', tool.checkReadReceipt)}>{tool.busy && action === 'readReceipt' ? '正在核对读取…' : '核对原读取请求'}</button>
         <button type="button" className={styles.button} disabled={tool.busy} onClick={onRecover}>进入恢复</button>
       </p>}
       {readOnly && <p className={styles.warning}>{book?.book.archivedAt ? '归档作品的连接仅供查看。' : '请先通过作品工具备份并升级本书，再配置连接。'}</p>}
       <div className={styles.connections}>{connections.map((connection) => {
         const probe = probes[probeKey(connection)]
         return <article className={styles.connection} aria-label={connection.name} data-default={scope === 'studio' && studioConnections.find((item) => item.id === connection.id)?.isDefault} key={connection.id}>
-        <header><span className={styles.connectionEmblem}><StudioIcon name="workflow" size={48} /></span><div><h3>{connection.name}</h3><p>{connection.model}</p></div>{scope === 'studio' && studioConnections.find((item) => item.id === connection.id)?.isDefault && <span className={styles.tag}><StudioIcon name="star" size={16} />默认</span>}</header>
+        <header><span className={styles.connectionEmblem}><StudioIcon name="workflow" size={48} /></span><div><h3 title={connection.name}>{connection.name}</h3><p title={connection.model}>{connection.model}</p></div>{scope === 'studio' && studioConnections.find((item) => item.id === connection.id)?.isDefault && <span className={styles.tag}><StudioIcon name="star" size={16} />默认</span>}</header>
         <dl className={styles.connectionMetrics}><div><dt>上下文窗口</dt><dd title={connection.contextWindow.toLocaleString()}>{connection.contextWindow.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 })}</dd></div><div className={styles.latency} data-state={probe?.state ?? 'idle'}><dt>连接延迟</dt><dd title="模型列表请求的响应头耗时，不代表生成速度"><i />延迟 {probe?.latencyMs != null ? `${probe.latencyMs} ms` : '—'}</dd></div></dl>
-        <footer><details className={styles.connectionDetails}><summary>会话与连接信息</summary><p className={styles.endpoint}>{connection.baseUrl}</p><p>输出预算 {connection.maxOutputTokens.toLocaleString()} tokens</p><p>{keys.includes(connection.id) ? '本次会话已设置密钥' : '本次会话未设置密钥'}</p></details><div className={styles.actions}><button type="button" className={styles.button} aria-busy={probe?.state === 'loading'} disabled={tool.locked || tool.dirty || guard.current.presets || probe?.state === 'loading'} title="读取模型列表并核对模型名称，不发送正文或生成请求" onClick={() => void testConnection(connection)}><StudioIcon name="refresh" />{probe?.state === 'loading' ? '测试中…' : '测试连接'}</button>{probe?.state === 'loading' && <button type="button" className={styles.button} aria-label={`取消测试${connection.name}`} title="取消测试" onClick={() => void cancelTest(connection)}><StudioIcon name="close" /></button>}<button type="button" className={styles.button} disabled={tool.locked || tool.dirty || guard.current.presets || readOnly} aria-label={`编辑连接${connection.name}`} title={`编辑连接${connection.name}`} onClick={() => edit(connection)}><StudioIcon name="pen" size={16} /></button></div></footer>
+        <footer><details className={styles.connectionDetails}><summary>会话与连接信息</summary><p>连接名称：{connection.name}</p><p>模型：{connection.model}</p><p className={styles.endpoint}>{connection.baseUrl}</p><p>输出预算 {connection.maxOutputTokens.toLocaleString()} tokens</p><p>{keys.includes(connection.id) ? '本次会话已设置密钥' : '本次会话未设置密钥'}</p></details><div className={styles.actions}><button type="button" className={styles.button} aria-busy={probe?.state === 'loading'} disabled={tool.locked || tool.dirty || guard.current.presets || probe?.state === 'loading'} title="读取模型列表并核对模型名称，不发送正文或生成请求" onClick={() => void testConnection(connection)}><StudioIcon name="refresh" />{probe?.state === 'loading' ? '测试中…' : '测试连接'}</button>{probe?.state === 'loading' && <button type="button" className={styles.button} aria-label={`取消测试${connection.name}`} title="取消测试" onClick={() => void cancelTest(connection)}><StudioIcon name="close" /></button>}<button type="button" className={styles.button} disabled={tool.locked || tool.dirty || guard.current.presets || readOnly} aria-label={`编辑连接${connection.name}`} title={`编辑连接${connection.name}`} onClick={(event) => edit(connection, event.currentTarget)}><StudioIcon name="pen" size={16} /></button></div></footer>
         <p className={styles.probeStatus} role={probe?.state === 'failed' ? 'alert' : 'status'} data-state={probe?.state ?? 'idle'}>{probe?.message ?? '尚未测试连接'}</p>
       </article>})}</div>
       {loaded && !connections.length && <div className={styles.empty}><StudioIcon name="workflow" size={28} /><h3>还没有模型连接</h3><p>添加接口地址和模型，开始配置创作任务。</p></div>}
-      {draft && <form className={styles.editor} onSubmit={(event) => void save(event)}>
+      {draft && <form className={styles.editor} onSubmit={(event) => { event.preventDefault(); void runAction('save', save) }}>
         <h3>{original ? '编辑连接' : '新建连接'}</h3>
         <fieldset disabled={tool.locked}><div className={styles.fieldGrid}>
           <label>连接名称<input autoFocus required value={draft.name} onChange={(event) => change({ name: event.target.value })} /></label>
@@ -239,12 +266,9 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
         </fieldset>
         <div className={styles.actions}><button type="submit" className={styles.primaryButton} aria-busy={saving} disabled={tool.locked || !tool.dirty || changedDefault && !defaultConfirmed}
           title={changedDefault && !defaultConfirmed ? '请先确认替换默认连接' : !tool.dirty ? '连接配置尚未修改' : undefined}>{saving ? '正在保存…' : '保存连接'}</button>
-          <button type="button" className={styles.button} disabled={tool.locked} onClick={() => {
-            if (tool.hasChanges() && !discard) { setDiscard(true); return }
-            setDraft(null); setSecret(''); setDiscard(false); tool.setDirty(false)
-          }}>{discard ? '确认放弃修改' : tool.dirty ? '放弃修改' : '关闭编辑'}</button></div>
+          <button type="button" className={styles.button} disabled={tool.locked} onClick={closeDraft}>{discard ? '确认放弃修改' : tool.dirty ? '放弃修改' : '关闭编辑'}</button></div>
       </form>}
-      {tool.pending && <section className={styles.warning}><p>写入尚未确认，请核对原回执。恢复记录不包含密钥。</p><button type="button" className={styles.button} disabled={tool.busy || !tool.pending.error.requestId} onClick={() => void tool.checkReceipt()}>核对原请求</button>
+      {tool.pending && <section className={styles.warning}><p>写入尚未确认，请核对原回执。恢复记录不包含密钥。</p><button type="button" className={styles.button} aria-busy={tool.busy && action === 'writeReceipt'} disabled={tool.busy || !tool.pending.error.requestId} onClick={() => void runAction('writeReceipt', tool.checkReceipt)}>{tool.busy && action === 'writeReceipt' ? '正在核对保存…' : '核对原请求'}</button>
         <textarea aria-label="连接恢复记录" readOnly rows={7} value={recoveryText} /><label className={styles.check}><input type="checkbox" checked={preserved === recoveryText} onChange={(event) => setPreserved(event.target.checked ? recoveryText : null)} />已留存连接配置和原请求编号</label>
         <button type="button" className={styles.button} disabled={tool.busy || preserved !== recoveryText} onClick={() => { setSecret(''); onRecover() }}>进入恢复</button></section>}
       {scope === 'book' && book && loaded && <AiPresetsPanel api={api} bookId={book.book.id} bookRevision={book.book.revision} connections={connections} disabled={tool.locked || tool.dirty || Boolean(draft)} layout="routing" onSummary={onSummary}
@@ -258,7 +282,7 @@ export function ModelConnectionsPanel({ api, book, disabled, onClose, onDirtyCha
           <button className={styles.button} type="button" disabled={tool.locked} onClick={leave.discardAndLeave}>放弃修改并离开</button>
           {leave.source !== 'window' && <button className={styles.primaryButton} type="button" aria-busy={saving} disabled={tool.locked || readOnly || changedDefault && !defaultConfirmed}
             title={changedDefault && !defaultConfirmed ? '请先返回确认默认连接替换' : undefined}
-            onClick={() => void save().then((saved) => { if (saved) leave.savedAndLeave() })}>保存连接并离开</button>}
+            onClick={() => void runAction('save', save).then((saved) => { if (saved) leave.savedAndLeave() })}>保存连接并离开</button>}
         </div>
       </Dialog></DialogDisplayContext.Provider>}
     </div>

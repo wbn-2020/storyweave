@@ -7,12 +7,13 @@
 .toolbar { composes: toolbar from './stellar/Workspace.module.css'; flex: 1 1 560px; }
 .tabs { composes: tabs from './stellar/Workspace.module.css'; }
 /* 组合类的共享规则可能后载入，页面范围保证原定的紧凑间距始终生效。 */
-.page .toolbar { padding-block: var(--space-2); border: 0; }
+.page .toolbar { min-width: 0; padding-block: var(--space-2); border: 0; }
 .page .tabs { margin: 0; border: 0; }
 .page .tabs button { padding: var(--space-2) var(--space-3); }
 .actions { composes: actions from './stellar/Workspace.module.css'; }
 .button { composes: button from './stellar/Workspace.module.css'; }
 .primaryButton { composes: primaryButton from './stellar/Workspace.module.css'; }
+.page :is(.button,.primaryButton)[aria-busy='true'] { background: var(--bg-raised); color: var(--color-ink-secondary); border-color: var(--color-line-strong); }
 .muted { composes: muted from './stellar/Workspace.module.css'; }
 .error { composes: error from './stellar/Workspace.module.css'; }
 .warning { composes: warning from './stellar/Workspace.module.css'; }
@@ -28,6 +29,8 @@
 .connection[data-default='true'] { --connection-ink: var(--color-warning); --connection-haze: var(--color-warning-soft); border-color: var(--color-warning); }
 .connection header { display: flex; align-items: flex-start; gap: var(--space-3); grid-column: 1; grid-row: 1; min-width: 0; padding-block: var(--space-1); }.connection header > div { min-width: 0; }.connection header :is(h3,p) { overflow-wrap: anywhere; }
 .connection header h3 { font-size: var(--text-lg); line-height: 1.4; }
+/* 卡片摘要限制两行，完整名称与模型仍可通过提示、连接信息和编辑表单查看。 */
+.connection header :is(h3,p) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .connectionEmblem { display: grid; place-items: center; flex: 0 0 48px; height: 56px; color: var(--connection-ink); }
 .connection header p { color: var(--color-ink-secondary); margin-top: var(--space-2); font-size: var(--text-sm); }
 .connectionMetrics { display: grid; grid-column: 2; grid-row: 1; align-content: start; margin: 0; padding-left: var(--space-4); border-left: 1px solid var(--color-line-strong); }

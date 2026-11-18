@@ -194,6 +194,7 @@ export function App({ api }: Props) {
   const inspirationDirty = useRef(false)
   const auxiliaryDirty = useRef(false)
   const panelLeaveGuard = useRef<PanelLeaveGuard | null>(null)
+  const preferencesTrigger = useRef<HTMLElement | null>(null)
   const registerPanelLeaveGuard = useCallback((guard: PanelLeaveGuard | null) => {
     panelLeaveGuard.current = guard
   }, [])
@@ -796,6 +797,8 @@ export function App({ api }: Props) {
   }
 
   function showDialog(next: Exclude<Modal, null>) {
+    // 在切换忙态禁用入口之前记住设置来源，供画布关闭后的焦点回退使用。
+    if (next.kind === 'preferences') preferencesTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (next.kind === 'bookRecovery' && (knowledgeDirty.current || storyDirty.current || notesDirty.current || memoryWorking.current || aiDirty.current)) {
       setMessage('当前面板仍有未保存修改或未确认请求，请先处理后再进入作品备份与恢复。'); return
     }
@@ -1625,7 +1628,7 @@ export function App({ api }: Props) {
       {/* 全画布一级功能视图：取代旧版模态弹窗地狱，直接在主画布内平铺展开 */}
       {isCanvasView && modal?.kind !== 'bookRecovery' && <DialogDisplayContext.Provider value="canvas">
         <div className={styles.canvasViewport}>
-          {modal?.kind === 'preferences' && <DisplayPreferencesPanel preferences={display.preferences} warning={display.warning} busy={busy} onChange={display.update} onReset={display.reset} onRetrySave={display.retrySave} onClose={closeModal}
+          {modal?.kind === 'preferences' && <DisplayPreferencesPanel preferences={display.preferences} warning={display.warning} busy={busy} onChange={display.update} onReset={display.reset} onRetrySave={display.retrySave} onClose={closeModal} returnFocusTo={preferencesTrigger.current}
             focused={focused} onFocusChange={chapter ? setFocused : undefined} saveStatus={chapter ? saveLabel(session.session) : '未打开章节'}
             workspacePath={workspace.rootPath} onChooseWorkspace={() => void openWorkspace()} onBackup={() => showDialog({ kind: 'bookRecovery' })} onRecovery={() => openRecovery()} onModels={() => workspace.rootPath ? showDialog({ kind: 'models' }) : void openWorkspace()} />}
           {modal?.kind === 'models' && api && <ModelConnectionsPanel key={`${workspace.rootPath}:${book?.book.id ?? ''}`} api={api} book={book} disabled={busy} onClose={closeModal} onDirtyChange={(value) => { auxiliaryDirty.current = value }} registerLeaveGuard={registerPanelLeaveGuard} onBookChange={applyBook} onApply={(preset) => openBookAi(preset)} onConfigureBook={() => openBookAi()} onSummary={(preset) => showDialog({ kind: 'aiSummary', initialPreset: preset })} onRecover={() => openRecovery(true)} />}

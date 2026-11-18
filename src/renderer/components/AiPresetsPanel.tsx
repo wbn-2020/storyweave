@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { DomainError, type AppError, type StudioApi } from '../../contracts/api'
 import {
   AI_PRESET_KINDS, AI_PRESETS_COMMANDS, MAX_AI_PRESETS, MAX_AI_PRESET_INSTRUCTION,
@@ -32,6 +32,7 @@ export interface AiPresetsPanelProps {
 }
 
 const labels: Record<AiPresetKind, string> = { plan: '规划', continue: '续写', rewrite: '改写', review: '审稿', study: '拆书', summarize: '摘要' }
+type PresetAction = 'read' | 'save' | 'compare' | 'readReceipt' | 'writeReceipt' | 'syncReceipt'
 
 export function AiPresetsPanel(props: AiPresetsPanelProps) {
   return <PresetsContent key={props.bookId} {...props} />
@@ -49,6 +50,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const [discard, setDiscard] = useState(false)
   const [defaultConfirmed, setDefaultConfirmed] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [action, setAction] = useState<PresetAction | null>(null)
   const [syncState, setSyncState] = useState<'idle' | 'needed' | 'busy'>('idle')
   const [syncError, setSyncError] = useState<AppError | null>(null)
   const syncRef = useRef(false)
@@ -58,6 +60,9 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const revisionRef = useRef(bookRevision)
   const callbacks = useRef({ onChanged, onApply, onSummary })
   const formRef = useRef<HTMLFormElement>(null)
+  const editorTrigger = useRef<HTMLButtonElement | null>(null)
+  const returnEditorFocus = useRef(false)
+  const actionLock = useRef(false)
   revisionRef.current = bookRevision
   callbacks.current = { onChanged, onApply, onSummary }
   const tool = useToolSession({ api, disabled, onDirtyChange, onUnknown, isProtected: () => syncRef.current })
@@ -72,14 +77,30 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     command: AI_PRESETS_COMMANDS.save, requestId: tool.pending?.error.requestId ?? null, input: submitted, draft,
     savedPreset: syncRef.current ? snapshot?.presets.find((item) => item.id === submitted?.id) : undefined, syncError,
     readRequestId: tool.readFailure?.requestId ?? null }, null, 2)
+  const readBusy = tool.busy && action === 'read'
+  const saveBusy = saving && syncState === 'idle'
+
+  // 同一请求的防重与业务校验沿用原流程，读取、保存和回执各自表达忙态。
+  async function runAction(next: PresetAction, operation: () => Promise<unknown>) {
+    if (actionLock.current) return
+    actionLock.current = true; setAction(next)
+    try { await operation() }
+    finally { actionLock.current = false; setAction(null) }
+  }
 
   useEffect(() => {
     mounted.current = true
-    if (!disabled && needsRead.current) { needsRead.current = false; void reload() }
+    if (!disabled && needsRead.current) { needsRead.current = false; void runAction('read', reload) }
     return () => { mounted.current = false; needsRead.current = true }
   }, [disabled])
   useEffect(() => {
     if (draft) { formRef.current?.scrollIntoView({ block: 'nearest' }); formRef.current?.focus({ preventScroll: true }) }
+  }, [draft?.id])
+  useLayoutEffect(() => {
+    if (draft || !returnEditorFocus.current) return
+    returnEditorFocus.current = false
+    const trigger = editorTrigger.current
+    if (trigger?.isConnected && !trigger.disabled) trigger.focus()
   }, [draft?.id])
 
   function receive(value: AiPresetsSnapshot) { snapshotRef.current = value; setSnapshot(value) }
@@ -95,12 +116,13 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     if (!tool.canLeave() || syncRef.current) { tool.setError('请先保存、放弃更改或核对原请求，再切换预设。'); return false }
     return true
   }
-  function edit(item?: AiPreset, useCurrent = false, routeKind?: AiPresetKind) {
+  function edit(item?: AiPreset, useCurrent = false, routeKind?: AiPresetKind, trigger?: HTMLButtonElement) {
     if (blocked || !snapshot || !canSwitch()) return
     if ((item?.kind ?? routeKind ?? (useCurrent ? initialKind : undefined)) === 'summarize' && !snapshot.supportsSummary) {
       tool.setError('请先打开分层汇总，备份并启用摘要默认路由。原五类预设仍可使用。'); return
     }
     if (!item && snapshot.presets.length >= MAX_AI_PRESETS) { tool.setError('本书已达到 200 条预设上限（含归档），可继续编辑已有预设。'); return }
+    editorTrigger.current = trigger ?? null
     setDraft({ bookId, expectedBookRevision: snapshot.bookRevision, id: item?.id ?? crypto.randomUUID(), expectedRevision: item?.revision ?? 0,
       fields: item ? aiPresetFields(item) : { title: useCurrent ? initialTitle ?? '' : '', kind: routeKind ?? (useCurrent ? initialKind ?? 'continue' : 'continue'),
         instruction: useCurrent ? initialInstruction ?? '' : '', connectionId: useCurrent ? initialConnectionId ?? null : null,
@@ -118,6 +140,8 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   function closeDraft() {
     if (tool.locked || syncRef.current) return
     if (tool.hasChanges() && !discard) { setDiscard(true); return }
+    // 明确放弃或关闭后，等待表单卸载再返回本次路由／列表入口。
+    returnEditorFocus.current = true
     setDraft(null); setSubmitted(null); setPreserved(null); setConflict(null); setDiscard(false); tool.setDirty(false); tool.setError(null)
   }
   function saved(value: AiPresetsSnapshot) {
@@ -209,7 +233,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
   const tokenTotal = snapshot ? snapshot.usage.inputTokens + snapshot.usage.outputTokens : 0
   // 路由模式隐藏通用标题栏，未读和已读两种状态都需要可见的原刷新入口。
   const refreshButton = <button type="button" className={styles.button} aria-label={routing ? '刷新任务路由与用量' : undefined}
-    disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => void reload()}>刷新</button>
+    aria-busy={readBusy} disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => void runAction('read', reload)}>{readBusy ? routing ? '正在刷新任务路由…' : '正在刷新预设…' : '刷新'}</button>
 
   return <section className={styles.panel} aria-labelledby={headingId} data-layout={layout}>
     <header className={styles.heading}><div><h3 id={headingId}>任务预设与用量</h3><p className={styles.muted}>保存这部作品常用的协作要求。应用预设会填入编辑框，由你确认后发送。</p></div>
@@ -217,16 +241,16 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
     {tool.notice && <p className={styles.notice} role="status">{tool.notice}</p>}
     {tool.readFailure?.requestId && <div className={styles.actions}>
-      <button type="button" className={styles.button} disabled={tool.locked || syncState === 'busy'} onClick={() => void tool.checkReadReceipt()}>核对原读取</button>
+      <button type="button" className={styles.button} aria-busy={tool.busy && action === 'readReceipt'} disabled={tool.locked || syncState === 'busy'} onClick={() => void runAction('readReceipt', tool.checkReadReceipt)}>{tool.busy && action === 'readReceipt' ? '正在核对读取…' : '核对原读取'}</button>
       <span className={styles.muted}>原读取编号：<code>{tool.readFailure.requestId}</code></span>
     </div>}
     {tool.pending && <div className={styles.warning}><p>保存结果尚未确认，当前输入已保留。</p>
-      {tool.pending.error.requestId ? <button type="button" className={styles.button} disabled={tool.busy} onClick={() => void checkReceipt()}>核对原请求</button>
+      {tool.pending.error.requestId ? <button type="button" className={styles.button} aria-busy={tool.busy && action === 'writeReceipt' && syncState === 'idle'} disabled={tool.busy} onClick={() => void runAction('writeReceipt', checkReceipt)}>{tool.busy && action === 'writeReceipt' && syncState === 'idle' ? '正在核对保存…' : '核对原请求'}</button>
         : <p>缺少可查询的请求编号，请通过主窗口恢复流程核对作品。</p>}
       <p>若原请求已无法查询，请先复制下方完整输入与提交记录，再进入恢复流程。</p>
     </div>}
     {syncState !== 'idle' && <div className={styles.warning} role="status"><p>预设写入已确认，等待父层作品信息同步。</p>
-      {syncError?.requestId && <button type="button" className={styles.button} disabled={disabled || tool.busy || syncState === 'busy'} onClick={() => void checkSyncReceipt()}>核对原同步读取</button>}
+      {syncError?.requestId && <button type="button" className={styles.button} aria-busy={tool.busy && action === 'syncReceipt'} disabled={disabled || tool.busy || syncState === 'busy'} onClick={() => void runAction('syncReceipt', checkSyncReceipt)}>{tool.busy && action === 'syncReceipt' ? '正在核对同步读取…' : '核对原同步读取'}</button>}
       <button type="button" className={styles.button} aria-busy={syncState === 'busy'} disabled={disabled || tool.busy || syncState === 'busy' || Boolean(syncError?.requestId)} onClick={() => void synchronize()}>{syncState === 'busy' ? '正在同步…' : '重试同步'}</button></div>}
     {externalChange && <p className={styles.warning}>作品已有新版本。当前输入仍保留，可读取最新预设作比较，或处理输入后刷新。</p>}
     {snapshot?.archived && <p className={styles.warning}>作品已归档，任务预设仅供查看。</p>}
@@ -234,14 +258,15 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
     {!snapshot ? <p className={styles.empty} role="status">{tool.busy ? '正在读取预设与累计用量…' : '尚未取得任务预设，请点击“刷新”重试。'}</p> : <>
       {routing && <section className={styles.routing} aria-label="任务路由矩阵">
         <header className={styles.routeHeading}><h3><StudioIcon name="workflow" size={20} />任务路由矩阵</h3><span>本书默认预设</span>{refreshButton}</header>
-        <div className={styles.matrixScroll} tabIndex={0} role="region" aria-label="任务路由矩阵，可横向滚动"><table className={styles.matrix}>
-          <thead><tr><th scope="col">任务类型</th>{connections?.map((connection) => <th scope="col" key={connection.id} title={connection.name}>{connection.model}</th>)}<th scope="col">当前协作连接</th></tr></thead>
+        {/* 列数随真实连接变化，窄屏在矩阵内滚动，避免长模型挤压任务和当前连接列。 */}
+        <div className={styles.matrixScroll} tabIndex={0} role="region" aria-label="任务路由矩阵，可横向滚动"><table className={styles.matrix} style={{ minWidth: Math.max(600, 132 + (connections?.length ?? 0) * 180 + 164) }}>
+          <thead><tr><th scope="col">任务类型</th>{connections?.map((connection) => <th scope="col" key={connection.id} title={`${connection.name} · ${connection.model}`}><span className={styles.modelLabel}>{connection.model}</span></th>)}<th scope="col">当前协作连接</th></tr></thead>
           <tbody>{AI_PRESET_KINDS.map((kind) => {
             const route = snapshot.presets.find((item) => item.kind === kind && item.defaultForTask && !item.archived)
             const missing = route?.connectionId && !connections?.some((item) => item.id === route.connectionId)
             const needsSummaryUpgrade = kind === 'summarize' && !snapshot.supportsSummary
-            return <tr key={kind}><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || needsSummaryUpgrade} aria-label={`编辑${labels[kind]}默认预设`} title={needsSummaryUpgrade ? '请先打开分层汇总，备份并启用摘要默认路由' : blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={() => edit(route, false, kind)}><StudioIcon name={routeIcons[kind]} size={18} /><span>{labels[kind]}</span><span className={styles.routeEditHint}><StudioIcon name="pen" size={14} /></span></button></th>
-              {connections?.map((connection, index) => <td key={connection.id}>{route?.connectionId === connection.id ? <span className={styles.assignment} data-tone={index % 3}><i />{connection.model}</span> : <span className={styles.noRoute}>—</span>}</td>)}
+            return <tr key={kind}><th scope="row"><button type="button" className={styles.routeEdit} disabled={blocked || tool.dirty || needsSummaryUpgrade} aria-label={`编辑${labels[kind]}默认预设`} title={needsSummaryUpgrade ? '请先打开分层汇总，备份并启用摘要默认路由' : blocked || tool.dirty ? '请先保存、放弃或核对当前操作' : `编辑${labels[kind]}默认预设`} onClick={(event) => edit(route, false, kind, event.currentTarget)}><StudioIcon name={routeIcons[kind]} size={18} /><span>{labels[kind]}</span><span className={styles.routeEditHint}><StudioIcon name="pen" size={14} /></span></button></th>
+              {connections?.map((connection, index) => <td key={connection.id}>{route?.connectionId === connection.id ? <span className={styles.assignment} data-tone={index % 3} title={connection.model}><i /><span className={styles.modelLabel}>{connection.model}</span></span> : <span className={styles.noRoute}>—</span>}</td>)}
               <td>{needsSummaryUpgrade ? <span className={styles.unavailable}>备份升级后启用</span> : !route ? <span className={styles.noRoute}>未设置</span> : missing ? <span className={styles.unavailable}>绑定连接不可用</span> : route.connectionId === null ? <span className={styles.assignment}><i />发送前选择</span> : <span className={styles.noRoute}>—</span>}</td>
             </tr>
           })}
@@ -269,14 +294,14 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
       </div>
       {snapshot.requiresUpgrade ? <p className={styles.warning}>请通过作品工具备份并升级这部作品，再刷新本面板以保存任务预设。</p> : <>
         <div className={styles.actions}><div className={styles.actions}>
-          <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty} onClick={() => edit()}>新建预设</button>
+          <button type="button" className={styles.primaryButton} disabled={blocked || tool.dirty} onClick={(event) => edit(undefined, false, undefined, event.currentTarget)}>新建预设</button>
           {onSummary && <button type="button" className={styles.button} disabled={tool.locked || tool.dirty || syncState !== 'idle'} onClick={() => onSummary()}>打开分层汇总</button>}
-          {initialInstruction?.trim() && <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={() => edit(undefined, true)}>将当前要求存为模板</button>}
+          {initialInstruction?.trim() && <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={(event) => edit(undefined, true, undefined, event.currentTarget)}>将当前要求存为模板</button>}
         </div><label className={styles.check}><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />显示已归档</label></div>
         <ul className={styles.list}>{visible.map((item) => <li key={item.id}>
           <div className={styles.rowHeading}><div><strong>{item.title}</strong><span className={styles.tag}>{labels[item.kind]}</span>{item.defaultForTask && <span className={styles.tag}>默认</span>}{item.archived && <span className={styles.tag}>已归档</span>}</div>
             <div className={styles.actions}><button type="button" className={styles.button} disabled={blocked || tool.dirty || item.archived || item.kind === 'summarize' && !onSummary} onClick={() => apply(item)}>{item.kind === 'summarize' ? '应用到分层汇总' : '应用到协作'}</button>
-              <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={() => edit(item)}>{item.archived ? '查看 / 恢复' : '编辑 / 归档'}</button></div></div>
+              <button type="button" className={styles.button} disabled={blocked || tool.dirty} onClick={(event) => edit(item, false, undefined, event.currentTarget)}>{item.archived ? '查看 / 恢复' : '编辑 / 归档'}</button></div></div>
           <p className={styles.muted}>{connectionName(item.connectionId)} · 版本 {item.revision}</p>
           <details className={styles.details}><summary>查看协作要求</summary><p className={styles.instruction}>{item.instruction}</p></details>
         </li>)}</ul>
@@ -284,7 +309,7 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
       </>}
     </>}
     {routing && !snapshot && routingNotice}
-    {draft && <form className={styles.editor} onSubmit={(event) => void save(event)} ref={formRef} tabIndex={-1} aria-label="编辑任务预设">
+    {draft && <form className={styles.editor} onSubmit={(event) => { event.preventDefault(); void runAction('save', () => save(event)) }} ref={formRef} tabIndex={-1} aria-label="编辑任务预设">
       <h4>{draft.expectedRevision ? '编辑预设' : '新建预设'}</h4>
       <fieldset disabled={tool.locked || syncState !== 'idle'}>
         <div className={styles.fields}><label>名称<input required maxLength={120} value={draft.fields.title} onChange={(event) => change({ title: event.target.value })} /></label>
@@ -300,8 +325,8 @@ function PresetsContent({ api, bookId, bookRevision, disabled, onDirtyChange, on
         {replacingDefault && <label className={styles.check}><input type="checkbox" checked={defaultConfirmed} onChange={(event) => setDefaultConfirmed(event.target.checked)} />确认替换“{oldDefault?.title}”的默认状态；两份预设都保留。</label>}
         <label className={styles.check}><input type="checkbox" checked={draft.fields.archived} onChange={(event) => change({ archived: event.target.checked, defaultForTask: event.target.checked ? false : draft.fields.defaultForTask })} />归档此预设（保留内容与历史）</label>
       </fieldset>
-      <div className={styles.actions}><button className={styles.primaryButton} type="submit" aria-busy={saving} disabled={blocked || !tool.dirty || replacingDefault && !defaultConfirmed} title={replacingDefault && !defaultConfirmed ? '请先确认默认预设替换' : !tool.dirty ? '预设内容尚未修改' : undefined}>{saving ? '正在保存…' : '保存预设'}</button>
-        <button type="button" className={styles.button} disabled={tool.locked || syncState !== 'idle'} onClick={() => void compareLatest()}>读取最新版本作比较</button>
+      <div className={styles.actions}><button className={styles.primaryButton} type="submit" aria-busy={saveBusy} disabled={blocked || !tool.dirty || replacingDefault && !defaultConfirmed} title={replacingDefault && !defaultConfirmed ? '请先确认默认预设替换' : !tool.dirty ? '预设内容尚未修改' : undefined}>{saveBusy ? '正在保存…' : '保存预设'}</button>
+        <button type="button" className={styles.button} aria-label="读取最新版本作比较" aria-busy={tool.busy && action === 'compare'} disabled={tool.locked || syncState !== 'idle'} onClick={() => void runAction('compare', compareLatest)}>{tool.busy && action === 'compare' ? '正在读取最新预设…' : '读取最新版本作比较'}</button>
         <button type="button" className={styles.button} disabled={tool.locked || syncState !== 'idle'} onClick={closeDraft}>{discard ? '确认放弃当前更改' : tool.dirty ? '放弃更改' : '关闭编辑'}</button></div>
       {discard && <p className={styles.warning}>再次点击将放弃本次未保存的编辑，已有预设不受影响。</p>}
       {conflict && <div className={styles.comparison}><h4>最新保存内容</h4>
