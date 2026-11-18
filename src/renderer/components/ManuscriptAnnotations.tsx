@@ -76,9 +76,11 @@ export function ManuscriptAnnotations({ api, bookId, chapterId, revisionId, dirt
   }, [editor, host, issues, snapshot, disabled, dirty])
 
   if (disabled || dirty) return null
+  if (annotations.state.kind === 'loading') return <div className={styles.status} role="status" aria-busy="true">正在读取正文批注…</div>
+  if (annotations.state.kind === 'unavailable') return <div className={styles.status} role="status">{annotations.state.message}</div>
   if (annotations.state.kind === 'failed' || annotations.state.kind === 'pending') return <div className={styles.status} role="status">
     <span>{annotations.state.message}</span>
-    <button type="button" disabled={annotations.checking} onClick={() => void (annotations.state.kind === 'pending' ? annotations.queryOriginal() : annotations.load())}>
+    <button type="button" disabled={annotations.checking} aria-busy={annotations.checking} onClick={() => void (annotations.state.kind === 'pending' ? annotations.queryOriginal() : annotations.load())}>
       {annotations.checking ? '核对中…' : annotations.state.kind === 'pending' ? '核对原批注读取' : '重试读取批注'}
     </button>
   </div>

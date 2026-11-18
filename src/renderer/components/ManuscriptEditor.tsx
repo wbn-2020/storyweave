@@ -216,7 +216,18 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
       const end = editor.view.coordsAtPos(to)
       const bounds = container.current.getBoundingClientRect()
       const width = Math.min(432, bounds.width - 24)
-      setSelectionToolbar({ top: Math.max(64, start.top - bounds.top - 48),
+      const height = selectionTools.current?.getBoundingClientRect().height ?? 40
+      let visibleTop = Math.max(0, bounds.top + 64)
+      let visibleBottom = Math.min(window.innerHeight, bounds.bottom)
+      // 浮条优先紧随选区；滚动或换行后按实际可见区域收住，避免动作落到屏外。
+      for (let parent = container.current.parentElement; parent; parent = parent.parentElement) {
+        if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) continue
+        const rect = parent.getBoundingClientRect()
+        visibleTop = Math.max(visibleTop, rect.top)
+        visibleBottom = Math.min(visibleBottom, rect.bottom)
+      }
+      const preferredTop = end.bottom + 8 + height <= visibleBottom ? end.bottom + 8 : start.top - height - 8
+      setSelectionToolbar({ top: Math.max(visibleTop + 8, Math.min(visibleBottom - height - 8, preferredTop)) - bounds.top,
         left: Math.max(12, Math.min(bounds.width - width - 12, (start.left + end.right) / 2 - bounds.left - width / 2)), width })
     }
     const dismiss = (event: KeyboardEvent) => {
@@ -235,8 +246,9 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
     let blurFrame = 0
     const refresh = () => {
       cancelAnimationFrame(blurFrame)
-      if (!editor.isFocused) blurFrame = requestAnimationFrame(update)
-      else update()
+      if (editor.isFocused) update()
+      // 首次展开后再量一次真实高度，包含窄屏下的按钮换行。
+      blurFrame = requestAnimationFrame(update)
     }
     editor.on('selectionUpdate', refresh)
     editor.on('transaction', refresh)
@@ -320,16 +332,16 @@ export function ManuscriptEditor({ title, document, disabled, readOnly = false, 
     </div>
     {selectionToolbar && <div ref={selectionTools} className={styles.selectionToolbar} role="toolbar" aria-label="选区 AI 改写" style={selectionToolbar}
       onMouseDown={(event) => event.preventDefault()}>
-      {['去 AI 味', '扩写', '强化潜台词', '按文风仿写'].map((label) => <button type="button" key={label} disabled={editingDisabled} onClick={() => selectionAction(label)}>{label}</button>)}
+      {([['去 AI 味', 'magic'], ['扩写', 'plus'], ['强化潜台词', 'spark'], ['按文风仿写', 'pen']] as const).map(([label, icon]) => <button type="button" key={label} disabled={editingDisabled} onClick={() => selectionAction(label)}><StudioIcon name={icon} size={16} />{label}</button>)}
     </div>}
     {searchOpen && <ManuscriptSearch editor={editor} disabled={disabled} readOnly={readOnly} composing={compositionActive} replaceOpen={replaceOpen} focusRequest={searchFocus}
       onToggleReplace={() => setReplaceOpen((current) => !current)} onClose={() => { setSearchOpen(false); editor.view.focus() }} />}
     <h2 className={styles.visuallyHidden}>{title}</h2>
     {readOnly && <p className={styles.readOnlyNote}>归档作品 · 只读</p>}
     {locationNotice && <p className={styles.searchHint} role="status">{locationNotice}</p>}
-    <EditorContent editor={editor} className={styles.content} />
     {annotationContext && <ManuscriptAnnotations key={`${annotationContext.bookId}:${annotationContext.bookRevision}:${annotationContext.revisionId}`}
       {...annotationContext} editor={editor} host={container} disabled={disabled || compositionActive} readOnly={readOnly} />}
+    <EditorContent editor={editor} className={styles.content} />
     <footer className={styles.paperFooter}>
       <div className={styles.footerInfo}>{footer ?? <span>{readOnly ? '归档作品 · 只读' : '工作稿'}</span>}</div>
       <div className={styles.toolGroup}>

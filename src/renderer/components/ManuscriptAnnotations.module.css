@@ -2,5 +2,10 @@
 .marker { position: absolute; width: 0; pointer-events: none; }
 .marker::before { content: ''; position: absolute; inset-inline-start: calc(-1 * var(--space-8)); inset-block: var(--space-2); width: 3px; border-radius: var(--radius-pill); background: var(--color-accent-2); }
 .marker summary,.marker [popover] { pointer-events: auto; }
-.status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-4); color: var(--color-paper-muted); font: var(--text-xs)/1.8 var(--font-ui); }
-.status button { min-height: var(--control-compact); padding-inline: var(--space-3); border: 1px solid var(--paper-control-line); border-radius: var(--radius-md); color: var(--paper-control-ink); background: var(--paper-input); }
+.status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-4); color: var(--color-paper-muted); font: var(--text-xs)/1.8 var(--font-ui); overflow-wrap: anywhere; }
+.status button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-compact); padding-inline: var(--space-3); border: 1px solid var(--paper-control-line); border-radius: var(--radius-md); color: var(--paper-control-ink); background: var(--paper-input); }
+.status button:hover:not(:disabled) { color: var(--paper-control-active-ink); background: var(--paper-control-hover); }
+:is(.status,.status button)[aria-busy='true'] { opacity: 1; cursor: progress; }
+:is(.status,.status button)[aria-busy='true']::before { content: ''; width: 14px; height: 14px; flex: 0 0 14px; border: 2px solid currentColor; border-inline-end-color: transparent; border-radius: var(--radius-pill); animation: annotationSpin 800ms linear infinite; }
+@keyframes annotationSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { :is(.status,.status button)[aria-busy='true']::before { animation: none; } }
