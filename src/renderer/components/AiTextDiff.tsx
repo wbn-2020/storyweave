@@ -7,6 +7,7 @@ export interface AiTextDiffProps {
   originalText: string
   suggestedText: string
   disabled: boolean
+  readOnly?: boolean
   /** 返回完整选区的合并文本；调用方继续负责 AI 采用的版本校验及保存。 */
   onAcceptText: (text: string) => void | Promise<void>
 }
@@ -28,7 +29,7 @@ function TextSide({ title, text, empty }: { title: string; text: string; empty: 
   </> : <p className={styles.hint}>{empty}</p>}</div>
 }
 
-export function AiTextDiff({ originalText, suggestedText, disabled, onAcceptText }: AiTextDiffProps) {
+export function AiTextDiff({ originalText, suggestedText, disabled, readOnly = false, onAcceptText }: AiTextDiffProps) {
   const headingId = useId()
   const comparison = useMemo(() => {
     try { return { value: compareAiText(originalText, suggestedText), error: null } }
@@ -51,14 +52,15 @@ export function AiTextDiff({ originalText, suggestedText, disabled, onAcceptText
   const limitError = !merged.text.trim() ? '合并结果为空，不能作为 AI 采用内容。请保留至少一段正文。'
     : merged.text.length > AI_OUTPUT_LIMIT ? `合并结果超过 ${AI_OUTPUT_LIMIT.toLocaleString()} 字符，请调整选择或缩小改写范围。`
       : merged.text.includes('\0') ? '合并结果包含空字符，不能采用。' : null
-  const canAccept = Boolean(diff && active.selected.length && !merged.error && !limitError && merged.text !== originalText && !blocked)
+  // 已采用记录只供对照；翻页仍可用，选择与再次采用受只读门禁保护。
+  const canAccept = Boolean(!readOnly && diff && active.selected.length && !merged.error && !limitError && merged.text !== originalText && !blocked)
 
   useEffect(() => { setReview(emptyReview(diff)) }, [diff])
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
   function update(patch: Partial<Review>) { setReview({ ...active, ...patch, basis: diff }) }
   function toggle(id: number) {
-    if (blocked) return
+    if (blocked || readOnly) return
     update({ selected: active.selected.includes(id) ? active.selected.filter((value) => value !== id) : [...active.selected, id], error: null, accepted: false })
   }
   async function accept() {
@@ -81,31 +83,32 @@ export function AiTextDiff({ originalText, suggestedText, disabled, onAcceptText
   const page = Math.min(active.page, pageCount - 1)
   const visible = diff?.hunks.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? []
   return <section className={styles.panel} aria-labelledby={headingId} aria-busy={submitting}>
-    <header className={styles.heading}><h3 id={headingId}>逐段选择改写</h3><span>{diff ? `${diff.hunks.length} 处差异` : ''}</span></header>
-    <p className={styles.hint}>勾选要采用的差异，未勾选处保留原文。连续增删或拆并段落会合为一组，请先检查完整合并预览。</p>
+    <header className={styles.heading}><h3 id={headingId}>{readOnly ? '已采用内容的差异' : '逐段选择改写'}</h3><span>{diff ? `${diff.hunks.length} 处差异` : ''}</span></header>
+    <p className={styles.hint}>{readOnly ? '对照这次固定原文与实际采用文本；当前正文请在写作台核对。' : '勾选要采用的差异，未勾选处保留原文。连续增删或拆并段落会合为一组，请先检查完整合并预览。'}</p>
     {comparison.error && <p className={styles.notice} role="alert">{comparison.error}</p>}
     {diff && !diff.hunks.length && <p className={styles.hint}>建议与原文相同，无需采用。</p>}
     {diff && diff.hunks.length > 0 && <>
-      {diff.hunks.some((hunk) => hunk.coarse) && <p className={styles.notice}>部分区间过长或重复过多，已按整块展示；勾选该区间会采用其中全部变化。</p>}
-      <div className={styles.actions}>
+      {diff.hunks.some((hunk) => hunk.coarse) && <p className={styles.notice}>{readOnly ? '部分区间过长或重复过多，已按整块展示。' : '部分区间过长或重复过多，已按整块展示；勾选该区间会采用其中全部变化。'}</p>}
+      {!readOnly && <div className={styles.actions}>
         <button type="button" disabled={blocked || active.selected.length === diff.hunks.length} onClick={() => update({ selected: diff.hunks.map((hunk) => hunk.id), error: null, accepted: false })}>全选差异</button>
         <button type="button" disabled={blocked || !active.selected.length} onClick={() => update({ selected: [], error: null, accepted: false })}>清空选择</button>
         <span role="status">已选 {active.selected.length} / {diff.hunks.length} 处</span>
-      </div>
+      </div>}
       {visible.map((hunk) => <article className={styles.hunk} key={hunk.id} data-kind={!hunk.originalText ? 'added' : !hunk.suggestedText ? 'removed' : 'changed'}>
-        <label className={styles.choice}><input type="checkbox" checked={active.selected.includes(hunk.id)} disabled={blocked} onChange={() => toggle(hunk.id)} />
+        {readOnly ? <div className={styles.choice}>差异 {hunk.id + 1} · {kind(hunk)}{hunk.coarse ? ' · 整块展示' : ''}</div>
+          : <label className={styles.choice}><input type="checkbox" checked={active.selected.includes(hunk.id)} disabled={blocked} onChange={() => toggle(hunk.id)} />
           <span>差异 {hunk.id + 1} · {kind(hunk)}{hunk.coarse ? ' · 整块选择' : ''}</span>
-        </label>
+        </label>}
         <div className={styles.columns}>
-          <TextSide title="原文 · 未选择时保留" text={hunk.originalText} empty="此位置没有原文段落。" />
-          <TextSide title="建议 · 选择后采用" text={hunk.suggestedText} empty="采用此项会删除左侧原文。" />
+          <TextSide title={readOnly ? '原文 · 固定版本' : '原文 · 未选择时保留'} text={hunk.originalText} empty="此位置没有原文段落。" />
+          <TextSide title={readOnly ? '已采用 · 本次记录' : '建议 · 选择后采用'} text={hunk.suggestedText} empty={readOnly ? '本次采用已删除左侧原文。' : '采用此项会删除左侧原文。'} />
         </div>
       </article>)}
       {pageCount > 1 && <nav className={styles.actions} aria-label="文本差异分页">
         <button type="button" disabled={blocked || page === 0} onClick={() => update({ page: page - 1 })}>上一页</button><span>{page + 1} / {pageCount}</span>
         <button type="button" disabled={blocked || page + 1 >= pageCount} onClick={() => update({ page: page + 1 })}>下一页</button>
       </nav>}
-      <details className={styles.preview}><summary>完整合并预览 · {merged.text.length.toLocaleString()} 字符</summary>
+      {!readOnly && <><details className={styles.preview}><summary>完整合并预览 · {merged.text.length.toLocaleString()} 字符</summary>
         <pre className={styles.text}>{merged.text || '（合并结果为空）'}</pre>
       </details>
       {(active.error || merged.error || (active.selected.length > 0 && limitError)) && <p className={styles.notice} role="alert">{active.error || merged.error || limitError}</p>}
@@ -113,6 +116,7 @@ export function AiTextDiff({ originalText, suggestedText, disabled, onAcceptText
       <div className={styles.actions}><button className={styles.primary} type="button" aria-busy={submitting} disabled={!canAccept} onClick={() => void accept()}>{submitting ? '正在采用…' : '采用所选差异'}</button>
         <span>将返回完整选区文本，包含所有保留段落。</span>
       </div>
+      </>}
     </>}
   </section>
 }

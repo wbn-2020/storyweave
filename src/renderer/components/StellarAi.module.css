@@ -2,9 +2,19 @@
 .heading { composes: heading from './stellar/Workspace.module.css'; padding: 0; }
 .heading > span { font-size: var(--text-xs); color: var(--color-accent-2); }
 .heading h3 { font: 600 var(--text-lg)/1.4 var(--font-ui); }
+.feedback { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: var(--space-3); min-height: var(--control-compact); padding-block: var(--space-3); margin-block: var(--space-3); background: var(--bg-surface); color: var(--color-accent-text); font-size: var(--text-sm); line-height: 1.6; overflow-wrap: anywhere; }
+.feedback::before,.runEmblem[data-generating='true']::before { content: ''; width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: var(--radius-pill); animation: aiStateSpin 1s linear infinite; }
+.runEmblem[data-generating='true']::before { width: 24px; height: 24px; }
+.runEmblem[data-generating='true'] > svg { display: none; }
+.pendingNotice { scroll-margin-block: var(--space-4); }
+.pendingNotice:focus-visible { outline: 2px solid var(--color-warning); outline-offset: var(--space-1); }
+.confirmationText { min-width: 0; text-wrap: pretty; }
+@keyframes aiStateSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .feedback::before,.runEmblem[data-generating='true']::before { animation: none; } }
+@media (forced-colors: active) { .feedback { color: CanvasText; background: Canvas; } .feedback::before,.runEmblem[data-generating='true']::before { forced-color-adjust: none; border-color: CanvasText; border-right-color: transparent; } .pendingNotice:focus-visible { outline-color: Highlight; } }
 .actions { composes: actions from './stellar/Workspace.module.css'; margin-top: var(--space-4); }
 .connection,.history,.composer,.run { min-width: 0; border-top: 1px solid var(--color-line); padding-block: var(--space-4); margin-top: var(--space-4); }
-.run[data-state] { --run-tone: var(--color-accent); --run-haze: var(--color-accent-soft); padding: var(--space-4); border: 1px solid color-mix(in srgb,var(--run-tone) 55%,var(--color-line)); border-radius: var(--radius-xl); background: var(--bg-subtle); }
+.run[data-state] { --run-tone: var(--color-accent); --run-haze: var(--color-accent-soft); padding: var(--space-4); border: 1px solid color-mix(in srgb,var(--run-tone) 55%,var(--color-line)); border-radius: var(--radius-xl); background: var(--bg-subtle); scroll-margin-block: var(--space-3); }
 .run[data-state='succeeded'] { --run-tone: var(--color-accent-2); --run-haze: var(--stellar-ai-haze); }
 .run[data-state='failed'] { --run-tone: var(--color-danger); --run-haze: var(--color-danger-soft); }
 .run:is([data-state='cancelled'],[data-state='interrupted']) { --run-tone: var(--color-warning); --run-haze: var(--color-warning-soft); }
@@ -14,7 +24,7 @@
 .runHeader { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-line); }
 .runEmblem { display: grid; place-items: center; width: var(--space-12); height: var(--space-12); flex: 0 0 var(--space-12); border: 1px solid currentColor; border-radius: var(--radius-pill); background: var(--run-haze); color: var(--run-tone); }
 .runTitle { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
-.runTitle h3 { font: 600 var(--text-lg)/1.4 var(--font-ui); }
+.runTitle h3 { color: var(--run-tone); font: 600 var(--text-title)/1.4 var(--font-ui); }
 .runTitle p { margin-top: var(--space-1); font-size: var(--text-xs); color: var(--color-muted); }
 .runState { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 100%; padding: var(--space-1) var(--space-2); border-radius: var(--radius-pill); background: var(--run-haze); color: var(--run-tone); font: 500 var(--text-xs)/1.5 var(--font-ui); overflow-wrap: anywhere; }
 .runState::before { content: ''; width: var(--space-2); height: var(--space-2); flex: 0 0 var(--space-2); border-radius: var(--radius-pill); background: currentColor; }
@@ -24,6 +34,7 @@
 .runFacts dd { margin: var(--space-1) 0 0; color: var(--color-ink-secondary); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .runFacts > div:last-child { text-align: end; }
 .runFacts > div:last-child dd { font-family: var(--font-num); }
+.run > .actions > .note { flex-basis: 100%; margin-block: 0; }
 .fixedContext { margin-top: var(--space-4); border-top: 1px solid var(--color-line); }
 .fixedContext > summary { min-height: var(--control-compact); padding-block: var(--space-2); cursor: pointer; color: var(--color-ink-secondary); }
 .fixedContext > .preview { margin-top: 0; padding-top: var(--space-3); border-top: 0; }

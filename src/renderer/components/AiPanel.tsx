@@ -197,6 +197,11 @@ function OutputReview({ run, text, disabled, onChange }: { run: AiRun; text: str
         suggestedText={run.outputText} disabled={disabled} onAcceptText={onChange} />
       <p className={styles.note}>采用所选差异会替换下方审阅稿；核对后再点击本页最终采用按钮写入章节。</p>
     </>}
+    {run.state === 'adopted' && run.context.purpose === undefined && (run.kind === 'rewrite' || run.kind === 'continue') &&
+      <details className={styles.fixedContext}><summary>查看已采用内容的差异</summary>
+        <AiTextDiff originalText={run.kind === 'rewrite' ? run.context.originalText : ''} suggestedText={run.acceptedText ?? run.outputText}
+          disabled={disabled} readOnly onAcceptText={onChange} />
+      </details>}
     <div className={run.kind === 'rewrite' ? styles.comparison : undefined}>
       {run.kind === 'rewrite' && <div><h4>原文 · 固定版本</h4><pre className={styles.original}>{run.context.originalText}</pre></div>}
       <div>{run.kind === 'rewrite' && <h4>新稿 · 作者可编辑</h4>}{editable ? <textarea className={styles.acceptedText} value={text} maxLength={AI_OUTPUT_LIMIT} rows={14} disabled={disabled} aria-label="作者审阅后的采用内容" onChange={(event) => onChange(event.target.value)} /> : <pre className={styles.original}>{(run.acceptedText ?? run.outputText) || '尚无输出。'}</pre>}</div>
@@ -269,6 +274,7 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   const [backupPath, setBackupPath] = useState<string | null>(null)
   const [discard, setDiscard] = useState<DiscardAction | null>(null)
   const discardNotice = useRef<HTMLElement>(null)
+  const pendingNotice = useRef<HTMLElement>(null)
   const runSection = useRef<HTMLElement>(null)
   const [recoveryConfirmed, setRecoveryConfirmed] = useState(false)
   const mounted = useRef(false)
@@ -321,6 +327,11 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   const prepareFormRef = useRef(prepareForm)
   prepareFormRef.current = prepareForm
   const localUnknown = Boolean(pending)
+  const stopping = operation === '取消生成并保留输出'
+  const runUnconfirmed = Boolean(localUnknown || pendingMessage || pollStopped || generating && run?.active === false)
+  const runStateLabel = localUnknown || pendingMessage ? '操作结果待核对' : stopping ? '正在停止'
+    : operation === '标记中断' ? '正在标记中断' : pollStopped ? '状态待核对'
+    : generating && run?.active === false ? '离线待核对' : run ? stateLabels[run.state] : ''
   const panelError = [message, error].filter((value, index, values) => value && value !== pendingMessage && values.indexOf(value) === index).join(' ') || null
   const blocks = useMemo(() => chapter.document.content.flatMap((block, index) => block.type === 'horizontalRule' ? [] : [{ id: block.attrs.id, index, label: `${index + 1}. ${blockText(block).replace(/\s+/g, ' ').slice(0, 65) || '空段落'}` }]), [chapter.document])
   const selection = useMemo(() => {
@@ -476,6 +487,12 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
     return () => { mounted.current = false; epoch.current += 1; ticket.current += 1; callback.current(false) }
   }, [api, book.book.id, chapter.id])
   useEffect(() => { callback.current(dirty) }, [dirty])
+  useEffect(() => {
+    // 未知回执会锁住新操作，提示必须进入视口并可经键盘继续查询原请求。
+    if (!localUnknown && !pendingMessage) return
+    pendingNotice.current?.scrollIntoView({ block: 'start' })
+    pendingNotice.current?.focus({ preventScroll: true })
+  }, [localUnknown, pendingMessage])
   useEffect(() => { setRecoveryConfirmed(false) }, [pending, pendingMessage, edited, acceptedText, memoryDrafts, instruction, kind, purpose, useLivingContext, contextScope, perspective, character, firstBlock, lastBlock, selectedMemory, selectedSummaries, creativeSelection])
 
   async function initialize() {
@@ -1099,10 +1116,11 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
       <div className={layout.intro}><p>《{book.book.title}》 · {chapter.title}</p><span>预览 → 明确发送 → 作者审阅 → 采用</span></div>
       <p className={styles.note}>你决定章节方向与定稿。规划存入章节备注，续写追加到章尾，改写替换选中的连续段落。章节摘要与知识建议需逐条审阅、核对引文后，另行选择入库。</p>
     </details>
-    {operation && <p className={styles.note} role="status">{operation}…</p>}
+    {operation && <p className={styles.feedback} role="status" aria-busy="true">{stopping ? '正在停止并保留输出' : operation}…</p>}
     {toolRecoveryRequested && edited && <section className={layout.pending} role="alert"><h3>留存本页协作内容</h3><p>子工具的内容已确认留存。本页还含有创作要求、连接修改或改稿，请一并留存后进入恢复。</p><textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} aria-label="本页协作内容副本" /><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已留存本页内容</label><button className={shared.button} type="button" disabled={!recoveryConfirmed || checkingLocal || checkingReceipt || Boolean(operation)} onClick={recover}>进入草稿与恢复</button></section>}
-    {(localUnknown || pendingMessage) && <section className={layout.pending} role="alert"><h3>本次操作结果未确认</h3><p>{pendingMessage ?? `${pending?.label}尚未收到确定结果。新的写入已暂停，请查询原请求。`}</p><p>不会自动重发生成、密钥或采用请求。恢复后请先核对提议记录与磁盘正文。</p>{edited && <><label>需要留存的本页内容<textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} onFocus={(event) => event.target.select()} /></label><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已留存需要的创作要求与改稿，允许进入恢复</label></>}<div className={styles.actions}><button className={shared.button} type="button" aria-busy={checkingLocal || checkingReceipt} disabled={checkingLocal || checkingReceipt} onClick={pendingMessage ? onCheckReceipt : () => void checkLocalReceipt()}>{checkingLocal || checkingReceipt ? '正在核对…' : '查询原回执'}</button><button className={shared.button} type="button" disabled={checkingLocal || checkingReceipt || (edited && !recoveryConfirmed)} onClick={recover}>进入草稿与恢复</button></div></section>}
-    {loading && <p className={styles.note} role="status">正在读取连接、版本与提议记录…</p>}
+    {(localUnknown || pendingMessage) && <section ref={pendingNotice} tabIndex={-1} className={`${layout.pending} ${styles.pendingNotice}`} role="alert"><h3>本次操作结果未确认</h3><p>{pendingMessage ?? `${pending?.label}尚未收到确定结果。新的写入已暂停，请查询原请求。`}</p><p>不会自动重发生成、密钥或采用请求。恢复后请先核对提议记录与磁盘正文。</p>{edited && <><label>需要留存的本页内容<textarea className={styles.recoveryCopy} value={recoveryText} readOnly rows={7} onFocus={(event) => event.target.select()} /></label><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} /><span className={styles.confirmationText}>我已留存创作要求与改稿，允许进入恢复</span></label></>}<div className={styles.actions}><button className={shared.button} type="button" aria-busy={checkingLocal || checkingReceipt} disabled={checkingLocal || checkingReceipt} onClick={pendingMessage ? onCheckReceipt : () => void checkLocalReceipt()}>{checkingLocal || checkingReceipt ? '正在核对…' : '查询原回执'}</button><button className={shared.button} type="button" disabled={checkingLocal || checkingReceipt || (edited && !recoveryConfirmed)} onClick={recover}>进入草稿与恢复</button></div></section>}
+    {loading && <p className={styles.feedback} role="status" aria-busy="true">正在读取连接、版本与提议记录…</p>}
+    {!loading && reading && <p className={styles.feedback} role="status" aria-busy="true">正在读取任务与资料…</p>}
     {!loading && (!connections || !knowledge || !history) && <button className={shared.button} type="button" disabled={blocked} onClick={() => setRefreshRequested(true)}>重新读取状态</button>}
     {!loading && knowledge && (knowledge.schemaVersion < LIVING_SCHEMA_VERSION || connections?.requiresUpgrade || history?.requiresUpgrade) && <section className={layout.upgrade}><h3>为本书启用完整创作工具</h3><p>当前作品格式 v{knowledge.schemaVersion}。先建立独立数据库备份，再升级到 v{LIVING_SCHEMA_VERSION}，启用演进大纲、定稿记忆及已有创作工具。</p><label className={layout.upgradeCheck}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked || archived || generating} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意创建本书数据库备份并升级</label><button className={shared.primaryButton} type="button" disabled={blocked || archived || generating || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用</button></section>}
     {backupPath && <p className={layout.backupPath}>升级前数据库副本：{backupPath}</p>}
@@ -1246,15 +1264,24 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
           setCreativeSelection({ ...creativeSelection, refs: [...creativeSelection.refs, ref] }); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null)
         }} />}
         <CreativeResourcePicker api={api} bookId={book.book.id} chapterId={chapter.id} bookRevision={knowledge.bookRevision} disabled={blocked || generating || archived} limited={perspective !== 'author' || memoryTask} studyOnly={purpose === 'study'} value={creativeSelection} onChange={(value) => { setCreativeSelection(value); setComposeDirty(true); composeDirtyRef.current = true; setDiscard(null) }} />
-        <div className={styles.actions}><button className={shared.primaryButton} type="button" aria-busy={operation === '保存发送预览'} disabled={blocked || generating || archived || configDirty || !selectedConnection || !instruction.trim() || Boolean(selection.error) || memoryRequiresUpgrade || summaryBlocked || characterTaskBlocked || characterMemoryBlocked || (characterMode && (!characterSelection.scope || characterRequiresUpgrade))} onClick={() => void prepare()}>保存并预览发送内容</button><span className={styles.note}>这一步只在本地保存，不发起模型调用。</span></div>
+        <div className={styles.actions}><button className={shared.primaryButton} type="button" aria-busy={operation === '保存发送预览'} disabled={blocked || generating || archived || configDirty || !selectedConnection || !instruction.trim() || Boolean(selection.error) || memoryRequiresUpgrade || summaryBlocked || characterTaskBlocked || characterMemoryBlocked || (characterMode && (!characterSelection.scope || characterRequiresUpgrade))} onClick={() => void prepare()}>{operation === '保存发送预览' ? '正在保存预览…' : '保存并预览发送内容'}</button><span className={styles.note}>这一步只在本地保存，不发起模型调用。</span></div>
       </div></details>
       {run && <section ref={runSection} className={styles.run} aria-label="当前提议" data-state={run.state}
-        data-unconfirmed={Boolean(pending || pendingMessage || pollStopped || run.state === 'running' && run.active === false)}>
+        data-unconfirmed={runUnconfirmed}>
         <header className={styles.runHeader}>
-          <span className={styles.runEmblem} aria-hidden="true"><StudioIcon name={run.state === 'running' && run.active === false ? 'warning' : stateIcons[run.state]} size={24} /></span>
-          <div className={styles.runTitle}><h3>{taskName(run.kind, run.context.purpose)}</h3><p>{run.chapterTitle} · {displayTime(run.updatedAt)}</p></div>
-          <span className={styles.runState} role="status" aria-atomic="true">{stateLabels[run.state]}{localUnknown || pendingMessage ? ' · 操作待核对' : pollStopped ? ' · 状态待核对' : run.state === 'running' && run.active === false ? ' · 离线待核对' : ''}</span>
+          <span className={styles.runEmblem} data-generating={activeGeneration && !runUnconfirmed} aria-hidden="true"><StudioIcon name={runUnconfirmed ? 'warning' : stateIcons[run.state]} size={24} /></span>
+          <div className={styles.runTitle}><h3>{runStateLabel}</h3><p>{taskName(run.kind, run.context.purpose)} · {run.chapterTitle} · {displayTime(run.updatedAt)}</p></div>
+          <span className={styles.runState} role="status" aria-atomic="true">{runStateLabel}</span>
         </header>
+        {run.state === 'running' && <div className={styles.actions}>{run.active === false
+          ? <button className={shared.button} type="button" aria-busy={operation === '标记中断'} disabled={blocked} onClick={() => void interruptRun()}>{operation === '标记中断' ? '正在标记中断…' : '标记中断并保留输出'}</button>
+          : <button className={shared.button} type="button" aria-busy={operation === '取消生成并保留输出'} disabled={blocked} onClick={() => void stopRun()}>{operation === '取消生成并保留输出' ? '正在停止并保留输出…' : '取消生成并保留输出'}</button>}
+          {pollStopped && <button className={shared.button} type="button" aria-busy={reading} disabled={blocked} onClick={() => setRequestedRunId(run.id)}>重新读取生成状态</button>}
+          {run.active === false && <p className={styles.note}>本次记录仍显示生成中，但桌面进程已无活动请求。已停止自动查询；不会重发。核对后可明确标记中断并保留输出。</p>}
+        </div>}
+        {['failed', 'cancelled', 'interrupted'].includes(run.state) && run.context.purpose !== 'living' && run.context.purpose !== 'forge' && <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent} onClick={retryDraft}>重新准备本次要求</button><span className={styles.note}>保留这份记录，核对新预览后再发送。</span></div>}
+        {activeGeneration && !runUnconfirmed && <p className={styles.note} role="status">{stopping ? '正在停止生成，已保存的输出将保留。' : run.outputCharacters ? `正在接收模型输出，已保存 ${run.outputCharacters.toLocaleString()} 字符。` : '正在等待模型首段输出…'}</p>}
+        {run.state === 'adopted' && run.context.purpose === undefined && <p className={styles.note} role="status">{run.kind === 'plan' ? '已采用为本章备注。' : run.kind === 'continue' ? '已追加至本章末尾，原稿历史已保留。' : '已替换本次选定段落，原稿历史已保留。'}</p>}
         <dl className={styles.runFacts}>
           <div><dt>连接与模型</dt><dd>{run.connectionName} · {run.model}</dd></div>
           <div><dt>{run.state === 'prepared' ? '输入估算' : '已保存输出'}</dt><dd>{run.state === 'prepared' ? `${run.context.estimatedInputTokens.toLocaleString()} tokens` : `${run.outputCharacters.toLocaleString()} 字符`}</dd></div>
@@ -1264,12 +1291,10 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
           <summary>{run.state === 'prepared' ? '核对固定发送内容' : '查看本次固定输入'}</summary>
           <ContextPreview context={run.context} />
         </details>
-        {run.state === 'prepared' && <><p className={styles.note}>{composeDirty || configDirty || !runScopeMatches ? '要求、人物范围或配置已有修改，请保存新的预览后再发送。' : '确认上面的接口、模型与实际内容后，再发送这份固定预览。'}</p><button className={shared.primaryButton} type="button" aria-busy={operation === '确认发送并生成'} disabled={blocked || archived || !taskCurrent || composeDirty || configDirty || !runScopeMatches || characterRequiresUpgrade || characterTaskBlocked || summaryBlocked || characterMemoryBlocked} onClick={() => void sendRun()}>确认发送并开始生成</button></>}
+        {run.state === 'prepared' && <><p className={styles.note}>{composeDirty || configDirty || !runScopeMatches ? '要求、人物范围或配置已有修改，请保存新的预览后再发送。' : '确认上面的接口、模型与实际内容后，再发送这份固定预览。'}</p><button className={shared.primaryButton} type="button" aria-busy={operation === '确认发送并生成'} disabled={blocked || archived || !taskCurrent || composeDirty || configDirty || !runScopeMatches || characterRequiresUpgrade || characterTaskBlocked || summaryBlocked || characterMemoryBlocked} onClick={() => void sendRun()}>{operation === '确认发送并生成' ? '正在确认发送…' : '确认发送并开始生成'}</button></>}
         {run.state !== 'prepared' && (isAiMemoryTask(run.kind)
           ? <AiMemoryReview api={api} run={run} drafts={memoryDrafts} disabled={blocked || archived || !taskCurrent} error={pendingMessage ?? panelError} onChange={(value) => { setMemoryDrafts(value); setOutputDirty(true) }} onAdopt={adoptMemory} />
           : <OutputReview run={run} text={acceptedText} disabled={blocked || archived} onChange={(value) => { setAcceptedText(value); setOutputDirty(value !== (run.acceptedText ?? run.outputText)) }} />)}
-        {run.state === 'running' && <div className={styles.actions}>{run.active === false ? <><p className={styles.note}>本次记录仍显示生成中，但桌面进程已无活动请求。已停止自动查询；不会重发。核对后可明确标记中断并保留输出。</p><button className={shared.button} type="button" aria-busy={operation === '标记中断'} disabled={blocked} onClick={() => void interruptRun()}>标记中断并保留输出</button></> : <button className={shared.button} type="button" aria-busy={operation === '取消生成并保留输出'} disabled={blocked} onClick={() => void stopRun()}>取消生成并保留输出</button>}{pollStopped && <button className={shared.button} type="button" disabled={blocked} onClick={() => setRequestedRunId(run.id)}>重新读取生成状态</button>}</div>}
-        {['failed', 'cancelled', 'interrupted'].includes(run.state) && run.context.purpose !== 'living' && run.context.purpose !== 'forge' && <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent} onClick={retryDraft}>重新准备本次要求</button><span className={styles.note}>保留这份记录，核对新预览后再发送。</span></div>}
         {run.state !== 'prepared' && run.context.purpose === 'review' && isReviewPromptVersion(run.context.promptVersion) && <ReviewResults key={run.id} api={api} run={run} bookRevision={knowledge.bookRevision}
           disabled={busy || loading || reading || studyDirty || presetsDirty || archived || Boolean(operation || pending || pendingMessage)} error={pendingMessage ?? panelError} onDirtyChange={setReviewDirty} onChanged={syncPresetBook} onRecover={recoverTool} onOpenChecklist={onOpenReviewChecklist}
           taskControls={{ disabled: blocked, onCancel: () => void stopRun(), onInterrupt: () => void interruptRun(), onRefresh: () => setRequestedRunId(run.id),
