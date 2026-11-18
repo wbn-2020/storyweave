@@ -89,6 +89,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
   const dialog = useRef<HTMLDialogElement>(null)
   const launcher = useRef<HTMLButtonElement>(null)
   const confirmationButton = useRef<HTMLButtonElement>(null)
+  const errorPanel = useRef<HTMLParagraphElement>(null)
   const confirmationTrigger = useRef<HTMLElement | null>(null)
   const wasConfirming = useRef(false)
   const submitLock = useRef(false)
@@ -109,10 +110,16 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
     }
   }, [open, drawerMode])
   useEffect(() => {
-    if (confirmation) confirmationButton.current?.focus({ preventScroll: true })
+    if (confirmation) {
+      confirmationButton.current?.focus({ preventScroll: true })
+      confirmationButton.current?.scrollIntoView({ block: 'nearest' })
+    }
     else if (wasConfirming.current) {
       const trigger = confirmationTrigger.current
-      if (trigger?.isConnected && !trigger.matches(':disabled')) trigger.focus({ preventScroll: true })
+      if (trigger?.isConnected && !trigger.matches(':disabled')) {
+        trigger.focus({ preventScroll: true })
+        trigger.scrollIntoView({ block: 'nearest' })
+      }
       else {
         const close = dialog.current?.querySelector<HTMLButtonElement>('[data-archive-close]:not(:disabled)')
         const fallback = close ?? dialog.current?.querySelector<HTMLHeadingElement>('h2')
@@ -126,6 +133,11 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
     // 候选、版本或可写状态变化后必须重新确认，不能提交旧摘要对应的决定。
     setConfirmation((value) => value?.kind === 'adopt' ? null : value)
   }, [run.version, run.context.contextHash, run.outputText, drafts, disabled])
+  useEffect(() => {
+    if (!open || !drawerMode || !error || submitting || confirmation) return
+    errorPanel.current?.focus({ preventScroll: true })
+    errorPanel.current?.scrollIntoView({ block: 'nearest' })
+  }, [open, drawerMode, error, submitting, confirmation])
   const parsed = useMemo<{ proposal: AiMemoryProposal | null; error: string | null }>(() => {
     if (run.state !== 'succeeded') return { proposal: null, error: null }
     // 证据只从原始输出和固定上下文解析，作者字段编辑不能重写引文。
@@ -240,6 +252,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
               <span className={archive.nature} data-nature={item.nature}>{natureLabels[item.nature]}</span>
               <span className={archive.candidateText}><strong>{fields.name || '尚未填写名称'}{fields.summary && `：${fields.summary}`}</strong>
                 <span title={citation?.quote}>{citation ? `原文：“${citation.quote}”` : '尚无固定正文引文'}{blockPosition > 0 ? ` · 第 ${blockPosition} 段` : ''}{item.citations.length > 1 ? ` · 共 ${item.citations.length} 处` : ''}</span>
+                {draft.selected && draft.action === 'ignore' && <small className={archive.pendingDecision}><StudioIcon name="close" size={16} />待确认忽略</small>}
               </span>
               <StudioIcon name="chevron" size={20} />
             </summary>
@@ -323,7 +336,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
       <button ref={launcher} type="button" className={shared.button} onClick={() => { setConfirmation(null); setOpen(true) }}>
         <StudioIcon name="spark" />{run.state === 'adopted' ? '查看本章归档记录' : '审阅本章记忆候选'}
       </button>
-      {open && createPortal(<dialog ref={dialog} className={archive.drawer} aria-labelledby={headingId}
+      {open && createPortal(<dialog ref={dialog} className={archive.drawer} aria-labelledby={headingId} aria-busy={submitting}
         onKeyDown={(event) => {
           if (event.key !== 'Escape' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
           // 连续 Esc 的原生 cancel 可能不可取消，按键阶段先处理确认层，避免抽屉与开关状态脱节。
@@ -335,7 +348,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
         <header className={archive.header} inert={confirmation !== null}><StudioIcon name="spark" size={28} /><h2 id={headingId} tabIndex={-1} title={`${run.context.chapterTitle} · 本章记忆归档`}>{run.context.chapterTitle} · 本章记忆归档</h2>
           <button type="button" data-archive-close className={archive.closeButton} disabled={submitting} aria-label="收起本章记忆归档" title={submitting ? '正在保存作者决定，请稍候再收起' : '收起本章记忆归档'} onClick={requestClose}><StudioIcon name="close" size={24} /></button>
         </header>
-        {error && <p className={archive.error} role="alert">{error}</p>}
+        {error && <p ref={errorPanel} className={archive.error} role="alert" tabIndex={-1}>{error}</p>}
         {decisionError && decisionError !== error && <p id={validationId} className={archive.error} role="status">{decisionError}</p>}
         <div className={archive.body} inert={confirmation !== null || submitting}>{content}</div>
         {confirmation && <section className={archive.confirmation} role="alertdialog" aria-labelledby={confirmationId}>
@@ -354,7 +367,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
             aria-describedby={decisionError && decisionError !== error ? validationId : undefined}
             onClick={() => requestConfirmation('adopt')}>{submitting ? <span className={`${shared.spinner} ${archive.saving}`} aria-hidden="true" /> : <StudioIcon name="spark" size={20} />}{submitting ? '正在归档…' : '确认归档'}</button>
             : <button type="button" className={archive.archiveButton} onClick={requestClose}><StudioIcon name="check" size={20} />完成</button>}
-          <span><StudioIcon name="info" size={16} />{run.state === 'adopted' ? '已保留采用时的快照' : '确认前不会改写设定'}</span>
+          <span role="status"><StudioIcon name="info" size={16} />{submitting ? '正在保存作者决定，请等待原回执' : run.state === 'adopted' ? '已保留采用时的快照' : '确认前不会改写设定'}</span>
         </footer>
       </dialog>, document.body)}
     </> : content}

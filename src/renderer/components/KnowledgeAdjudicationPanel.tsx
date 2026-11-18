@@ -42,6 +42,7 @@ export function KnowledgeAdjudicationPanel(props: Props) {
   const [discardConfirmation, setDiscardConfirmation] = useState(false)
   const discardTrigger = useRef<HTMLButtonElement>(null), resumeButton = useRef<HTMLButtonElement>(null)
   const firstSource = useRef<HTMLSelectElement>(null), wasDiscarding = useRef(false)
+  const messageRef = useRef<HTMLParagraphElement>(null)
   const discardHeading = useId()
   const operationId = useRef(crypto.randomUUID())
   const lock = useRef(false), mounted = useRef(false), live = useRef(props)
@@ -76,6 +77,11 @@ export function KnowledgeAdjudicationPanel(props: Props) {
     live.current.onDirtyChange(dirty)
     live.current.onDraftChange(dirty ? draft : null)
   }, [dirty, draft])
+  useEffect(() => {
+    if (!message) return
+    messageRef.current?.focus({ preventScroll: true })
+    messageRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [message])
   useEffect(() => {
     if (discardConfirmation) {
       resumeButton.current?.focus({ preventScroll: true })
@@ -144,7 +150,7 @@ export function KnowledgeAdjudicationPanel(props: Props) {
             </option>)}</select></label>
             {selected ? <>
               <strong><StudioIcon name="read" size={18} />{sourceTitle(selected, book)}</strong>
-              <blockquote>{selected.quote}</blockquote>
+              <div className={styles.evidenceQuote} role="region" aria-label={`证据 ${side} 固定引文`} tabIndex={0}><blockquote>{selected.quote}</blockquote></div>
               <small>{selected.sourceType === 'chapter_text' ? `${selected.referenceState === 'historical' ? '引用历史稿' : '引用固定正文稿'} · ${selected.validity === 'valid' ? '出处可查' : '出处待复核'}` : '手工来源记录，不代表正文事实'}</small>
               {selected.sourceType === 'chapter_text' && <><code>修订 {selected.revisionId}<br />段落 {selected.blockId}</code>
                 <button className={shared.textButton} type="button" disabled={disabled} title={blockedReason} onClick={() => props.onShowSource(selected)}>查看此版本原文</button></>}
@@ -161,18 +167,18 @@ export function KnowledgeAdjudicationPanel(props: Props) {
           <StudioIcon name={resolutionIcons[value]} size={20} />{resolutionLabels[value]}
         </button>)}
       </div>
-      {preview && resolution && <section className={styles.confirmation} aria-label="确认裁决">
+      {preview && resolution && <section className={styles.confirmation} data-resolution={resolution} aria-label="确认裁决">
         <h4>{resolutionLabels[resolution]}</h4>
         <p>{resolution === 'intentional' ? '当前说明与采纳状态保留，冲突记为作者已解释，请说明这一安排。' : `将当前说明替换为证据 ${resolution === 'keep_a' ? 'A' : 'B'} 的引文，记为作者已采纳、冲突已解释。知识性质、档案与两侧原出处保留。`}</p>
-        <div className={styles.fieldPreview}><div><h5>当前说明</h5><p>{detail.summary || '尚未填写说明。'}</p></div><div><h5>裁决后说明</h5><p>{preview.summary || '尚未填写说明。'}</p></div></div>
+        <div className={styles.fieldPreview}><div><h5>当前说明</h5><p role="region" aria-label="当前条目说明" tabIndex={0}>{detail.summary || '尚未填写说明。'}</p></div><div><h5>裁决后说明</h5><p role="region" aria-label="裁决后条目说明" tabIndex={0}>{preview.summary || '尚未填写说明。'}</p></div></div>
         <label>裁决说明{resolution === 'intentional' ? '（必填）' : '（选填）'}<textarea rows={3} maxLength={2000} value={note} required={resolution === 'intentional'} disabled={disabled || archived} title={blockedReason ?? (archived ? '作品已归档，当前仅可查阅裁决历史' : undefined)} onChange={(event) => { setNote(event.target.value); changed() }} /></label>
         <label className={`${shared.checkLabel} ${styles.confirmCheck}`}><input type="checkbox" checked={confirmed} disabled={disabled || archived} title={blockedReason ?? (archived ? '作品已归档，当前仅可查阅裁决历史' : undefined)} onChange={(event) => setConfirmed(event.target.checked)} />我已核对两侧固定来源与修改结果，确认保存此裁决。</label>
         <button className={shared.primaryButton} type="submit" aria-busy={writing} title={saveReason} disabled={disabled || archived || stale || !confirmed || (resolution === 'intentional' && !note.trim())}>
           {writing ? <span className={`${shared.spinner} ${styles.saving}`} aria-hidden="true" /> : <StudioIcon name="save" size={18} />}{writing ? '正在保存裁决…' : '确认保存裁决'}
         </button>
       </section>}
-      {message && <p className={shared.formError} role="alert">{message}</p>}
-      {dirty && <div className={styles.draftActions}><span role="status">裁决尚未保存</span><button ref={discardTrigger} className={shared.button} type="button" disabled={disabled} title={blockedReason} onClick={() => { if (!disabled && !lock.current) setDiscardConfirmation(true) }}>放弃本次裁决</button></div>}
+      {message && <p ref={messageRef} className={shared.formError} role="alert" tabIndex={-1}>{message}</p>}
+      {dirty && <div className={styles.draftActions}><span role="status">{writing ? '正在保存裁决，请等待原回执' : '裁决尚未保存'}</span><button ref={discardTrigger} className={shared.button} type="button" disabled={disabled} title={blockedReason} onClick={() => { if (!disabled && !lock.current) setDiscardConfirmation(true) }}>放弃本次裁决</button></div>}
     </form>
     {discardConfirmation && <section className={styles.discardConfirmation} role="alertdialog" aria-labelledby={discardHeading}
       onKeyDown={(event) => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); setDiscardConfirmation(false) } }}>
@@ -187,13 +193,14 @@ export function KnowledgeAdjudicationPanel(props: Props) {
       <h4><StudioIcon name="history" size={20} />已保存裁决 · {history.length}</h4>
       {history[0]?.revisionId === currentRevision?.id && <p className={shared.helpText} role="status">裁决已保存，两侧原出处和前后修订已留存。</p>}
       {!history.length && <p className={shared.helpText}>尚无已保存的独立裁决。</p>}
-      <ol>{history.slice(0, historyLimit).map((entry) => <li key={entry.id}>
+      <ol>{history.slice(0, historyLimit).map((entry) => <li key={entry.id} data-resolution={entry.resolution}>
         <details><summary><strong>{resolutionLabels[entry.resolution]}</strong><time dateTime={entry.createdAt}>{displayTime(entry.createdAt)}</time>
           <span>{entry.revisionId === currentRevision?.id ? '当前条目修订' : '固定历史裁决，之后已有条目修订'}</span></summary>
           <div className={styles.historyEvidence}>{[entry.sourceAId, entry.sourceBId].map((id, index) => {
             const source = detail.sources.find((value) => value.id === id)
             return <div key={id}><strong>证据 {index === 0 ? 'A' : 'B'}{source ? ` · ${sourceTitle(source, book)}` : ''}</strong>
-              <blockquote>{source?.quote ?? '来源身份无法核对，请重新读取。'}</blockquote>
+              <div className={styles.evidenceQuote} role="region" aria-label={`历史证据 ${index === 0 ? 'A' : 'B'} 固定引文`} tabIndex={0}><blockquote>{source?.quote ?? '来源身份无法核对，请重新读取。'}</blockquote></div>
+              {source?.sourceType === 'chapter_text' && <code>修订 {source.revisionId}<br />段落 {source.blockId}</code>}
               {source?.sourceType === 'chapter_text' && <button className={shared.textButton} type="button" disabled={disabled} title={blockedReason} onClick={() => props.onShowSource(source)}>查看此版本原文</button>}
             </div>
           })}</div>
