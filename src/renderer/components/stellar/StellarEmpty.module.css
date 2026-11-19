@@ -32,6 +32,11 @@
 :global(:root[data-studio-theme='stellar']) .empty[data-tone='warning'] .actions > button:first-child { background: var(--color-warning); border-color: var(--color-warning); color: var(--color-accent-ink); }
 :global(:root[data-studio-theme='stellar']) .empty[data-tone='model'] .actions > button:first-child { background: color-mix(in srgb,var(--empty-tone) 18%,var(--bg-surface)); border-color: var(--empty-tone); color: var(--color-ink); }
 :global(:root[data-studio-theme='stellar']) .empty[data-tone='danger'] .actions > button:first-child { background: var(--color-danger); border-color: var(--color-danger); color: var(--color-accent-ink); }
+.empty .actions > button[aria-busy='true'],
+:global(:root[data-studio-theme='stellar']) .empty[data-tone] .actions > button[aria-busy='true'] { border-color: var(--color-line-strong); background: var(--bg-raised); color: var(--color-ink-secondary); opacity: 1; cursor: progress; }
+.actions > button[aria-busy='true']::before { content: ''; width: var(--control-spinner-size); height: var(--control-spinner-size); flex: 0 0 var(--control-spinner-size); border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: emptySpin 800ms linear infinite; }
+.actions > button[aria-busy='true'] > svg { display: none; }
+@keyframes emptySpin { to { transform: rotate(360deg); } }
 /* 状态提示与正文共存；限制占高并从顶部滚动，低窗口中仍能访问全部操作。 */
 .empty[data-compact='true'] { flex: 0 1 auto; justify-content: flex-start; min-height: 0; max-height: 35%; margin: var(--space-3) var(--space-5); padding: var(--space-4); gap: var(--space-2); overflow: auto; overscroll-behavior: contain; }
 .empty[data-compact='true'] > * { flex-shrink: 0; }
@@ -39,6 +44,7 @@
 .empty[data-compact='true'] .title { font-size: var(--text-lg); }
 .empty[data-compact='true'] .hint { margin-top: var(--space-2); padding-top: var(--space-2); }
 .empty:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .actions > button[aria-busy='true']::before { animation: none; } }
 @media (max-width:599px) {
   .empty { padding: var(--space-6) var(--space-4); }.empty .title { font-size: var(--text-lg); }
   .empty[data-compact='true'] { margin: var(--space-2); padding: var(--space-3); }

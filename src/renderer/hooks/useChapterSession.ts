@@ -54,7 +54,8 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
       while (current.current.chapter && current.current.dirty) {
         const captured = uncertainSave.current?.captured ?? current.current
         if (captured.composing || !captured.chapter) return false
-        publish({ ...current.current, saving: true, error: null })
+        // 重试时保留错误上下文，避免提示和按钮提前卸载；明确结果再更新错误状态。
+        publish({ ...current.current, saving: true })
         try {
           let result: Result<SaveChapterOutput>
           if (uncertainSave.current) {
@@ -206,5 +207,6 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
     }
   }, [flush, stopTimer])
 
-  return { session, changed, setComposing, load, updateMetadata, flush, isComposing, getCurrent, resetAfterRecovery, pauseAutoSave }
+  // 回执身份异常后仍可能结果未知；界面须沿实际原请求状态提示核对，不能误导重发。
+  return { session, hasUncertainSave: Boolean(uncertainSave.current), changed, setComposing, load, updateMetadata, flush, isComposing, getCurrent, resetAfterRecovery, pauseAutoSave }
 }

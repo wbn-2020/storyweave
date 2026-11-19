@@ -1412,6 +1412,7 @@ export function App({ api }: Props) {
   const workspaceLockedReason = busyReason ?? (bookRecoveryLocked ? '恢复操作尚未确认，请先完成核对' : undefined)
   const composingReason = session.session.composing ? '输入法处理中，请先完成当前输入' : undefined
   const savingReason = session.session.saving ? '正在保存当前章节，请稍候' : undefined
+  const checkingSavedReceipt = session.hasUncertainSave
   const archivedReason = archived ? '归档作品仅供查阅，请先在作品资料中解除归档' : undefined
   const recoveryActionReason = !api ? '本地服务未连接' : savingReason ?? composingReason
     ?? (recoveryBusy ? '正在处理草稿恢复，请稍候' : checkingReceipt ? '正在核对原请求，请稍候' : busy && !pendingMessage ? busyReason : undefined)
@@ -1419,7 +1420,7 @@ export function App({ api }: Props) {
   const saveHint = composingReason ?? savingReason ?? busyReason
     ?? (!session.session.dirty ? '当前章节已保存，无需重复保存'
       : session.session.error?.code === 'REVISION_CONFLICT' ? '正文版本冲突，请打开草稿与服务恢复'
-        : session.session.error?.code === 'REQUEST_TIMEOUT' || session.session.error?.code === 'SERVICE_UNAVAILABLE' ? '核对上次保存回执 · Ctrl+S'
+        : checkingSavedReceipt ? '核对上次保存回执 · Ctrl+S'
           : session.session.error ? '重试保存当前章节 · Ctrl+S' : '保存 · Ctrl+S')
   const navigation = <>
     <nav className={styles.nav} aria-label="工作室主导航">{primaryNav.map((item) => <StellarTooltip key={item.id} placement="right"><button className={`${styles.navItem} ${item.active ? styles.navItemActive : ''}`} type="button"
@@ -1502,6 +1503,27 @@ export function App({ api }: Props) {
   ]
 
   const writingVisible = studioView === 'write' && !isCanvasView && Boolean(book)
+  const retrySaveLabel = session.session.saving
+    ? checkingSavedReceipt ? '正在核对回执…' : '正在重试保存…'
+    : storageReason ? '处理空间后重试' : checkingSavedReceipt ? '核对保存回执' : '重试'
+  const retryChapterSave = async (trigger: HTMLButtonElement) => {
+    const captured = session.getCurrent().chapter
+    const notice = trigger.closest<HTMLElement>('section[role="alert"]')
+    const ownedFocus = document.activeElement === trigger
+    const saving = session.flush()
+    // 禁用按钮后焦点暂留在可滚动提示区；成功后仅恢复仍属于本次操作的焦点。
+    if (ownedFocus) requestAnimationFrame(() => {
+      if (notice?.isConnected && (document.activeElement === trigger || document.activeElement === document.body)) notice.focus({ preventScroll: true })
+    })
+    if (!await saving || !ownedFocus) return
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const current = session.getCurrent().chapter
+      if (!captured || current?.bookId !== captured.bookId || current.id !== captured.id || document.querySelector('dialog[open]')) return
+      if (document.activeElement === trigger || document.activeElement === notice || document.activeElement === document.body) {
+        manuscriptScroll.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus({ preventScroll: true })
+      }
+    }))
+  }
   const homeVisible = studioView === 'home' && !isCanvasView
   const toggleOutline = () => {
     if (outlineDrawer.current?.getClientRects().length) setOutlineOpen(false)
@@ -1600,15 +1622,15 @@ export function App({ api }: Props) {
       {display.warning && !hasBlockingDialog && <div className={styles.notice} role="status"><span>{display.warning}</span><button className={styles.receiptButton} type="button" disabled={busy || session.session.composing} onClick={display.retrySave}>保存当前显示偏好</button></div>}
       {pendingMessage && <div className={styles.notice} role="alert"><span>{modal?.kind === 'export' && message ? `${message} ` : ''}{pendingMessage}</span><button className={styles.receiptButton} type="button" aria-busy={checkingReceipt} onClick={() => void checkMutationReceipt()} disabled={checkingReceipt || recoveryBusy}>{checkingReceipt ? '正在核对…' : '核对回执'}</button></div>}
       {session.session.error && <StellarEmpty compact role="alert" heading="h2" icon={storageReason ? 'database' : 'warning'} hintIcon="refresh"
-        tone={storageReason ? 'default' : ['REVISION_CONFLICT', 'REQUEST_TIMEOUT', 'SERVICE_UNAVAILABLE'].includes(session.session.error.code) ? 'warning' : 'danger'}
+        tone={storageReason ? 'default' : checkingSavedReceipt || session.session.error.code === 'REVISION_CONFLICT' ? 'warning' : 'danger'}
         title={storageReason === 'disk-full' ? '磁盘空间不足' : storageReason === 'database-full' ? '数据库可用空间不足' : saveLabel(session.session)} description={session.session.error.message}
         hint={storageReason === 'disk-full' ? '请保留窗口；检查书库所在磁盘的可用空间，或将草稿副本另存到其他本地磁盘。'
           : storageReason === 'database-full' ? '请保留窗口；检查数据库容量限制及临时存储空间，或将草稿副本另存到其他本地磁盘。'
           : session.session.error.code === 'REVISION_CONFLICT' ? '请从“草稿与恢复”另存后重载磁盘版本。'
-          : session.session.error.code === 'REQUEST_TIMEOUT' || session.session.error.code === 'SERVICE_UNAVAILABLE' ? '先核对原保存回执，未获确认前请保留窗口和草稿。' : '当前草稿仍在窗口中，可重试保存或另存草稿副本。'}>
+          : checkingSavedReceipt ? '先核对原保存回执，未获确认前请保留窗口和草稿。' : '当前草稿仍在窗口中，可重试保存或另存草稿副本。'}>
         {session.session.error.code !== 'REVISION_CONFLICT' && <button className={styles.primaryButton} type="button" aria-busy={session.session.saving}
-          onClick={() => void session.flush()} disabled={!api || busy || archived || bookRecoveryLocked || hasBlockingDialog || !session.session.dirty || session.session.saving || session.session.composing}>
-          <StudioIcon name="refresh" size={20} />{storageReason ? '处理空间后重试' : session.session.error.code === 'REQUEST_TIMEOUT' || session.session.error.code === 'SERVICE_UNAVAILABLE' ? '核对保存回执' : '重试'}
+          onClick={(event) => void retryChapterSave(event.currentTarget)} disabled={!api || busy || archived || bookRecoveryLocked || hasBlockingDialog || !session.session.dirty || session.session.saving || session.session.composing}>
+          <StudioIcon name="refresh" size={20} />{retrySaveLabel}
         </button>}
         <button className={session.session.error.code === 'REVISION_CONFLICT' ? styles.primaryButton : styles.button} type="button"
           onClick={() => openRecovery()} disabled={!api || hasBlockingDialog || session.session.saving || session.session.composing || recoveryBusy || checkingReceipt || (busy && !pendingMessage)}>
