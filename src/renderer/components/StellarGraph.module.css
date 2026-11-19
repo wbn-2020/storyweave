@@ -129,6 +129,14 @@
 .relationshipViewportShell { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: var(--space-3); isolation: isolate; background: radial-gradient(ellipse at 64% 70%,var(--stellar-ai-haze),transparent 66%),radial-gradient(ellipse at 24% 86%,var(--stellar-haze),transparent 62%); }
 .relationshipViewportShell::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .8; background: radial-gradient(1px 1px at 12% 18%,var(--stellar-star),transparent),radial-gradient(1px 1px at 45% 31%,var(--stellar-star),transparent),radial-gradient(1px 1px at 73% 16%,var(--stellar-star),transparent),radial-gradient(1px 1px at 88% 62%,var(--stellar-star),transparent),radial-gradient(1px 1px at 25% 74%,var(--stellar-star),transparent),radial-gradient(1px 1px at 60% 90%,var(--stellar-star),transparent); background-size: 191px 163px,227px 251px,281px 181px,211px 293px,337px 211px,271px 317px; }
 .relationshipViewport { grid-column: 1 / -1; grid-row: 1; min-width: 0; overflow: auto; height: clamp(400px,calc(100dvh - 304px),960px); overscroll-behavior: contain; touch-action: none; cursor: grab; }
+/* 详情列压缩了画布宽度，图例与动作各占一行，避免落到底栏下。 */
+@media (width >= 1000px) {
+  :global([data-view='relationships'][data-selected='true']) .relationshipViewportShell { grid-template-columns: minmax(0,1fr); }
+  :global([data-view='relationships'][data-selected='true']) .relationshipViewport { height: clamp(240px,calc(100dvh - 408px),960px); }
+  :global([data-view='relationships'][data-selected='true']) .relationshipLegend { grid-column: 1; grid-row: 2; }
+  :global([data-view='relationships'][data-selected='true']) .relationshipActions { grid-column: 1; grid-row: 3; justify-self: end; max-width: 100%; }
+}
+@media (width >= 1200px) { :global([data-view='relationships'][data-selected='true']) .relationshipViewport { height: clamp(240px,calc(100dvh - 360px),960px); } }
 .relationshipViewport:active { cursor: grabbing; }
 .relationshipStage { display: block; min-width: 640px; max-width: none; user-select: none; touch-action: none; }
 .relationshipOrbits { fill: none; stroke: var(--color-line-strong); stroke-width: .6; pointer-events: none; }

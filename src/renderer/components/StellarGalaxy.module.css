@@ -83,7 +83,8 @@
 .relationshipPage .viewModes > summary { display: block; min-height: var(--control-height); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--color-muted); cursor: pointer; background: var(--bg-surface); }
 .relationshipPage .viewModes[open] .viewSwitch { position: absolute; top: 100%; right: 0; display: grid; width: 200px; padding: var(--space-2); margin: 0; border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--bg-surface); box-shadow: var(--shadow-md); }
 .relationshipPage .viewModes[open] .viewSwitch > button { justify-content: flex-start; border: 0; }
-.panel[data-view='relationships'] { display: flex; flex-direction: column; }
+/* 详情异步增高时保留主动选择的标题位置，避免浏览器锚定后面的筛选区。 */
+.panel[data-view='relationships'] { display: flex; flex-direction: column; overflow-anchor: none; }
 .panel[data-view='relationships'] .queryControls { order: 1; }
 .panel[data-view='relationships'] .graphWorkspace { display: flex; flex-direction: column; }
 .panel[data-view='relationships'] .overview { width: 100%; }
@@ -193,6 +194,12 @@
 @media (max-width:799px) { .graphWorkspace { display: flex; flex-direction: column; } .overview,.listPane,.detailPane { width: 100%; } .detailPane { padding: var(--space-4) 0; border-left: 0; border-top: 1px solid var(--color-line); max-height: none; } }
 @media (width < 1000px) { .galaxyPage .intro { position: static; margin-bottom: var(--space-2); } .galaxyPage .viewModes { right: 88px; } .panel[data-view='galaxy'] .graphWorkspace { display: flex; flex-direction: column; } .panel[data-view='galaxy'] .detailPane { max-height: 600px; } }
 @media (width < 1000px) { .relationshipPage .intro { position: static; padding-bottom: var(--space-2); } .relationshipPage .viewModes { right: 88px; } .relationshipPage .canvasActions { justify-content: flex-end; } }
+/* 选中对象后保留关系画布，把长详情限制在独立滚动列；窄屏沿用上下布局。 */
+@media (width >= 1000px) {
+  .panel[data-view='relationships'][data-selected='true'] .graphWorkspace { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: var(--space-4); }
+  .panel[data-view='relationships'][data-selected='true'] .detailPane { grid-column: 2; grid-row: 1 / span 2; max-height: calc(100dvh - 192px); padding: var(--space-4); border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: var(--bg-surface); overflow: auto; }
+}
+@media (1000px <= width < 1200px) { .panel[data-view='relationships'][data-selected='true'] .graphWorkspace { grid-template-columns: minmax(0,1fr) 280px; } }
 @media (max-width:499px) { .filters,.nodes { grid-template-columns: minmax(0,1fr); } }
 @media (max-width:699px) { .radarPage .intro .actions { position: static; }.radarPage .intro { align-items: flex-start; flex-direction: column; gap: var(--space-3); } }
 @media (forced-colors: active) {

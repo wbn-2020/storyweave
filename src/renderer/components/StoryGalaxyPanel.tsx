@@ -254,8 +254,15 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
   }, [api, bookId, busy, clearReading, invalidateSnapshot, listing, retainTimeout])
 
   useEffect(() => {
-    // 主动选择提交后才聚焦新标题；异步详情回包不改变焦点。
-    if (detailJump > 0) detailHeading.current?.focus()
+    // 宽屏关系详情与画布并列，聚焦时保留画布；窄屏仍滚到详情，异步回包不抢焦点。
+    if (detailJump > 0) {
+      const heading = detailHeading.current
+      const relationship = heading?.closest('[data-view="relationships"]')
+      const besideGraph = relationship && window.matchMedia('(min-width: 1000px)').matches
+      if (besideGraph) heading?.closest('section')?.scrollTo({ top: 0 })
+      heading?.focus({ preventScroll: Boolean(relationship) })
+      if (relationship && !besideGraph) heading?.scrollIntoView({ block: 'start' })
+    }
   }, [detailJump])
 
   useEffect(() => { if (hasDraft) relationHeading.current?.focus() }, [hasDraft])
@@ -582,7 +589,7 @@ function GalaxyContent({ api, book, busy, error, onClose, onOpenKnowledge, onOpe
         <button type="button" className={shared.button} disabled={disabled} onClick={() => leave(() => onOpenRecords())}>故事记录</button>
       </div>
     </div> : undefined}>
-    <div className={styles.panel} data-view={view}>
+    <div className={styles.panel} data-view={view} data-selected={Boolean(selected)}>
       {view !== 'matrix' && <div className={styles.intro}>
         <div>{view === 'radar' ? <p>全生命周期 · 精准追踪每一条伏笔</p> : <><p>《{book.book.title}》的故事对象</p><span>作者全知视图 · 星海与关系画布</span></>}</div>
         <div className={styles.actions}>
