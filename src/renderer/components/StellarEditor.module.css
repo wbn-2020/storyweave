@@ -24,7 +24,7 @@
 .content :global(.manuscript-search-current) { background: var(--paper-current-match); color: var(--paper-current-ink); outline: 1px solid var(--paper-current-line); }
 .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--paper-line); background: var(--paper-search-panel); border-radius: var(--radius-xl) var(--radius-xl) 0 0; color: var(--paper-control-ink); }
 .toolGroup { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
-.toolGroup button { display: grid; place-items: center; min-width: var(--control-compact); min-height: var(--control-compact); padding: var(--space-1) var(--space-2); background: transparent; color: var(--paper-control-ink); border: 0; border-radius: var(--radius-md); font-size: var(--text-xs); }
+.toolGroup button { display: grid; place-items: center; min-width: var(--control-compact); min-height: var(--control-compact); padding: var(--space-1) var(--space-2); background: transparent; color: var(--paper-control-ink); border: 0; border-radius: var(--radius-md); font-size: var(--text-md); }
 .toolGroup button:hover:not(:disabled) { background: var(--paper-control-hover); }.toolGroup button:is([aria-pressed='true'],[aria-expanded='true']) { color: var(--paper-control-active-ink); background: var(--paper-control-hover); }
 .searchPanel { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--paper-line); background: var(--paper-search-panel); font: var(--text-xs)/1.8 var(--font-ui); }
 .searchRow { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }.searchRow + .searchRow { margin-top: var(--space-3); }

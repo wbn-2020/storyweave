@@ -61,6 +61,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const roomHeading = useRef<HTMLHeadingElement>(null)
   const previewHeading = useRef<HTMLHeadingElement>(null)
   const configurationTrigger = useRef<HTMLButtonElement>(null)
+  const configurationFocusPending = useRef(false)
   const callbacks = useRef({ onDirtyChange, onBookChange, onAdopted })
   callbacks.current = { onDirtyChange, onBookChange, onAdopted }
   const guard = useRef({ tool: false, forms: false, running: false, opening: false, operation: false })
@@ -109,6 +110,17 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
     report()
   }, [seedDirty, configDirty, run?.state, opening])
   useEffect(() => { setCopied(false) }, [seed, configuration, snapshot, tool.pending?.error.requestId])
+  useEffect(() => {
+    if (!configurationFocusPending.current || locked || configOpen) return
+    // 模型保存的回执可能早于操作解锁，按钮可聚焦后再恢复入口。
+    const frame = requestAnimationFrame(() => {
+      const trigger = configurationTrigger.current
+      if (!trigger || trigger.disabled) return
+      configurationFocusPending.current = false
+      trigger.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [locked, configOpen])
   useEffect(() => {
     if (step !== 2 || !draftReady || run?.state === 'running') return
     // 向导卸载时 Dialog 会恢复入口焦点；下一帧再交给已保存草稿或固定发送预览。
@@ -193,7 +205,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
           setConnections((current) => [...current.filter((item) => item.id !== value.id).map((item) => value.isDefault ? { ...item, isDefault: false } : item), value])
           setConfiguration(fieldsOf(value)); setDefault(value.isDefault); setDefaultConfirmed(false); setConnectionId(value.id); setConnectionsReady(true); setApiKey(''); setConfigOpen(false)
           if (input.apiKey) setKeyIds((ids) => [...new Set([...ids, value.id])])
-          requestAnimationFrame(() => configurationTrigger.current?.focus({ preventScroll: true }))
+          configurationFocusPending.current = true
         }, '模型配置已保存。若刚才核对了超时回执，请重新填写会话密钥并保存一次。')
     } catch (error) { tool.setError(error instanceof DomainError ? error.detail.message : '请检查模型配置。'); return false }
   }

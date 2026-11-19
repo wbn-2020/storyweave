@@ -63,6 +63,12 @@
 .comparisonTable td:nth-child(2) { color: var(--color-muted); }
 .comparisonTable :is(th,td):nth-child(3) { color: var(--color-accent); background: var(--color-accent-soft); }
 .adoptionRecord { padding: var(--space-4); border: 1px solid var(--color-line-strong); border-radius: var(--radius-lg); background: var(--bg-subtle); }
+.adoptionRecord:not(details) { gap: var(--space-2); }
+.adoptionRecord > p { margin-block: 0; }
+.adoptionRecord > div:has(> h3) { margin-bottom: var(--space-2); padding-bottom: 0; }
+.adoptionRecord .recordIdentity { margin-block: 0; }
+.recordIdentity { margin-block: var(--space-2); min-width: 0; }
+.recordIdentity > summary { min-height: var(--control-compact); color: var(--color-ink-secondary); font-size: var(--text-xs); cursor: pointer; }
 .adoptionRecord[data-action='ignore'] { border-color: var(--color-muted); }
 .ignoredBadge { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3); margin-block: var(--space-2); border: 1px solid currentColor; border-radius: var(--radius-md); color: var(--color-muted); font: 600 var(--text-md)/1.5 var(--font-ui); }
 .targetPicker { display: grid; min-width: 0; gap: var(--space-3); margin-block: var(--space-4); }

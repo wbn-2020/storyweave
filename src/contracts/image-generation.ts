@@ -1,5 +1,5 @@
 import { DomainError, isRecord, requiredId, requiredInteger, type Result } from './api'
-import { parseAiConnection, type AiConnection, type AiUsage } from './ai'
+import { parseAiConnection, type AiConnection, type AiConnectionPage, type AiUsage } from './ai'
 import { MAX_BOOK_MEDIA_ITEM_BYTES, validateBoundedImagePayload } from './book-media'
 
 export const IMAGE_PROMPT_LIMIT = 8000
@@ -31,7 +31,9 @@ export interface ImageGenerationSummary {
   title: string; model: string; state: ImageGenerationState; sha256: string | null; createdAt: string
 }
 export interface ImageGenerationPage { bookId: string; runs: ImageGenerationSummary[]; warning: string | null }
+export interface ImageGenerationConnectionPage extends AiConnectionPage { defaultConnectionId: string | null }
 export interface ImageGenerationApi {
+  listImageGenerationConnections(input: { bookId: string }): Promise<Result<ImageGenerationConnectionPage>>
   listImageGenerations(input: { bookId: string }): Promise<Result<ImageGenerationPage>>
   getImageGeneration(input: ImageGenerationReadInput): Promise<Result<ImageGenerationRun>>
   startImageGeneration(input: ImageGenerationInput): Promise<Result<ImageGenerationRun>>

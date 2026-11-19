@@ -73,7 +73,7 @@ function FixedCitations({ citations }: { citations: AiMemoryCitation[] }) {
   return <>
     <div className={layout.sectionHeading}><h4>固定正文引文</h4><span>{citations.length} 处</span></div>
     <ul className={layout.sources}>{citations.map((citation, index) => <li key={`${citation.blockId}:${index}`}>
-      <p className={layout.sourceIds}>段落 {citation.blockId}</p><blockquote>{citation.quote}</blockquote>
+      <details className={archive.recordIdentity}><summary>段落标识</summary><p className={layout.sourceIds}>{citation.blockId}</p></details><blockquote>{citation.quote}</blockquote>
     </li>)}</ul>
   </>
 }
@@ -313,7 +313,7 @@ function AiMemoryReviewSession({ api, run, drafts, disabled, error, onChange, on
         <p className={styles.note}>{actionLabels[entry.action ?? 'create']}{entry.changed === false && entry.action !== 'ignore' ? ' · 来源已存在，本次无知识变更' : ''}</p>
         {entry.action === 'ignore' && <span className={archive.ignoredBadge}><StudioIcon name="close" size={20} />已忽略</span>}
         <div className={layout.labels}><span>{kindLabels[entry.fields.kind]}</span><span>{natureLabels[entry.fields.nature]}</span><span>{conflictLabels[entry.fields.conflictState]}</span></div>
-        {entry.itemId && <p className={layout.sourceIds}>知识条目 {entry.itemId}{entry.resultingRevisionId ? ` · 保存修订 ${entry.resultingRevisionId}` : ''}</p>}
+        {entry.itemId && <details className={archive.recordIdentity}><summary>知识条目与保存修订</summary><p className={layout.sourceIds}>知识条目 {entry.itemId}{entry.resultingRevisionId ? ` · 保存修订 ${entry.resultingRevisionId}` : ''}</p></details>}
         {entry.action === 'revise' && entry.previousFields && <MemoryFieldChanges before={entry.previousFields} after={entry.fields} />}
         {entry.previousFields && <details><summary>修订前字段</summary><pre>{JSON.stringify(entry.previousFields, null, 2)}</pre></details>}
         {entry.fields.aliases.length > 0 && <p className={styles.note}>采用时的别名：{entry.fields.aliases.join('、')}</p>}

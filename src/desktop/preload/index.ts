@@ -72,6 +72,7 @@ const api: StudioApi = {
   readBookMedia: (input) => invoke('book.media.read', input),
   saveBookMedia: (input) => invoke('book.media.save', input),
   exportBookMedia: (input) => invoke('book.media.exportFile', input),
+  listImageGenerationConnections: (input) => invoke('book.image.connections', input),
   listImageGenerations: (input) => invoke('book.image.list', input),
   getImageGeneration: (input) => invoke('book.image.get', input),
   startImageGeneration: (input) => invoke('book.image.start', input),

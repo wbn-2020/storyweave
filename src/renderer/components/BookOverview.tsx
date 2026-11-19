@@ -10,8 +10,8 @@ import styles from './StudioPages.module.css'
 export type BookDestination = 'write' | 'living' | 'forge' | 'galaxy' | 'workbench' | 'knowledge' | 'timeline' | 'story'
   | 'notes' | 'media' | 'reader' | 'memory' | 'aiMemoryTasks' | 'aiSummary' | 'export' | 'bookDetails' | 'calendar' | 'world' | 'abilities' | 'weave'
 export const BOOK_DESTINATIONS: readonly { id: BookDestination; label: string; icon: StudioIconName }[] = [
-  { id: 'write', label: '写作台', icon: 'pen' }, { id: 'living', label: '大纲沙盘', icon: 'compass' },
-  { id: 'forge', label: '角色与世界', icon: 'user' }, { id: 'galaxy', label: '记忆星图', icon: 'galaxy' },
+  { id: 'write', label: '写作台', icon: 'pen' }, { id: 'living', label: '大纲沙盘', icon: 'cube' },
+  { id: 'forge', label: '角色与世界', icon: 'users' }, { id: 'galaxy', label: '记忆星图', icon: 'spark' },
   { id: 'workbench', label: '章节规划与审稿', icon: 'list' }, { id: 'knowledge', label: '故事设定', icon: 'globe' },
   { id: 'timeline', label: '故事年表', icon: 'timeline' }, { id: 'story', label: '事件与伏笔', icon: 'workflow' },
   { id: 'notes', label: '素材与便笺', icon: 'notes' }, { id: 'media', label: '封面与立绘', icon: 'image' },

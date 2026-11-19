@@ -207,7 +207,7 @@ function OutputReview({ run, text, disabled, onChange }: { run: AiRun; text: str
       <div>{run.kind === 'rewrite' && <h4>新稿 · 作者可编辑</h4>}{editable ? <textarea className={styles.acceptedText} value={text} maxLength={AI_OUTPUT_LIMIT} rows={14} disabled={disabled} aria-label="作者审阅后的采用内容" onChange={(event) => onChange(event.target.value)} /> : <pre className={styles.original}>{(run.acceptedText ?? run.outputText) || '尚无输出。'}</pre>}</div>
     </div>
     {run.state === 'running' && <p className={styles.note} role="status">输出随检查点更新。取消会保留已经保存的部分内容。</p>}
-    {['failed', 'cancelled', 'interrupted'].includes(run.state) && <p className={styles.note}>已保留部分输出与本次输入。只有成功结束的提议可直接采用；重新生成需要新建预览并再次确认发送。</p>}
+    {['failed', 'cancelled', 'interrupted'].includes(run.state) && <p className={styles.note}>{run.outputText.length ? '已保留部分输出与本次输入。' : '已保留本次输入，未产生输出。'}只有成功结束的提议可直接采用；重新生成需要新建预览并再次确认发送。</p>}
     {run.usage && <p className={styles.note}>接口返回用量：输入 {run.usage.inputTokens ?? '未知'} · 输出 {run.usage.outputTokens ?? '未知'} · 总计 {run.usage.totalTokens ?? '未知'} tokens{run.finishReason ? ` · 结束原因 ${run.finishReason}` : ''}</p>}
   </section>
 }
@@ -329,6 +329,8 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   const localUnknown = Boolean(pending)
   const stopping = operation === '取消生成并保留输出'
   const runUnconfirmed = Boolean(localUnknown || pendingMessage || pollStopped || generating && run?.active === false)
+  // 零输出的失败或中止记录仍可保留作者决定，但不能提示已有可拒绝的正文提议。
+  const emptyStoppedRun = Boolean(run && ['failed', 'cancelled', 'interrupted'].includes(run.state) && !run.outputText.length)
   const runStateLabel = localUnknown || pendingMessage ? '操作结果待核对' : stopping ? '正在停止'
     : operation === '标记中断' ? '正在标记中断' : pollStopped ? '状态待核对'
     : generating && run?.active === false ? '离线待核对' : run ? stateLabels[run.state] : ''
@@ -1281,10 +1283,10 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
         </div>}
         {['failed', 'cancelled', 'interrupted'].includes(run.state) && run.context.purpose !== 'living' && run.context.purpose !== 'forge' && <div className={styles.actions}><button className={shared.primaryButton} type="button" disabled={blocked || archived || !taskCurrent} onClick={retryDraft}>重新准备本次要求</button><span className={styles.note}>保留这份记录，核对新预览后再发送。</span></div>}
         {activeGeneration && !runUnconfirmed && <p className={styles.note} role="status">{stopping ? '正在停止生成，已保存的输出将保留。' : run.outputCharacters ? `正在接收模型输出，已保存 ${run.outputCharacters.toLocaleString()} 字符。` : '正在等待模型首段输出…'}</p>}
-        {run.state === 'adopted' && run.context.purpose === undefined && <p className={styles.note} role="status">{run.kind === 'plan' ? '已采用为本章备注。' : run.kind === 'continue' ? '已追加至本章末尾，原稿历史已保留。' : '已替换本次选定段落，原稿历史已保留。'}</p>}
+        {run.state === 'adopted' && run.context.purpose === undefined && !isAiMemoryTask(run.kind) && <p className={styles.note} role="status">{run.kind === 'plan' ? '已采用为本章备注。' : run.kind === 'continue' ? '已追加至本章末尾，原稿历史已保留。' : '已替换本次选定段落，原稿历史已保留。'}</p>}
         <dl className={styles.runFacts}>
           <div><dt>连接与模型</dt><dd>{run.connectionName} · {run.model}</dd></div>
-          <div><dt>{run.state === 'prepared' ? '输入估算' : '已保存输出'}</dt><dd>{run.state === 'prepared' ? `${run.context.estimatedInputTokens.toLocaleString()} tokens` : `${run.outputCharacters.toLocaleString()} 字符`}</dd></div>
+          <div><dt>{run.state === 'prepared' ? '输入估算' : '输出字符'}</dt><dd>{run.state === 'prepared' ? `${run.context.estimatedInputTokens.toLocaleString()} tokens` : `${run.outputCharacters.toLocaleString()} 字符`}</dd></div>
         </dl>
         {!taskCurrent && <p className={styles.note}>这是其他章节的记录。回到对应章节后才能发送或采用。</p>}{run.error && <p className={shared.formError}>{run.error}</p>}
         <details key={`${run.id}:${run.state === 'prepared'}`} className={styles.fixedContext} open={run.state === 'prepared'}>
@@ -1306,10 +1308,10 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
         {run.state === 'succeeded' && run.context.purpose === undefined && !isAiMemoryTask(run.kind) && <><p className={styles.note}>{run.kind === 'plan' ? '采用后将规划追加至本章备注。' : run.kind === 'continue' ? '采用后将新稿追加至本章末尾，并保留原稿历史。' : '采用后将替换预览中选定的连续段落，并保留原稿历史。'}{outputDirty ? ' 当前改稿尚未保存；采用时会一并记录。' : ''}</p><div className={styles.actions}><button className={shared.primaryButton} type="button" aria-busy={operation === '采用作者审阅后的内容'} disabled={blocked || archived || !taskCurrent || !acceptedText.trim()} onClick={() => void adopt()}>{run.kind === 'plan' ? '采用为章节备注' : run.kind === 'continue' ? '采用并追加至章尾' : '采用并替换所选段落'}</button>{outputDirty && <button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard({ label: '放弃尚未采用的输出修改，恢复模型原提议？', proceed: () => { setAcceptedText(run.outputText); setOutputDirty(false) } })}>放弃改稿</button>}</div></>}
         {!['running', 'adopted', 'rejected'].includes(run.state) && <button className={`${shared.textButton} ${styles.reject}`} type="button" disabled={blocked || archived} onClick={() => {
           const target = { bookId: run.bookId, runId: run.id, expectedVersion: run.version }
-          setDiscard({ label: '拒绝这次提议并放弃尚未采用的输出修改？输入、原输出和拒绝记录都会保留。', proceed: () => void rejectRun(target) })
-        }}>作者拒绝这次提议</button>}
+          setDiscard({ label: emptyStoppedRun ? '不采用本次请求？固定输入和任务记录都会保留。' : '拒绝这次提议并放弃尚未采用的输出修改？输入、原输出和拒绝记录都会保留。', proceed: () => void rejectRun(target) })
+        }}>{emptyStoppedRun ? '不采用本次请求' : '作者拒绝这次提议'}</button>}
       </section>}
-      <details className={styles.history}><summary>本书提议记录 · 每页最多 30 条</summary><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage()}>最新记录</button>{history?.nextBefore && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage(history.nextBefore!)}>更早记录</button>}{before && <span className={styles.note}>正在查看历史分页</span>}</div>{history?.runs.length ? <ul>{history.runs.map((item) => <li key={item.id}><button className={styles.historyItem} type="button" disabled={blocked || generating} aria-current={run?.id === item.id ? 'true' : undefined} onClick={() => openHistory(item)}><span><strong>{item.chapterTitle} · {taskName(item.kind, item.purpose)}</strong><small>{item.connectionName} · {item.model} · {displayTime(item.createdAt)}</small></span><span>{stateLabels[item.state]}<small>{item.outputCharacters.toLocaleString()} 字符</small></span></button></li>)}</ul> : <p className={styles.note}>保存一次发送预览后，这里会留下输入、输出和作者决定。</p>}</details>
+      <details className={styles.history}><summary>本书提议记录 · 每页最多 30 条</summary><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage()}>最新记录</button>{history?.nextBefore && <button className={shared.button} type="button" disabled={blocked || generating} onClick={() => void historyPage(history.nextBefore!)}>更早记录</button>}{before && <span className={styles.note}>正在查看历史分页</span>}</div>{history?.runs.length ? <ul>{history.runs.map((item) => <li key={item.id}><button className={styles.historyItem} type="button" disabled={blocked || generating} aria-current={run?.id === item.id ? 'true' : undefined} onClick={() => openHistory(item)}><span><strong>{item.chapterTitle} · {taskName(item.kind, item.purpose)}</strong><small>{item.connectionName} · {item.model} · {displayTime(item.createdAt)}</small></span><span data-state={item.state}>{stateLabels[item.state]}<small>{item.outputCharacters.toLocaleString()} 字符</small></span></button></li>)}</ul> : <p className={styles.note}>保存一次发送预览后，这里会留下输入、输出和作者决定。</p>}</details>
       {archived && <p className={styles.note}>作品已归档，可查看已有记录；解除归档后再配置、生成或采用。</p>}
     </>}
     {discard && <section ref={discardNotice} tabIndex={-1} className={styles.discard} role="alert"><p>{discard.label}</p><div className={styles.actions}><button className={shared.button} type="button" disabled={blocked} onClick={() => setDiscard(null)}>继续保留</button><button className={shared.button} type="button" disabled={blocked} onClick={() => { const action = discard.proceed; setDiscard(null); action() }}>确认放弃并继续</button></div></section>}

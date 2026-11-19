@@ -6,12 +6,13 @@ import { MAX_BOOK_MEDIA_BYTES, MAX_BOOK_MEDIA_ITEMS, MAX_BOOK_MEDIA_ITEM_BYTES, 
 import {
   parseImageGenerationBookInput, parseImageGenerationInput, parseImageGenerationReadInput, parseImageGenerationRun,
   MAX_GENERATED_IMAGE_BYTES, MAX_IMAGE_RESULT_BYTES, imageGenerationSizes, matchesImageGenerationSize, usesHuantuImageAspect,
-  type ImageGenerationInput, type ImageGenerationPage, type ImageGenerationRun,
+  type ImageGenerationConnectionPage, type ImageGenerationInput, type ImageGenerationPage, type ImageGenerationRun,
 } from '../../contracts/image-generation'
 import { PendingAiResults, type PendingAiFile, type PendingAiPreflight } from './pending-ai-results'
 import type { AiSessions } from './ai-sessions'
 import type { ServiceClient } from './service-client'
 import { writeNewText } from '../file-access'
+import type { ProjectImageProvider } from './project-image-provider'
 
 interface Entry { run: ImageGenerationRun; file?: PendingAiFile; pending: boolean; preflight?: PendingAiPreflight }
 interface Active { entry: Entry; controller: AbortController; stop: 'cancelled' | 'timeout' | null }
@@ -54,6 +55,23 @@ export class ImageSessions {
   private working = false
   private warning: string | null = null
   private integrityFault = false
+
+  constructor(private readonly projectProvider: Result<ProjectImageProvider | null> = { ok: true, data: null }) {}
+
+  private async connections(bookId: string, service: ServiceClient, sessions: AiSessions): Promise<Result<ImageGenerationConnectionPage>> {
+    const provider = this.projectProvider
+    if (!provider.ok) return provider
+    const result = await sessions.handle('ai.connection.list', { bookId }, service) as Result<AiConnectionPage>
+    if (!result.ok) return result
+    const local = provider.data?.connection
+    if (local && result.data.connections.some(connection => connection.id === local.id)) return failure('REVISION_CONFLICT', '本书连接与项目生图连接编号冲突，请核对模型配置。')
+    // 项目连接只加入图片接口，避免生图密钥被文字协作或向量请求复用。
+    return { ok: true, data: { ...result.data,
+      connections: local ? [local, ...result.data.connections] : result.data.connections,
+      sessionKeyIds: local ? [local.id, ...result.data.sessionKeyIds] : result.data.sessionKeyIds,
+      defaultConnectionId: local?.id ?? null,
+    } }
+  }
 
   hasActive(includePending = true): boolean { return this.active !== null || this.working || includePending && [...this.entries.values()].some((entry) => entry.pending) }
   abortAll(): void { if (this.active) { this.active.stop = 'cancelled'; this.active.controller.abort() } }
@@ -118,6 +136,7 @@ export class ImageSessions {
           this.persist(entry, terminal(entry.run, 'interrupted', '上次图片请求未取得可确认的终态。不会自动重发；请核对提供方记录后再明确创建新任务。'))
         } else if (entry.pending) this.persist(entry, entry.run)
       }
+      if (command === 'book.image.connections') return await this.connections(parseImageGenerationBookInput(payload).bookId, service, sessions)
       if (command === 'book.image.list') {
         const { bookId } = parseImageGenerationBookInput(payload)
         await this.reconcile(bookId, service)
@@ -246,11 +265,13 @@ export class ImageSessions {
       if (person.data.bookId !== input.bookId || person.data.kind !== 'person' || person.data.id !== input.personId ||
         person.data.bookRevision !== input.expectedBookRevision) return failure('REVISION_CONFLICT', '关联人物身份、类型或作品版本已变化，请重新选择。')
     }
-    const page = await sessions.handle('ai.connection.list', { bookId: input.bookId }, service) as Result<AiConnectionPage>
+    const page = await this.connections(input.bookId, service, sessions)
     if (!page.ok) return page
     const found = page.data.connections.find((item) => item.id === input.connectionId)
     if (!found || found.version !== input.expectedConnectionVersion) return failure('REVISION_CONFLICT', '所选连接已变化，请重新读取连接后确认。')
-    const connection = parseAiConnection(found), key = sessions.sessionKey(this.root!, input.bookId, connection)
+    const connection = parseAiConnection(found)
+    const local = this.projectProvider.ok ? this.projectProvider.data : null
+    const key = local?.connection.id === connection.id ? local.apiKey : sessions.sessionKey(this.root!, input.bookId, connection)
     if (!imageGenerationSizes(connection).includes(input.size)) return failure('INVALID_INPUT', '所选提供方与模型不支持此请求画幅，请明确改选 3:4、1:1、3:2 或接口默认画幅；未发送请求。')
     if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(connection.baseUrl).hostname) && !key) return failure('FORBIDDEN', '请先在模型设置保存此连接的本次会话密钥。')
     const preflight = this.journal.preflight(this.root!)

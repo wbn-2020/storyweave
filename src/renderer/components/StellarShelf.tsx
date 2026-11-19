@@ -34,7 +34,7 @@ export function StellarBookCard({ api, scope, book, busy, onOpen, onWrite, onEdi
       </div>
     </button>
     {error && <div className={ui.error} role="status">{error}<button className={ui.ghost} type="button" disabled={busy} onClick={retry}>重试</button></div>}
-    <div className={styles.bookFoot}>{onEdit ? <button className={ui.ghost} type="button" disabled={busy} onClick={() => onEdit(book)} aria-label={`编辑${book.title}资料`} title="作品资料"><StudioIcon name="more" size={16} /></button> : <span>{displayTime(book.updatedAt)}</span>}<button className={ui.ghost} type="button" disabled={busy} onClick={() => onWrite(book.id)}>{book.archivedAt ? '打开阅读' : lifecycle === 'kickstarting' ? '继续孵化' : lifecycle ? '继续写作' : '打开作品'}<StudioIcon name="arrow" size={16} /></button></div>
+    <div className={styles.bookFoot}>{onEdit ? <button className={ui.ghost} type="button" disabled={busy} onClick={() => onEdit(book)} aria-label={`编辑${book.title}资料`} title="作品资料"><StudioIcon name="more" size={16} /></button> : <span>{displayTime(book.updatedAt)}</span>}<button className={book.archivedAt ? ui.button : ui.primary} type="button" disabled={busy} onClick={() => onWrite(book.id)}>{book.archivedAt ? '打开阅读' : lifecycle === 'kickstarting' ? '继续孵化' : lifecycle ? '继续写作' : '打开作品'}<StudioIcon name="arrow" size={16} /></button></div>
   </article>
 }
 

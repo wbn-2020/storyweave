@@ -59,14 +59,14 @@
 .lanePoint:hover:not(:disabled) { box-shadow: var(--shadow-glow); }
 .timeColumns { display: grid; padding: var(--space-5) var(--space-3) 0 104px; }
 .timeColumn { min-width: 0; }
-.timeColumn > h3 { display: grid; align-content: end; min-height: 64px; padding-inline: var(--space-3); font-size: var(--text-lg); color: var(--color-accent); }
+.timeColumn > h3 { display: grid; align-content: end; min-height: 64px; padding-inline: var(--space-3); font-size: var(--text-lg); color: var(--color-accent); text-align: center; }
 .timeColumn > h3 small { display: block; font: var(--text-xs)/1.5 var(--font-num); color: var(--color-muted); margin-top: var(--space-1); }
 .timeAxis { position: relative; height: var(--space-8); }
 .timeAxis::before { content: ''; position: absolute; top: 50%; inset-inline: 0; border-top: 1px solid var(--color-accent); }
-.timeAxis span { display: block; position: absolute; left: var(--space-6); top: calc(50% - var(--space-1)); width: var(--space-2); height: var(--space-2); transform: rotate(45deg); background: var(--color-accent); }
-.eventStack { display: grid; gap: var(--space-5); padding: var(--space-3); }
+.timeAxis span { display: block; position: absolute; left: 50%; top: calc(50% - var(--space-1)); width: var(--space-2); height: var(--space-2); transform: translateX(-50%) rotate(45deg); background: var(--color-accent); }
+.eventStack { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,260px),1fr)); gap: var(--space-3); padding: var(--space-3); }
 .eventStack[data-stagger='1'] { padding-top: calc(2 * var(--space-8)); }
-.eventCard { --event-color: var(--color-accent); display: flex; flex-direction: column; align-items: stretch; gap: var(--space-3); min-width: 0; min-height: 180px; padding: var(--space-4); border: 1px solid color-mix(in srgb,var(--event-color) 40%,var(--color-line)); border-radius: var(--radius-lg); background: linear-gradient(145deg,color-mix(in srgb,var(--event-color) 7%,var(--bg-subtle)),var(--bg-subtle)); color: var(--color-ink); text-align: left; }
+.eventCard { --event-color: var(--color-accent); display: flex; flex-direction: column; align-items: stretch; gap: var(--space-2); min-width: 0; min-height: 160px; padding: var(--space-4); border: 1px solid color-mix(in srgb,var(--event-color) 40%,var(--color-line)); border-radius: var(--radius-lg); background: linear-gradient(145deg,color-mix(in srgb,var(--event-color) 7%,var(--bg-subtle)),var(--bg-subtle)); color: var(--color-ink); text-align: left; }
 .eventCard[data-tone='1'] { --event-color: var(--color-accent-2); }.eventCard[data-tone='2'] { --event-color: var(--color-warning); }
 .eventCard[data-unknown='true'] { --event-color: var(--color-muted); }
 .eventCard[data-inverted='true'] { border-style: dashed; }.eventCard[data-conflict='true'] { --event-color: var(--color-danger); border-color: var(--color-danger); }

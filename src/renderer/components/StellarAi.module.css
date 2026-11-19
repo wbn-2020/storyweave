@@ -83,6 +83,13 @@
 .historyItem[aria-current='true'],.historyItem:hover:not(:disabled) { color: var(--color-accent); background: var(--color-accent-soft); }
 .historyItem small { display: block; color: var(--color-muted); font-size: var(--text-xs); margin-top: var(--space-1); }
 .historyItem > span { min-width: 0; overflow-wrap: anywhere; }
+/* 历史选中与悬停只强调入口，任务状态仍保留各自的语义色。 */
+.historyItem > span[data-state] { color: var(--color-accent-text); }
+.historyItem > span[data-state='succeeded'] { color: var(--color-accent-2); }
+.historyItem > span[data-state='failed'] { color: var(--color-danger); }
+.historyItem > span:is([data-state='cancelled'],[data-state='interrupted']) { color: var(--color-warning-text); }
+.historyItem > span[data-state='rejected'] { color: var(--color-muted); }
+.historyItem > span[data-state='adopted'] { color: var(--color-success-text); }
 .discard { composes: warning from './stellar/Workspace.module.css'; }
 .recoveryCopy { width: 100%; margin-top: var(--space-3); font: var(--text-xs)/1.8 var(--font-num); }
 .footer { display: flex; justify-content: flex-end; padding-top: var(--space-4); border-top: 1px solid var(--color-line); margin-top: var(--space-5); }

@@ -13,6 +13,7 @@ import { DraftImports, parseDraftTarget } from './draft-imports'
 import { AiSessions } from './ai-sessions'
 import { GenerationSessions } from './generation-sessions'
 import { ImageSessions } from './image-sessions'
+import { readProjectImageProvider } from './project-image-provider'
 import { ConnectionProbes } from './connection-probes'
 import { parseConnectionProbeCancel, parseConnectionProbeInput } from '../../contracts/ai-connection-probe'
 import { parseAiKeySessionClose, parseAiKeySessionInput } from '../../contracts/ai-key-session'
@@ -46,7 +47,7 @@ const draftImports = new DraftImports()
 const generationSessions = new GenerationSessions()
 const connectionProbes = new ConnectionProbes()
 const aiSessions = new AiSessions((root, connection) => generationSessions.sessionKey(root, connection))
-const imageSessions = new ImageSessions()
+const imageSessions = new ImageSessions(app.isPackaged ? { ok: true, data: null } : readProjectImageProvider(process.cwd()))
 let connectionKeyPage: { sessionId: string; root: string; bookId?: string } | null = null
 
 function closeConnectionKeyPage(sessionId?: string): void {
@@ -75,7 +76,7 @@ const rendererCommands = new Set<RendererCommand>([
   'study.adopt', 'study.saved',
   'ai.presets.get', 'ai.presets.save',
   'book.media.get', 'book.media.read', 'book.media.save', 'book.media.exportFile',
-  'book.image.list', 'book.image.get', 'book.image.start', 'book.image.cancel', 'book.image.jpeg', 'book.image.discard',
+  'book.image.connections', 'book.image.list', 'book.image.get', 'book.image.start', 'book.image.cancel', 'book.image.jpeg', 'book.image.discard',
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
   'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',

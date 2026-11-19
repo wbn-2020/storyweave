@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { StudioApi } from '../../contracts/api'
-import type { AiConnectionPage } from '../../contracts/ai'
 import type { KnowledgeItemPage } from '../../contracts/knowledge'
 import { MAX_BOOK_MEDIA_ITEM_BYTES } from '../../contracts/book-media'
 import {
   IMAGE_PROMPT_LIMIT, IMAGE_SIZES, imageGenerationSizes, usesHuantuImageAspect, isImageGenerationRun, parseImageGenerationInput,
-  type ImageGenerationInput, type ImageGenerationRun,
+  type ImageGenerationConnectionPage, type ImageGenerationInput, type ImageGenerationRun,
 } from '../../contracts/image-generation'
 import { request } from '../request'
 import { StudioIcon } from './StudioIcon'
@@ -25,7 +24,7 @@ const stateLabels: Record<ImageGenerationRun['state'], string> = {
 
 /** 生成控制与媒体保存分开；未知回包只查询原任务，不自动重发付费请求。 */
 export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, readOnly, initialKind, initialRunId, onStateChange, onUse, onClose }: Props) {
-  const [connections, setConnections] = useState<AiConnectionPage | null>(null), [connectionId, setConnectionId] = useState('')
+  const [connections, setConnections] = useState<ImageGenerationConnectionPage | null>(null), [connectionId, setConnectionId] = useState('')
   const [kind, setKind] = useState(initialKind), [personId, setPersonId] = useState('')
   const [people, setPeople] = useState<KnowledgeItemPage | null>(null), [query, setQuery] = useState(''), [peopleQuery, setPeopleQuery] = useState(''), [peopleOffset, setPeopleOffset] = useState(0)
   const [title, setTitle] = useState(''), [prompt, setPrompt] = useState(''), [size, setSize] = useState<ImageGenerationInput['size']>('auto')
@@ -90,10 +89,10 @@ export function ImageGenerationEditor({ api, bookId, bookRevision, disabled, rea
         if (!result.ok) throw new Error(result.error.message)
         receive(result.data, initialRunId)
       } else {
-        const result = await request(() => api.listAiConnections({ bookId }))
+        const result = await request(() => api.listImageGenerationConnections({ bookId }))
         if (!result.ok) throw new Error(result.error.message)
         if (result.data.bookId !== bookId || !Array.isArray(result.data.connections) || !Array.isArray(result.data.sessionKeyIds)) throw new Error('连接列表不属于当前作品，请重新读取。')
-        if (mounted.current) { setConnections(result.data); setLoaded(true) }
+        if (mounted.current) { setConnections(result.data); setConnectionId(result.data.defaultConnectionId ?? ''); setLoaded(true) }
       }
     })
   }
