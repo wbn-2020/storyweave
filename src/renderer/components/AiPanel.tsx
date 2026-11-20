@@ -220,7 +220,7 @@ function AiPanelSession({ api, book, chapter, busy, initialRunId, initialPreset,
   const compact = useContext(DialogDisplayContext) === 'drawer'
   const composerDetails = useRef<HTMLDetailsElement>(null)
   const connectionDetails = useRef<HTMLDetailsElement>(null)
-  const [composerOpen, setComposerOpen] = useState(Boolean(initialPreset || initialInstruction || initialRewrite || initialResources?.length))
+  const [composerOpen, setComposerOpen] = useState(Boolean(initialTask || initialPreset || initialInstruction || initialRewrite || initialResources?.length))
   const [connections, setConnections] = useState<AiConnectionPage | null>(null)
   const [knowledge, setKnowledge] = useState<KnowledgeStatus | null>(null)
   const [history, setHistory] = useState<AiRunPage | null>(null)

@@ -84,7 +84,7 @@ type WorkspaceTool = 'knowledge' | 'galaxy' | 'timeline' | 'notes' | 'workbench'
 type WriteAsideMode = 'companion' | 'ai' | 'meta' | 'collapsed'
 type Modal =
   | { kind: 'forge'; initialKind?: ForgeKind; personId?: string }
-  | { kind: 'living'; tab?: 'outline' | 'memory'; initialId?: string }
+  | { kind: 'living'; tab?: 'outline' | 'memory'; initialKind?: 'expand' | 'rebase'; initialId?: string }
   | { kind: 'knowledge'; initialKind?: KnowledgeKind; initialId?: string }
   | { kind: 'abilities' }
   | { kind: 'weave' }
@@ -1469,6 +1469,10 @@ export function App({ api }: Props) {
     { id: 'history', label: '查看章节修订历史', group: '正文', disabledReason: needsChapter, run: () => showDialog({ kind: 'history' }) },
     { id: 'finalize', label: '确认本章定稿', group: '正文', disabledReason: editableChapter, run: () => showDialog({ kind: 'finalize' }) },
     { id: 'ai', label: '打开 AI 副驾驶', group: 'AI', disabledReason: editableChapter, run: () => showDialog({ kind: 'ai' }) },
+    // 命令只进入任务编辑，来源、范围与发送仍由原协作流程确认。
+    { id: 'continue', label: '续写本章', group: 'AI', keywords: '接着写 继续写 生成', disabledReason: editableChapter, run: () => showDialog({ kind: 'ai', initialTask: 'continue' }) },
+    { id: 'expand', label: '扩写段落', group: 'AI', keywords: '扩写 改写 丰富描写', disabledReason: editableChapter, run: () => showDialog({ kind: 'ai', initialTask: 'rewrite', initialInstruction: '扩写所选段落，补充动作、环境和人物感受；保留既有情节、人物设定和叙述视角。' }) },
+    { id: 'rebase', label: '偏航修纲', group: 'AI', keywords: '修纲 大纲 调整章纲', disabledReason: needsBook ?? (archived ? '归档作品仅供查阅' : !book?.chapters.length ? '请先建立章节' : undefined), run: () => showDialog({ kind: 'living', initialKind: 'rebase', initialId: chapter?.id }) },
     { id: 'review', label: '审稿与虚拟读者', group: 'AI', disabledReason: needsBook, run: () => openReviewChecklist() },
     { id: 'living', label: '大纲与演进沙盘', group: '故事', disabledReason: needsBook, run: () => openToolFromNav('living') },
     { id: 'forge', label: '角色与世界工坊', group: '故事', keywords: '人物 起名', disabledReason: needsBook, run: () => openToolFromNav('forge') },
@@ -1670,8 +1674,8 @@ export function App({ api }: Props) {
               onClose={closeModal} onConfigure={() => showDialog({ kind: 'ai' })} onKnowledge={(initialId) => showDialog({ kind: 'knowledge', initialKind: initialId ? 'person' : undefined, initialId: initialId ?? undefined })} onRelations={() => showDialog({ kind: 'galaxy', view: 'relationships' })} onMedia={() => showDialog({ kind: 'media' })} onRecover={() => openRecovery(true)} />
           </>}
           {modal?.kind === 'living' && book && api && <Dialog title={modal.tab === 'memory' ? '定稿记忆与来源复核' : '大纲与演进沙盘'} wide inline onClose={closeModal} busy={busy}>
-            <LivingPanel key={`${workspace.rootPath}:${book.book.id}:${modal.tab ?? 'outline'}:${modal.initialId ?? ''}`} api={api} book={book} chapter={chapter} disabled={busy}
-              initialTab={modal.tab} initialId={modal.initialId} onDirtyChange={(value) => { workbenchDirty.current = value }} onBookChange={applyBook} onSnapshotChange={creative.receive}
+            <LivingPanel key={`${workspace.rootPath}:${book.book.id}:${modal.tab ?? 'outline'}:${modal.initialKind ?? ''}:${modal.initialId ?? ''}`} api={api} book={book} chapter={chapter} disabled={busy}
+              initialTab={modal.tab} initialKind={modal.initialKind} initialId={modal.initialId} onDirtyChange={(value) => { workbenchDirty.current = value }} onBookChange={applyBook} onSnapshotChange={creative.receive}
               onConfigure={() => showDialog({ kind: 'ai' })} onNavigate={(id) => void openChapter(id)} onRecover={() => openRecovery(true)} />
           </Dialog>}
           {modal?.kind === 'kickstart' && api && workspace.rootPath && <KickstartPanel key={`${workspace.rootPath}:${modal.bookId ?? 'new'}:${modal.genre ?? ''}`} api={api} bookId={modal.bookId} initialGenre={modal.genre} disabled={busy}

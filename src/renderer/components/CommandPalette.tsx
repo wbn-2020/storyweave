@@ -29,6 +29,7 @@ function commandIcon(command: StudioCommand): StudioIconName {
     forge: 'user', knowledge: 'archive', galaxy: 'galaxy', matrix: 'grid', radar: 'compass', story: 'timeline',
     timeline: 'timeline', notes: 'notes', inspiration: 'bulb', calendar: 'calendar', media: 'image', reader: 'read',
     export: 'export', backup: 'archive', memory: 'search', aiMemoryTasks: 'workflow', aiSummary: 'layers',
+    continue: 'spark', expand: 'layers', rebase: 'workflow',
     publishedMemory: 'check', bookDetails: 'books', recovery: 'history', preferences: 'settings', models: 'workflow', focus: 'focus',
   }
   return icons[command.id] ?? 'arrow'
@@ -55,7 +56,7 @@ export function CommandPalette({ commands, onClose }: { commands: StudioCommand[
   useEffect(() => { setPage((value) => Math.min(value, pageCount - 1)) }, [pageCount])
   const results = useMemo(() => {
     // 默认四组与参考图一致；完整目录仍可一键展开，搜索始终覆盖全部命令。
-    const preferred = ['write', 'forge', 'galaxy', 'ai', 'living', 'newBook', 'review', 'publishedMemory', 'preferences', 'backup']
+    const preferred = ['write', 'forge', 'galaxy', 'continue', 'expand', 'rebase', 'review', 'publishedMemory', 'preferences', 'backup']
     // 先从完整匹配中分页，再沿用页内分组；60 项是渲染上限，不能丢弃后续章节。
     const visible = expanded ? matches.slice(currentPage * COMMAND_PAGE_SIZE, (currentPage + 1) * COMMAND_PAGE_SIZE)
       : preferred.flatMap((id) => matches.find((command) => command.id === id) ?? [])

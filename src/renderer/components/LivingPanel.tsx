@@ -13,7 +13,7 @@ import { StudioIcon } from './StudioIcon'
 
 interface Props {
   api: StudioApi; book: BookSnapshot; chapter: ChapterSnapshot | null; disabled: boolean
-  initialTab?: 'outline' | 'memory'; initialId?: string
+  initialTab?: 'outline' | 'memory'; initialKind?: 'expand' | 'rebase'; initialId?: string
   onDirtyChange: (value: boolean) => void; onBookChange: (value: BookSnapshot) => void
   onSnapshotChange: (value: LivingSnapshot) => void
   onNavigate: (chapterId: string) => void; onConfigure: () => void; onRecover: () => void
@@ -22,7 +22,7 @@ const kindLabels: Record<LivingKind, string> = { memory: '整理当前定稿', e
 const natureLabels = { narrative_claim: '正文陈述', character_belief: '人物信念', ai_inference: '模型推断' }
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
 
-export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outline', initialId, onDirtyChange, onBookChange, onSnapshotChange, onNavigate, onConfigure, onRecover }: Props) {
+export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outline', initialKind, initialId, onDirtyChange, onBookChange, onSnapshotChange, onNavigate, onConfigure, onRecover }: Props) {
   const [snapshot, setSnapshot] = useState<LivingSnapshot | null>(null)
   const [tab, setTab] = useState(initialTab)
   const [memoryChapterId, setMemoryChapterId] = useState(chapter?.id ?? '')
@@ -40,12 +40,13 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   const [confirmAdopt, setConfirmAdopt] = useState(false)
   const [reviewingRebase, setReviewingRebase] = useState(true)
   const generationPanel = useRef<HTMLElement>(null)
+  const initialGenerationShown = useRef(false)
   const outlineEditor = useRef<HTMLDetailsElement>(null)
   const [connections, setConnections] = useState<AiConnection[]>([])
   const [connectionId, setConnectionId] = useState('')
-  const [kind, setKind] = useState<LivingKind>(initialTab === 'memory' ? 'memory' : 'expand')
+  const [kind, setKind] = useState<LivingKind>(initialTab === 'memory' ? 'memory' : initialKind ?? 'expand')
   const [anchorId, setAnchorId] = useState(chapter?.id ?? book.chapters[book.chapters.length - 1]?.id ?? '')
-  const [instruction, setInstruction] = useState(initialTab === 'memory' ? '整理本章已经定稿的事件和人物状态，保留原文引文，区分正文陈述、人物信念与推断。' : '接续既有末章，按总纲和卷目标推进后续章节，每章给出三个可写的节拍。')
+  const [instruction, setInstruction] = useState(initialTab === 'memory' ? '整理本章已经定稿的事件和人物状态，保留原文引文，区分正文陈述、人物信念与推断。' : initialKind === 'rebase' ? '对照已写情节，修整选定的后续章纲；保留已确认事实和人物设定，列明需作者核对的改动。' : '接续既有末章，按总纲和卷目标推进后续章节，每章给出三个可写的节拍。')
   const [count, setCount] = useState(3)
   const [targets, setTargets] = useState<string[]>([])
   const [manualIds, setManualIds] = useState<string[]>([])
@@ -85,6 +86,13 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     return () => { mounted.current = false; initialRead.current = true; callbacks.current.onDirtyChange(false) }
   }, [])
   useEffect(() => { if (!disabled && initialRead.current) { initialRead.current = false; void load() } }, [disabled])
+  useEffect(() => {
+    if (initialKind !== 'rebase' || initialTab === 'memory' || !snapshot || blocked || initialGenerationShown.current) return
+    // 直达命令在资料就绪后只定位一次，后续刷新不带走作者的焦点和滚动位置。
+    initialGenerationShown.current = true
+    generationPanel.current?.scrollIntoView({ block: 'start' })
+    generationPanel.current?.querySelector<HTMLSelectElement>('select')?.focus({ preventScroll: true })
+  }, [initialKind, initialTab, snapshot, blocked])
   useEffect(() => { guard.current.running = run?.state === 'running'; report() }, [run?.state])
   useEffect(() => { setConfirmAdopt(false) }, [proposal, snapshot?.bookRevision, run?.id, run?.version])
   useEffect(() => { if (proposal?.kind === 'rebase') setReviewingRebase(true) }, [run?.id, proposal?.kind])
@@ -377,7 +385,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         {!archiveCurrent && <p className={styles.note}>默认载入最近 {snapshot.memories.length} 个批次，共 {snapshot.memoryTotal} 个；查询所选章节可分页读取更早批次。</p>}
       </section>}
 
-      <section ref={generationPanel} className={styles.generation}><div className={styles.editorHeading}><div><h2><StudioIcon name="spark" size={20} />{tab === 'outline' ? 'AI 滚动续推' : '整理定稿记忆'}</h2><p>先固定来源和范围，再确认发送；生成结果经审阅后采纳。</p></div><button type="button" className={shared.button} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={onConfigure}>模型配置与副驾驶</button></div>
+      <section ref={generationPanel} className={styles.generation}><div className={styles.editorHeading}><div><h2><StudioIcon name="spark" size={20} />{kind === 'rebase' ? 'AI 偏航修纲' : tab === 'outline' ? 'AI 滚动续推' : '整理定稿记忆'}</h2><p>先固定来源和范围，再确认发送；生成结果经审阅后采纳。</p></div><button type="button" className={shared.button} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={onConfigure}>模型配置与副驾驶</button></div>
         <div className={styles.fieldGrid}><label>本次任务<select value={kind} disabled={blocked} onChange={(event) => editRequest(() => setKind(event.target.value as LivingKind))}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>模型连接<select value={connectionId} disabled={blocked} onChange={(event) => editRequest(() => setConnectionId(event.target.value))}><option value="">请选择已保存连接</option>{connections.map((connection) => <option value={connection.id} key={connection.id}>{connection.name} · {connection.model}</option>)}</select></label></div>
         <div className={styles.fieldGrid}><label>{kind === 'memory' ? '固定定稿章节' : '当前参考章节'}<select value={anchorId} disabled={blocked} onChange={(event) => editRequest(() => setAnchorId(event.target.value))}><option value="">请选择章节</option>{book.chapters.map((item) => <option key={item.id} value={item.id}>{item.position + 1}. {item.title}{item.status === 'finalized' ? ' · 已定稿' : ''}</option>)}</select></label>{kind === 'expand' && <label>末章后新增章纲数量<select value={count} disabled={blocked} onChange={(event) => editRequest(() => setCount(Number(event.target.value)))}>{[1, 2, 3].map((value) => <option key={value} value={value}>{value} 章</option>)}</select></label>}</div>
         {kind === 'rebase' && <fieldset className={styles.range}><legend>明确本次修纲范围（最多十章）</legend>{chapterNodes.map((item) => {
