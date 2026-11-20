@@ -39,7 +39,9 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   const [chapterPage, setChapterPage] = useState(0)
   const [confirmAdopt, setConfirmAdopt] = useState(false)
   const [reviewingRebase, setReviewingRebase] = useState(true)
+  const [reviewOpenRequest, setReviewOpenRequest] = useState(0)
   const generationPanel = useRef<HTMLElement>(null)
+  const proposalPanel = useRef<HTMLElement>(null)
   const initialGenerationShown = useRef(false)
   const outlineEditor = useRef<HTMLDetailsElement>(null)
   const [connections, setConnections] = useState<AiConnection[]>([])
@@ -202,7 +204,8 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     if (!guard.current.proposal) setProposal(value.proposal)
     setGuard('uncertain', false)
   }
-  async function refreshRun(id = run?.id) {
+  async function refreshRun(selectedRunId?: string) {
+    const id = selectedRunId ?? run?.id
     if (!id || tool.locked) return
     const loaded = await tool.read(async () => {
       // 先通过桌面会话补存终态，再从书库读取提案；直接读领域仓储无法处理主进程的待存结果。
@@ -221,6 +224,10 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         setDetail(value); setProposal(value.proposal); setPreviewInput(JSON.stringify(input)); setGuard('uncertain', false)
       }
       else receiveRun(value)
+      if (selectedRunId && value.proposal?.kind === 'rebase') {
+        setReviewingRebase(true)
+        setReviewOpenRequest((value) => value + 1)
+      }
     })
     if (!loaded) setPollStopped(true)
   }
@@ -296,6 +303,12 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     pending: tool.pending ? { command: tool.pending.command, error: tool.pending.error } : null, readFailure: tool.readFailure }, null, 2) : ''
 
   const showingRebaseReview = tab === 'outline' && reviewingRebase && proposal?.kind === 'rebase'
+  useEffect(() => {
+    if (!showingRebaseReview) return
+    // 历史入口位于页尾；只在进入对照或切换提案时定位，避免刷新抢走作者焦点。
+    proposalPanel.current?.scrollIntoView({ block: 'start' })
+    proposalPanel.current?.focus({ preventScroll: true })
+  }, [showingRebaseReview, run?.id, reviewOpenRequest])
   const toolbar = <div className={styles.toolbar}>
       <div className={styles.tabs} role="group" aria-label="创作资料视图">
         <button type="button" aria-pressed={tab === 'outline'} disabled={blocked || outlineDirty || proposalDirty} onClick={() => setTab('outline')}>演进大纲</button>
@@ -397,7 +410,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
         <label>你的要求<textarea value={instruction} rows={3} maxLength={2000} disabled={blocked} onChange={(event) => editRequest(() => setInstruction(event.target.value))} /></label>
         <button className={shared.primaryButton} type="button" disabled={blocked || outlineDirty || proposalDirty || !connectionId || !anchorId || !instruction.trim()} onClick={() => void prepare()}>保存并预览本次请求</button>
       </section>
-      {run && <section className={styles.proposal}>
+      {run && <section ref={proposalPanel} className={styles.proposal} role="region" aria-label={showingRebaseReview ? '修纲对照审阅' : '本次演进提案'} tabIndex={-1}>
         {proposal?.kind === 'rebase' && <OutlineRebaseReview proposal={proposal} targets={detail?.targets ?? []} current={snapshot.outlines} sourceTitle={book.chapters.find((item) => item.id === run.chapterId)?.title ?? '固定来源章节'} adopted={detail?.adopted ?? false} disabled={!editableProposal} onChange={editProposal} />}
         <div className={styles.editorHeading}><h2>{kindLabels[detail!.kind]} · {detail?.adopted ? '已采纳' : run.state === 'running' ? '生成中' : run.state === 'succeeded' ? '待审阅' : run.state}</h2><div className={styles.actions}><button type="button" className={shared.button} disabled={tool.locked} onClick={() => { setPollStopped(false); void refreshRun() }}>核对原提案状态</button>{run.state === 'running' && <button type="button" className={shared.button} disabled={tool.locked} onClick={() => void control(run.active === false ? 'interrupt' : 'cancel')}>{run.active === false ? '标记无会话运行为中断' : '取消并保留输出'}</button>}</div></div>
         <details><summary>本次固定发送内容 · {run.model} · 估算输入 {run.context.estimatedInputTokens} tokens</summary>{run.context.messages.map((message, index) => <pre key={index}>{message.role}{'\n'}{message.content}</pre>)}</details>

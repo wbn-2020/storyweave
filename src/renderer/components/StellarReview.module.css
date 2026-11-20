@@ -54,7 +54,7 @@
 .reader[data-lens='pace'] .readerSymbol path { fill: currentColor; stroke-width: 1; }
 .reader[data-lens='logic'] .readerSymbol path { fill: color-mix(in srgb,currentColor 24%,transparent); }
 .reader[data-lens='emotion'] .readerSymbol path { stroke-width: 2.5; }
-.readerScore { display: inline-flex; align-items: center; gap: var(--space-1); flex-shrink: 0; color: var(--color-warning); font: var(--text-lg)/1.5 var(--font-num); }
+.readerScore { display: inline-flex; align-items: center; gap: var(--space-1); flex-shrink: 0; color: var(--color-warning-text); font: var(--text-lg)/1.5 var(--font-num); }
 .readerScore > svg { fill: currentColor; }
 .readerScore[data-unknown='true'] { color: var(--color-muted); }
 .readerScore[data-unknown='true'] > svg { fill: none; }

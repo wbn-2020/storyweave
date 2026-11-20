@@ -17,7 +17,7 @@
 .timeline.timeline .revisionBadges { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); margin: 0; }
 .revisionBadges > span { padding: var(--space-1) var(--space-2); border-radius: var(--radius-pill); background: var(--bg-raised); color: var(--color-ink-secondary); font-size: var(--text-xs); line-height: 1.4; }
 .revisionBadges > [data-reason='restored'] { background: color-mix(in srgb,var(--color-accent-2) 24%,transparent); color: var(--color-accent-2); }
-.revisionBadges > [data-state='finalized'] { background: var(--color-warning-soft); color: var(--color-warning); }
+.revisionBadges > [data-state='finalized'] { background: var(--color-warning-soft); color: var(--color-warning-text); }
 .revisionBadges > [data-state='current'] { background: var(--color-accent); color: var(--color-accent-ink); }
 .timeline time,.timeline .revisionCount { color: var(--color-ink-secondary); font: var(--text-sm)/1.6 var(--font-num); overflow-wrap: anywhere; }
 .comparison.comparison { min-width: 0; max-height: none; padding: 0; border: 1px solid var(--color-line-strong); border-radius: var(--radius-xl); background: color-mix(in srgb,var(--bg-surface) 80%,transparent); overflow: auto; scrollbar-gutter: stable; }
@@ -54,7 +54,7 @@
 .summary > strong { font-size: var(--text-sm); font-weight: 500; }
 .preserve { display: flex; align-items: start; gap: var(--space-2); color: var(--color-muted); font-size: var(--text-xs); line-height: 1.8; overflow-wrap: anywhere; }
 .preserve > svg { flex-shrink: 0; margin-top: var(--space-1); }
-.summary [data-kind='added'] { color: var(--color-accent); }.summary [data-kind='removed'] { color: var(--color-danger); }.summary [data-kind='changed'] { color: var(--color-warning); }.summary [data-kind='moved'] { color: var(--color-accent-2); }
+.summary [data-kind='added'] { color: var(--color-accent); }.summary [data-kind='removed'] { color: var(--color-danger); }.summary [data-kind='changed'] { color: var(--color-warning-text); }.summary [data-kind='moved'] { color: var(--color-accent-2); }
 .timeline li[data-selected='true']::before { background: var(--color-accent); box-shadow: var(--shadow-glow); }
 .timeline ol { list-style: none; }
 .timeline li[data-current='true']::before { outline: 2px solid var(--color-accent); outline-offset: 3px; }
@@ -79,7 +79,7 @@
 .manuscriptColumn li[data-kind='removed'][data-side='current'] .paragraph { text-decoration: line-through; text-decoration-color: var(--color-danger); }
 .manuscriptColumn li[data-kind='added'] .lineNumber { color: var(--color-accent); }
 .manuscriptColumn li[data-kind='removed'] .lineNumber { color: var(--color-danger); }
-.manuscriptColumn li[data-kind='modified'] .lineNumber { color: var(--color-warning); }
+.manuscriptColumn li[data-kind='modified'] .lineNumber { color: var(--color-warning-text); }
 .manuscriptColumn li[data-kind='moved'] .lineNumber { color: var(--color-accent-2); }
 .block { min-width: 0; }.block small { color: var(--color-muted); font-size: var(--text-xs); }
 .block .paragraph { margin-top: 0; font-size: var(--text-md); }
