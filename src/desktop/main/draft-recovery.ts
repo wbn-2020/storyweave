@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, opendirSync } from 'node:fs'
+import { lstat, opendir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DomainError, isRecord, requiredId, requiredInteger, type DraftCheckpointReceipt, type RecoveryDraftList, type RecoveryDraftSummary, type SaveChapterOutput, type WorkspaceSnapshot } from '../../contracts/api'
 import { MAX_DRAFT_FILE_BYTES, parseDraftFile, type ChapterDraftFile } from '../../contracts/draft'
@@ -30,6 +31,15 @@ export class DraftRecovery {
   private warning: string | null = null
   private readonly recent = new Map<string, CheckpointRecord>()
   private readonly sequences = new Map<string, { sequence: number; hash: string; receipt: DraftCheckpointReceipt }>()
+  private queue: Promise<void> = Promise.resolve()
+  private pending = 0
+  hasPending(): boolean { return this.pending > 0 }
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    this.pending += 1
+    const result = this.queue.then(operation)
+    this.queue = result.then(() => {}, () => {}).finally(() => { this.pending -= 1 })
+    return result
+  }
 
   bind(root: string | null): boolean {
     if (root === this.root) return false
@@ -50,7 +60,10 @@ export class DraftRecovery {
     return this.scope
   }
 
-  checkpoint(value: unknown): DraftCheckpointReceipt {
+  checkpoint(value: unknown): Promise<DraftCheckpointReceipt> {
+    return this.serialize(() => this.capture(value))
+  }
+  private async capture(value: unknown): Promise<DraftCheckpointReceipt> {
     if (!isRecord(value)) throw invalid('草稿检查点内容无效。')
     this.requireScope(value.scope)
     const draft = parseDraftCopy(value)
@@ -72,7 +85,10 @@ export class DraftRecovery {
     const serialized = JSON.stringify(file) + '\n'
     const bytes = Buffer.byteLength(serialized, 'utf8')
     if (bytes > MAX_DRAFT_FILE_BYTES) throw invalid('本次草稿检查点超过 16 MiB，请另存当前草稿并拆分章节。')
-    const usage = this.checkCapacity(directory, bytes)
+    const usage = await this.checkCapacityAsync(directory, bytes)
+    // 异步盘点期间可能切库；写入前再次核对会话，旧请求不能落入新书库。
+    this.requireScope(value.scope)
+    if (this.root !== root) throw invalid('作品库已变化，未写入旧检查点。')
     writeNewText(join(directory, `${id}.json`), (write) => write(serialized))
     const receipt: DraftCheckpointReceipt = { checkpointId: id, createdAt,
       ...(usage.files + 1 >= MAX_FILES * 0.8 || usage.bytes + bytes >= MAX_TOTAL_BYTES * 0.8
@@ -131,6 +147,7 @@ export class DraftRecovery {
   }
 
   rotate(value: unknown): RecoveryDraftList & RecoveryDraftInventory {
+    if (this.hasPending()) throw new DomainError({ code: 'WORKSPACE_BUSY', message: '检查点仍在写入，请完成后再建立新一代。' })
     if (!isRecord(value)) throw invalid('检查点分代请求无效。')
     this.requireScope(value.scope)
     const generations = this.generations(this.root!, true)
@@ -165,6 +182,11 @@ export class DraftRecovery {
 
   saved(root: string | null, output: SaveChapterOutput): void {
     if (!root) return
+    void this.serialize(() => this.markSaved(root, output)).catch(() => {
+      this.warning = '检查点保存标记未完成，副本仍保留，请与正文核对。'
+    })
+  }
+  private async markSaved(root: string, output: SaveChapterOutput): Promise<void> {
     const chapter = output.chapter
     const documentHash = hash(JSON.stringify(chapter.document))
     for (const [id, record] of this.recent) {
@@ -172,7 +194,7 @@ export class DraftRecovery {
       try {
         const directory = checkedLocalDirectory(record.directory)
         const marker = JSON.stringify({ format: 'storyweave.saved-checkpoint', version: 1, checkpointId: id, fileHash: record.fileHash, savedRevisionId: chapter.revisionId }) + '\n'
-        this.checkCapacity(directory, Buffer.byteLength(marker, 'utf8'))
+        await this.checkCapacityAsync(directory, Buffer.byteLength(marker, 'utf8'))
         writeNewText(join(directory, `${id}.saved.json`), (write) => write(marker))
         this.recent.delete(id)
       } catch {
@@ -191,8 +213,19 @@ export class DraftRecovery {
     return checkedLocalDirectory(path)
   }
 
-  private checkCapacity(directory: string, addingBytes: number): { files: number; bytes: number } {
-    const usage = this.capacity(directory)
+  private async checkCapacityAsync(directory: string, addingBytes: number): Promise<{ files: number; bytes: number }> {
+    checkedLocalDirectory(directory)
+    const usage = { files: 0, bytes: 0 }
+    // 容量盘点仍读取真实文件，异步枚举避免每次自动保存长时间占住桌面主线程。
+    const entries = await opendir(directory)
+    for await (const entry of entries) {
+      if (entry.name === 'generations' || entry.name === 'generation.json') continue
+      usage.files += 1
+      if (usage.files > MAX_FILES) break
+      const info = await lstat(join(directory, entry.name))
+      if (info.isFile() && !info.isSymbolicLink()) usage.bytes += info.size
+    }
+    checkedLocalDirectory(directory)
     if (usage.files >= MAX_FILES || usage.bytes + addingBytes > MAX_TOTAL_BYTES) {
       throw invalid('当前检查点代达到容量保护上限，自动检查点暂停。请在草稿恢复中建立新一代；全部旧副本继续保留。')
     }

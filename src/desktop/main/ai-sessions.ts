@@ -22,6 +22,7 @@ import {
   type MemoryVectorFinishInput, type MemoryVectorReadInput, type MemoryVectorRun,
 } from '../../contracts/memory-vector'
 import { parseMemoryBookInput } from '../../contracts/memory'
+import { chatCompletionBody, modelHttpError } from './model-request'
 
 const RESPONSE_LIMIT = 4 * 1024 * 1024
 const VECTOR_RESPONSE_LIMIT = 2 * 1024 * 1024
@@ -47,7 +48,7 @@ const CONSUMER_ERRORS = {
 
 type StreamErrorKind = keyof typeof CONSUMER_ERRORS
 class StreamError extends Error {
-  constructor(readonly kind: StreamErrorKind) { super(CONSUMER_ERRORS[kind]) }
+  constructor(readonly kind: StreamErrorKind, status?: number) { super(status === undefined ? CONSUMER_ERRORS[kind] : modelHttpError(status)) }
 }
 class UncertainWrite extends Error {}
 const VECTOR_ERRORS = {
@@ -59,7 +60,7 @@ const VECTOR_ERRORS = {
   connection: '连接配置或书库已变化，未向向量模型发送请求。',
 } as const
 class VectorError extends Error {
-  constructor(readonly kind: keyof typeof VECTOR_ERRORS) { super(VECTOR_ERRORS[kind]) }
+  constructor(readonly kind: keyof typeof VECTOR_ERRORS, status?: number) { super(status === undefined ? VECTOR_ERRORS[kind] : modelHttpError(status)) }
 }
 interface SessionKey { baseUrl: string; value: string }
 interface ActiveRequest {
@@ -617,7 +618,7 @@ export class AiSessions {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
         body: JSON.stringify({ model: run.context.embeddingModel, input: run.context.input, encoding_format: 'float' }),
       })
-      if (!response.ok) throw new VectorError('http')
+      if (!response.ok) throw new VectorError('http', response.status)
       if (!response.body || !/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) throw new VectorError('protocol')
       const declaredLength = response.headers.get('content-length')
       if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > VECTOR_RESPONSE_LIMIT) throw new VectorError('response_limit')
@@ -642,7 +643,7 @@ export class AiSessions {
       } catch { throw new VectorError('protocol') }
     } catch (error) {
       finish = active.stop === 'cancelled' ? { ...target, state: 'cancelled' } : { ...target, state: 'failed',
-        error: VECTOR_ERRORS[active.stop === 'timeout' ? 'timeout' : error instanceof UncertainWrite ? 'connection' : error instanceof VectorError ? error.kind : 'network'] }
+        error: active.stop === 'timeout' ? VECTOR_ERRORS.timeout : error instanceof VectorError ? error.message : VECTOR_ERRORS[error instanceof UncertainWrite ? 'connection' : 'network'] }
     } finally {
       clearTimeout(timer)
       active.controller.abort()
@@ -845,10 +846,9 @@ export class AiSessions {
       const response = await fetch(`${connection.baseUrl}/chat/completions`, {
         method: 'POST', redirect: 'error', signal: active.controller.signal,
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-        body: JSON.stringify({ model: connection.model, messages: run.context.messages, stream: true,
-          stream_options: { include_usage: true }, max_completion_tokens: connection.maxOutputTokens, n: 1 }),
+        body: JSON.stringify(chatCompletionBody(connection, run.context.messages)),
       })
-      if (!response.ok) throw new StreamError('http')
+      if (!response.ok) throw new StreamError('http', response.status)
       if (!response.body || !/^text\/event-stream(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) throw new StreamError('protocol')
       const declaredLength = response.headers.get('content-length')
       if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > RESPONSE_LIMIT) throw new StreamError('response_limit')
@@ -1004,7 +1004,7 @@ export class AiSessions {
       // 检查点回执未知也必须留存已经收到的尾部；补存时先核对原请求与数据库，不重发模型。
       if (failure instanceof UncertainWrite) error = CONSUMER_ERRORS.checkpoint
       else if (active.stop === 'cancelled') { terminalState = 'cancelled'; error = null }
-      else error = CONSUMER_ERRORS[active.stop === 'timeout' ? 'timeout' : failure instanceof StreamError ? failure.kind : 'network']
+      else error = active.stop === 'timeout' ? CONSUMER_ERRORS.timeout : failure instanceof StreamError ? failure.message : CONSUMER_ERRORS.network
     } finally {
       clearTimeout(timer)
       // 终止远端传输与读取；取消 body 的拒绝也不把原始网络异常传给界面或日志。

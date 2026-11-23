@@ -65,7 +65,7 @@ export class ConnectionProbes {
       let data: unknown
       try { data = JSON.parse(text) } catch { return result('failed', '接口未返回有效模型列表，请检查兼容接口地址。') }
       if (!isRecord(data) || !Array.isArray(data.data) || data.data.length > 10_000 || data.data.some((item) => !isRecord(item) || typeof item.id !== 'string')) return result('failed', '接口未返回有效模型列表，请检查兼容接口地址。')
-      return data.data.some((item) => item.id === connection.model) ? result('succeeded', '连接成功，已在模型列表中确认此模型。') : result('failed', '接口可达，但模型列表中没有配置的模型，请检查模型名称或权限。')
+      return data.data.some((item) => item.id === connection.model) ? result('succeeded', '模型列表检查通过；尚未验证实际生成、流式输出或预算兼容性。') : result('failed', '接口可达，但模型列表中没有配置的模型，请检查模型名称或权限。')
     } catch {
       return result(probe.controller.signal.aborted && !probe.timedOut ? 'cancelled' : 'failed', probe.timedOut ? '连接测试超时（8 秒），请检查接口或稍后重试。'
         : probe.controller.signal.aborted ? '连接测试已取消。' : '无法完成模型列表探测，请检查网络、接口地址或证书；接口须支持 GET /models。')

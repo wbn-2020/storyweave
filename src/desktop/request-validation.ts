@@ -32,7 +32,8 @@ import { parseGetBookMediaInput, parseReadBookMediaInput, parseSaveBookMediaInpu
 import { parseRevisionMergeInput } from '../contracts/revision-merge'
 import { parseBookExportPrepareInput, parseBookExportChapterInput, parseBookExportCommitServiceInput } from '../contracts/export'
 import { parseStudioAiConnectionInput, parseKickstartDraftInput, parseGenerationReadInput, parseGenerationPrepareInput, parseGenerationStartInput, parseGenerationCheckpointInput, parseGenerationFinishInput, parseGenerationVersionInput, parseGenerationSelectionInput, parseGenerationAdoptInput } from '../contracts/generation'
-import { parseLivingAdoptInput, parseLivingPrepareInput, parseLivingRunInput, parseOutlineHistoryInput, parseRestoreOutlineInput, parseSaveOutlineInput, parseMemoryArchiveInput } from '../contracts/living'
+import { parseLivingAdoptInput, parseLivingReadInput, parseLivingPrepareInput, parseLivingRunInput, parseOutlineHistoryInput, parseRestoreOutlineInput, parseSaveOutlineInput, parseMemoryArchiveInput } from '../contracts/living'
+import { parseSyncLivingMemoryInput } from '../contracts/living'
 import { parseForgeReadInput, parseForgePrepareInput, parseForgeRunInput, parseForgeAdoptInput } from '../contracts/forge'
 
 export function parseServiceRequest(value: unknown): ServiceRequest {
@@ -48,8 +49,9 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
   }
   if (!isRecord(payload)) throw invalidRequest()
   switch (command) {
-    case 'living.get': return { id, command, payload: parseAiBookInput(payload) }
+    case 'living.get': return { id, command, payload: parseLivingReadInput(payload) }
     case 'living.archive': return { id, command, payload: parseMemoryArchiveInput(payload) }
+    case 'living.syncMemory': return { id, command, payload: parseSyncLivingMemoryInput(payload) }
     case 'living.save': return { id, command, payload: parseSaveOutlineInput(payload) }
     case 'living.history': return { id, command, payload: parseOutlineHistoryInput(payload) }
     case 'living.restore': return { id, command, payload: parseRestoreOutlineInput(payload) }
@@ -192,6 +194,10 @@ export function parseServiceRequest(value: unknown): ServiceRequest {
           document: parseManuscript(payload.document),
         },
       }
+    case 'book.archiveStructure':
+      if (payload.kind !== 'chapter' && payload.kind !== 'volume') throw new DomainError({ code: 'INVALID_INPUT', message: '卷章归档目标无效。' })
+      return { id, command, payload: { bookId: requiredId(payload.bookId), expectedBookRevision: requiredInteger(payload.expectedBookRevision, '作品版本'),
+        id: requiredId(payload.id), kind: payload.kind, archived: requiredBoolean(payload.archived) } }
     case 'book.update':
       return { id, command, payload: {
         bookId: requiredId(payload.bookId), expectedBookRevision: requiredInteger(payload.expectedBookRevision, '作品版本'),

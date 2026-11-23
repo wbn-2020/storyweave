@@ -39,7 +39,7 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
   const task = status.recentTasks.find((item) => scope === 'book' ? item.scope.kind === 'book'
     : item.scope.kind === 'volume' && item.scope.volumeId === (scope === 'ungrouped' ? null : scope))
   // 渲染时先核对读取身份，避免 effect 清理前将上一范围的摘要或旧版本资料画入当前页面。
-  const sourceKey = JSON.stringify([book.book.id, book.book.revision, status.bookId, status.bookRevision, status.knowledgeRevision, refresh])
+  const sourceKey = JSON.stringify([book.book.id, book.book.revision, status.bookId, status.bookRevision, status.knowledgeRevision, scope, refresh])
   const summaryKey = JSON.stringify([sourceKey, scope, task?.id, task?.version, task?.state, task?.sourceCurrent, task?.totalNodes, task?.scope])
   const currentSources = sourceRead?.api === api && sourceRead.key === sourceKey ? sourceRead : null
   const currentSummary = summaryRead?.api === api && summaryRead.key === summaryKey ? summaryRead : null
@@ -67,7 +67,7 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
     setSourceRead({ api, key: sourceKey, reading: true, living: null, radar: null, livingUnavailable: null, error: null })
     void (async () => {
       const [outlineResult, radarResult] = await Promise.all([
-        request(() => api.getLiving({ bookId: book.book.id })),
+        request(() => api.getLiving({ bookId: book.book.id, outlineId: scope === 'book' || scope === 'ungrouped' ? book.book.id : scope })),
         request(() => api.listForeshadowRadar({ bookId: book.book.id, scope: 'open' })),
       ])
       if (!active) return
@@ -176,7 +176,7 @@ export function SummaryOverview({ api, book, status, disabled, onNavigate, onPre
       <aside className={styles.spine} aria-label="全书脉络" aria-busy={reading}><h3><StudioIcon name="spark" size={24} />全书脉络</h3><ol>
         {groups.map((group, index) => {
           const value = living?.outlines.find((item) => item.scope === 'volume' && item.id === group.id)
-          return <li data-tone={index % 3} key={group.id}><button type="button" disabled={disabled} aria-current={scope === group.id ? 'true' : undefined} onClick={() => selectScope(group.id)}><strong>{group.title}</strong><p>{value?.fields.goal || value?.fields.summary || (living ? '本卷尚未填写规划主线' : livingUnavailable)}</p><small>{!living ? reading ? '读取中' : '资料待核对' : value?.stale ? '规划待复核' : '卷主线 · 规划'}</small></button></li>
+          return <li data-tone={index % 3} key={group.id}><button type="button" disabled={disabled} aria-current={scope === group.id ? 'true' : undefined} onClick={() => selectScope(group.id)}><strong>{group.title}</strong><p>{value?.detailsLoaded === false ? value.hasContent ? '已保存卷纲，选择本卷查看详情' : '本卷尚未填写规划主线' : value?.fields.goal || value?.fields.summary || (living ? '本卷尚未填写规划主线' : livingUnavailable)}</p><small>{!living ? reading ? '读取中' : '资料待核对' : value?.stale ? '规划待复核' : '卷主线 · 规划'}</small></button></li>
         })}
       </ol>{!groups.length && <p className={styles.muted}>建立分卷后显示全书脉络。</p>}</aside>
     </div>

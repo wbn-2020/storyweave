@@ -284,7 +284,7 @@ function expectedSchema(version: number): Map<string, SchemaObject> {
   if (version === 23) ddl = BOOK_V23_SCHEMA
   if (version === 24) ddl = BOOK_V24_SCHEMA
   if (version === 25) ddl = BOOK_V25_SCHEMA
-  if (version === 26) ddl = BOOK_V26_SCHEMA
+  if (version === 26 || version === 27) ddl = BOOK_V26_SCHEMA
   // 新建和备份升级采用相同追加结构，避免格式版本增加后误用新字段验证旧恢复包。
   if (version === BOOK_SCHEMA_VERSION) ddl = BOOK_SCHEMA
   // 只执行程序自带 DDL 构造私有参照库，FTS5 影子表与隐式索引由同一 SQLite 版本生成。
@@ -389,6 +389,11 @@ function verifyChapterMetadata(db: Database.Database): void {
     optionalText(chapter.viewpoint, '章节视角', 500)
     optionalText(chapter.notes, '章节备注', 20_000)
     if (chapter.target !== null) requiredInteger(chapter.target, '目标字数', 1_000_000)
+  }
+  if (Number(db.pragma('user_version', { simple: true })) >= 28) {
+    for (const table of ['chapters', 'volumes']) for (const value of db.prepare(`SELECT archived_at FROM ${table} WHERE archived_at IS NOT NULL`).iterate()) {
+      if (!isoTime((value as { archived_at: unknown }).archived_at)) invalid('恢复包中的卷章归档时间无效。')
+    }
   }
 }
 

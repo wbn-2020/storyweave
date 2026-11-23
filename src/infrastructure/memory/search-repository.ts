@@ -8,7 +8,7 @@ import {
 } from '../../contracts/memory'
 import { readMemoryProjection } from './source-projection'
 import { toSearchQuery } from './search-text'
-import { MEMORY_CURRENT_ARTIFACTS_SQL } from './task-repository'
+import { currentMemoryArtifactsSql } from './task-repository'
 
 interface BookState { id: string; revision: number; knowledge_revision: number; index_publication_version: number }
 interface ChunkRow {
@@ -35,7 +35,7 @@ export const MEMORY_SEARCH_SOURCE_FILTER_SQL = `(SELECT id FROM book_meta WHERE 
   AND (@includeAffected = 1 OR (a.freshness = 'current' AND a.dependency_state = 'current'))
   AND (@entityId IS NULL OR EXISTS (SELECT 1 FROM memory_artifact_entities selected_entity
     WHERE selected_entity.artifact_id = a.id AND selected_entity.entity_id = @entityId))`
-const CURRENT = `WITH current_artifacts AS (${MEMORY_CURRENT_ARTIFACTS_SQL})`
+const current = (db: Database.Database) => `WITH current_artifacts AS (${currentMemoryArtifactsSql(db)})`
 const SOURCE_FILTER = MEMORY_SEARCH_SOURCE_FILTER_SQL
 
 export interface MemorySemanticCandidates { chunkIds: number[]; truncated: boolean; scope: MemorySemanticScope }
@@ -134,7 +134,7 @@ export class MemorySearchRepository {
         }
         // 每一路只领取有限候选；正文不因整书整理完成就一次全部载入检索内存。
         if (compiled) {
-          const rows = db.prepare(`${CURRENT}
+          const rows = db.prepare(`${current(db)}
             SELECT ${CHUNK_COLUMNS} FROM memory_chunks_fts
             JOIN memory_chunks c ON c.id = memory_chunks_fts.rowid
             JOIN current_artifacts a ON a.id = c.artifact_id
@@ -142,7 +142,7 @@ export class MemorySearchRepository {
             ORDER BY bm25(memory_chunks_fts), c.id LIMIT @candidateLimit`)
             .all({ ...params, query: compiled, candidateLimit: CANDIDATE_LIMIT + 1 }) as ChunkRow[]
           merge(rows, 'keyword')
-          const titleRows = db.prepare(`${CURRENT}
+          const titleRows = db.prepare(`${current(db)}
             SELECT ${CHUNK_COLUMNS} FROM current_artifacts a JOIN memory_chunks c ON c.artifact_id = a.id AND c.ordinal = 0
             WHERE ${SOURCE_FILTER} AND (instr(lower(a.title), lower(@literal)) > 0 OR
               (a.source_kind = 'knowledge' AND EXISTS (SELECT 1 FROM knowledge_items k, json_each(k.aliases_json) alias
@@ -169,7 +169,7 @@ export class MemorySearchRepository {
           entityIds = rows.slice(0, ENTITY_LIMIT).map((row) => requiredId(row.id))
         }
         if (entityIds.length) {
-          const rows = db.prepare(`${CURRENT}
+          const rows = db.prepare(`${current(db)}
             SELECT ${CHUNK_COLUMNS} FROM current_artifacts a JOIN memory_chunks c ON c.artifact_id = a.id AND c.ordinal = 0
             WHERE ${SOURCE_FILTER} AND EXISTS (SELECT 1 FROM memory_artifact_entities e
               WHERE e.artifact_id = a.id AND e.entity_id IN (SELECT value FROM json_each(@entityIds)))
@@ -181,7 +181,7 @@ export class MemorySearchRepository {
         if (semantic) {
           if (semantic.chunkIds.length > CANDIDATE_LIMIT || new Set(semantic.chunkIds).size !== semantic.chunkIds.length ||
             semantic.chunkIds.some((value) => !Number.isSafeInteger(value) || value < 1)) throw storageFailure()
-          const rows = db.prepare(`${CURRENT}
+          const rows = db.prepare(`${current(db)}
             SELECT ${CHUNK_COLUMNS} FROM json_each(@chunkIds) ranked
             JOIN memory_chunks c ON c.id = ranked.value JOIN current_artifacts a ON a.id = c.artifact_id
             WHERE ${SOURCE_FILTER} ORDER BY CAST(ranked.key AS INTEGER)`)
@@ -219,7 +219,7 @@ export class MemorySearchRepository {
       requireMemory(db)
       return db.transaction((): MemoryEvidence => {
         const book = readBook(db, data.bookId)
-        const row = db.prepare(`${CURRENT} SELECT ${CHUNK_COLUMNS} FROM current_artifacts a
+        const row = db.prepare(`${current(db)} SELECT ${CHUNK_COLUMNS} FROM current_artifacts a
           JOIN memory_chunks c ON c.artifact_id = a.id WHERE c.id = ?`).get(data.chunkId) as ChunkRow | undefined
         if (!row) {
           throw new DomainError({ code: 'REVISION_CONFLICT', message: '这个片段已不属于当前可用索引。请重新检索；不会改为显示其他版本的原稿。' })

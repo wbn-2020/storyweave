@@ -208,9 +208,10 @@ interface OutlineProps {
   onVolume: (volumeId?: string) => void
   onMoveChapter: (id: string, direction: -1 | 1) => void
   onMoveVolume: (id: string, direction: -1 | 1) => void
+  onArchive: (kind: 'chapter' | 'volume', id: string, archived: boolean) => void
 }
 
-export function ChapterOutline({ book, selectedId, busy, onOpen, onCreate, onVolume, onMoveChapter, onMoveVolume }: OutlineProps) {
+export function ChapterOutline({ book, selectedId, busy, onOpen, onCreate, onVolume, onMoveChapter, onMoveVolume, onArchive }: OutlineProps) {
   const libraryStyles = stellar
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<ChapterStatus | ''>('')
@@ -253,9 +254,10 @@ export function ChapterOutline({ book, selectedId, busy, onOpen, onCreate, onVol
             <strong>{group.title}</strong><span>{siblings.length}</span>
           </button>
           {group.id && <div className={libraryStyles.smallActions}>
+            {book.chapterArchiveSupported && <button type="button" disabled={busy || archived} onClick={() => onArchive('volume', group.id!, true)}>归档本卷</button>}
             <button type="button" onClick={() => onVolume(group.id!)} disabled={busy || archived} aria-label={`重命名${group.title}`}>改名</button>
-            <button type="button" onClick={() => onMoveVolume(group.id!, -1)} disabled={busy || archived || group.position === 0} aria-label={`上移${group.title}`}>↑</button>
-            <button type="button" onClick={() => onMoveVolume(group.id!, 1)} disabled={busy || archived || group.position === book.volumes.length - 1} aria-label={`下移${group.title}`}>↓</button>
+            <button type="button" onClick={() => onMoveVolume(group.id!, -1)} disabled={busy || archived || group.id === book.volumes[0]?.id} aria-label={`上移${group.title}`}>↑</button>
+            <button type="button" onClick={() => onMoveVolume(group.id!, 1)} disabled={busy || archived || group.id === book.volumes.at(-1)?.id} aria-label={`下移${group.title}`}>↓</button>
           </div>}
         </div>
         <ol className={libraryStyles.chapterList} hidden={collapsed.has(group.id) && !needle && !status}>{items.map((item) => {
@@ -268,6 +270,7 @@ export function ChapterOutline({ book, selectedId, busy, onOpen, onCreate, onVol
               <small><i className={libraryStyles.statusDot} data-status={item.status} />{statusLabels[item.status]} · {item.characterCount.toLocaleString()} 字</small>
             </button>
             {item.id === selectedId && <div className={libraryStyles.chapterMove}>
+              {book.chapterArchiveSupported && <button type="button" disabled={busy || archived} onClick={() => onArchive('chapter', item.id, true)}>归档</button>}
               <button type="button" onClick={() => onMoveChapter(item.id, -1)} disabled={busy || archived || index === 0}>↑ 上移</button>
               <button type="button" onClick={() => onMoveChapter(item.id, 1)} disabled={busy || archived || index === siblings.length - 1}>↓ 下移</button>
             </div>}
@@ -276,5 +279,9 @@ export function ChapterOutline({ book, selectedId, busy, onOpen, onCreate, onVol
         {!archived && <button className={libraryStyles.addChapter} type="button" onClick={() => onCreate(group.id)} disabled={busy}>＋ 新建章节</button>}
       </section>
     })}
+    {book.chapterArchiveSupported ? <details><summary>归档卷章 · 可恢复</summary><p>归档后退出创作与导出范围，正文、修订和旧引用保留。恢复分卷会恢复其未单独归档的章节。</p>
+      {book.archivedVolumes?.map((volume) => <p key={volume.id}>{volume.title} <button type="button" disabled={busy || archived} onClick={() => onArchive('volume', volume.id, false)}>恢复分卷</button></p>)}
+      {book.archivedChapters?.filter((chapter) => !book.archivedVolumes?.some((volume) => volume.id === chapter.volumeId)).map((chapter) => <p key={chapter.id}>{chapter.title} <button type="button" disabled={busy || archived} onClick={() => onArchive('chapter', chapter.id, false)}>恢复章节</button></p>)}
+    </details> : <p>在知识库备份升级至 v28 后，可归档和恢复卷章。</p>}
   </aside>
 }

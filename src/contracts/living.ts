@@ -13,6 +13,8 @@ export interface OutlineFields { title: string; summary: string; goal: string; c
 export interface LivingOutline {
   id: string; scope: OutlineScope; parentId: string | null; position: number; fields: OutlineFields
   revisionId: string | null; version: number; locked: boolean; manual: boolean; stale: boolean; staleReason: string | null
+  detailsLoaded?: false
+  hasContent?: boolean
 }
 export interface OutlineHistoryEntry { id: string; version: number; fields: OutlineFields; locked: boolean; origin: 'manual' | 'ai' | 'restored'; createdAt: string }
 export interface MemoryCitation { blockId: string; quote: string }
@@ -27,7 +29,7 @@ export interface PublishedMemory {
   id: string; chapterId: string; chapterTitle: string; revisionId: string; runId: string
   state: 'published' | 'stale' | 'superseded'; staleReason: string | null; proposal: MemoryProposal; createdAt: string
 }
-export interface LivingWritingContext { version: 1; outlines: LivingOutline[]; memories: PublishedMemory[] }
+export interface LivingWritingContext { version: 1 | 2; outlines: LivingOutline[]; memories: PublishedMemory[] }
 export interface LivingSnapshot {
   bookId: string; bookRevision: number; knowledgeRevision: number; schemaVersion: number; requiresUpgrade: boolean
   outlines: LivingOutline[]; memories: PublishedMemory[]; memoryTotal: number
@@ -36,6 +38,8 @@ export interface LivingSnapshot {
   health: Record<'idea' | 'world' | 'cast' | 'outline' | 'manuscript', CreativeHealth>
 }
 export interface MemoryArchiveInput extends BookInput { chapterId?: string; beforeId?: string }
+export interface SyncLivingMemoryInput extends BookMutationInput { batchId: string }
+export interface LivingReadInput extends BookInput { outlineId?: string }
 export interface MemoryArchivePage { bookId: string; bookRevision: number; items: PublishedMemory[]; total: number; nextBeforeId: string | null }
 export interface SaveOutlineInput extends BookMutationInput { id: string; expectedVersion: number; fields: OutlineFields; locked: boolean }
 export interface OutlineHistoryInput extends BookInput { id: string; beforeVersion?: number }
@@ -50,8 +54,9 @@ export interface LivingRunDetail { bookId: string; kind: LivingKind; request: Li
 export interface LivingAdoptInput extends BookMutationInput { runId: string; expectedRunVersion: number; proposal: LivingProposal }
 export interface LivingAdoptReceipt { bookId: string; runId: string; refs: string[]; snapshot: LivingSnapshot; book: BookSnapshot }
 export interface LivingApi {
-  getLiving(input: BookInput): Promise<Result<LivingSnapshot>>
+  getLiving(input: LivingReadInput): Promise<Result<LivingSnapshot>>
   listMemoryArchive(input: MemoryArchiveInput): Promise<Result<MemoryArchivePage>>
+  syncLivingMemory(input: SyncLivingMemoryInput): Promise<Result<LivingSnapshot>>
   saveOutline(input: SaveOutlineInput): Promise<Result<LivingSnapshot>>
   listOutlineHistory(input: OutlineHistoryInput): Promise<Result<OutlineHistoryPage>>
   restoreOutline(input: RestoreOutlineInput): Promise<Result<LivingSnapshot>>
@@ -94,6 +99,10 @@ export function parseOutlineFields(value: unknown): OutlineFields {
 export function parseMemoryArchiveInput(value: unknown): MemoryArchiveInput {
   const v = object(value, ['bookId', 'chapterId', 'beforeId'])
   return { bookId: id(v.bookId), ...(v.chapterId === undefined ? {} : { chapterId: id(v.chapterId) }), ...(v.beforeId === undefined ? {} : { beforeId: id(v.beforeId) }) }
+}
+export function parseLivingReadInput(value: unknown): LivingReadInput {
+  const v = object(value, ['bookId', 'outlineId'])
+  return { bookId: id(v.bookId), ...(v.outlineId === undefined ? {} : { outlineId: id(v.outlineId) }) }
 }
 function note(value: unknown, extra: readonly string[] = []): MemoryNote {
   const v = object(value, ['text', 'citations', ...extra])
@@ -146,6 +155,10 @@ export function parseLivingPrepareInput(value: unknown): LivingPrepareInput {
     targetIds, confirmManualIds, entityIds: ids(v.entityIds, 30), count }
 }
 export function parseLivingRunInput(value: unknown): LivingRunInput { const v = object(value, ['bookId', 'runId']); return { bookId: id(v.bookId), runId: id(v.runId) } }
+export function parseSyncLivingMemoryInput(value: unknown): SyncLivingMemoryInput {
+  const v = object(value, ['bookId', 'expectedBookRevision', 'batchId'])
+  return { ...mutation(v), batchId: id(v.batchId) }
+}
 export function parseLivingAdoptInput(value: unknown): LivingAdoptInput {
   const v = object(value, ['bookId', 'expectedBookRevision', 'runId', 'expectedRunVersion', 'proposal'])
   const proposal = parseLivingProposal(v.proposal)
@@ -155,7 +168,7 @@ export function parseLivingAdoptInput(value: unknown): LivingAdoptInput {
 
 export function parseLivingWritingContext(value: unknown): LivingWritingContext {
   const v = object(value, ['version', 'outlines', 'memories'])
-  if (v.version !== 1) invalid('创作上下文版本无效。')
+  if (v.version !== 1 && v.version !== 2) invalid('创作上下文版本无效。')
   const outlines = list(v.outlines, 3, (item) => {
     const n = object(item, ['id', 'scope', 'parentId', 'position', 'fields', 'revisionId', 'version', 'locked', 'manual', 'stale', 'staleReason'])
     if (!['book', 'volume', 'chapter'].includes(String(n.scope)) || typeof n.locked !== 'boolean' || typeof n.manual !== 'boolean' || n.stale !== false || n.staleReason !== null) invalid('上下文只允许依赖完整、已复核的有效章纲。')
@@ -163,7 +176,7 @@ export function parseLivingWritingContext(value: unknown): LivingWritingContext 
       fields: parseOutlineFields(n.fields), revisionId: n.revisionId === null ? null : id(n.revisionId), version: requiredInteger(n.version, '大纲版本'),
       locked: n.locked, manual: n.manual, stale: false, staleReason: null } satisfies LivingOutline
   })
-  const memories = list(v.memories, 3, (item) => {
+  const memories = list(v.memories, v.version === 1 ? 3 : 8, (item) => {
     const m = object(item, ['id', 'chapterId', 'chapterTitle', 'revisionId', 'runId', 'state', 'staleReason', 'proposal', 'createdAt'])
     const proposal = parseLivingProposal(m.proposal)
     if (m.state !== 'published' || m.staleReason !== null || proposal.kind !== 'memory' || typeof m.createdAt !== 'string' || !Number.isFinite(Date.parse(m.createdAt))) invalid('上下文只允许当前有效的已发布记忆。')
@@ -171,5 +184,5 @@ export function parseLivingWritingContext(value: unknown): LivingWritingContext 
       state: 'published', staleReason: null, proposal, createdAt: m.createdAt } satisfies PublishedMemory
   })
   if (new Set(outlines.map((n) => n.id)).size !== outlines.length || new Set(memories.map((m) => m.id)).size !== memories.length) invalid('创作上下文来源不能重复。')
-  return { version: 1, outlines, memories }
+  return { version: v.version, outlines, memories }
 }

@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
+import { requireActiveChapter } from '../storage/chapter-lifecycle'
 import { creativeRef, parseCreativeResources } from '../../contracts/creative-resources'
 import { readCreativeResources } from './creative-context'
 import { STUDY_SYSTEM_RULES, STUDY_CARDS_SYSTEM_RULES, STUDY_CARDS_LEGACY_SYSTEM_RULES, STUDY_ANNOTATED_SYSTEM_RULES, STUDY_CARDS_PROMPT_VERSION, STUDY_CARDS_LEGACY_PROMPT_VERSION, STUDY_ANNOTATED_PROMPT_VERSION, isStudyCardsPromptVersion } from '../../contracts/study'
@@ -244,12 +245,15 @@ function packetHash(packet: Omit<AiContextPacket, 'contextHash'>): string {
 
 export function buildAiContext(studio: StudioRepository, memorySearch: MemorySearchRepository, input: AiPrepareServiceInput,
   fixedVersions?: Pick<AiContextPacket, 'bookRevision' | 'knowledgeRevision'>, includeWritingContext = true,
-  characterPromptVersion: number = AI_CHARACTER_CONTEXT_PROMPT_VERSION, dedicatedPromptVersion?: number): AiContextPacket {
+  characterPromptVersion: number = AI_CHARACTER_CONTEXT_PROMPT_VERSION, dedicatedPromptVersion?: number, livingVersion: 1 | 2 = 2): AiContextPacket {
   const { connection: requestedConnection, ...request } = input
   const data = parseAiPrepareInput(request)
   const reader = data.perspective === 'reader'
   const character = data.perspective === 'character'
   const forgeKind = data.purpose === 'forge' ? forgeInstructionKind(data.instruction) : null
+  // 历史任务按保存的工坊版本重建提示，避免新协议改变旧上下文指纹。
+  const forgeRules = forgeKind !== null && JSON.parse(data.instruction).workflow === 'forge-v2'
+    ? FORGE_SYSTEM_RULES.replace('workflow=forge-v1', 'workflow=forge-v2') : FORGE_SYSTEM_RULES
   const reviewPromptVersion = dedicatedPromptVersion ?? REVIEW_PROMPT_VERSION
   const structuredReview = data.purpose === 'review' && isReviewPromptVersion(reviewPromptVersion)
   const studyPromptVersion = dedicatedPromptVersion ?? STUDY_CARDS_PROMPT_VERSION
@@ -276,6 +280,7 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
     const versions = fixedVersions ?? { bookRevision: book.revision, knowledgeRevision: book.knowledge_revision }
     // 仓储读取会核对原始 JSON 摘要、纯文本和字数；整个组装过程绑定同一作品读事务。
     const chapter = studio.readChapter({ bookId: data.bookId, chapterId: data.chapterId })
+    requireActiveChapter(db, data.chapterId)
     if (chapter.bookId !== data.bookId || chapter.id !== data.chapterId || chapter.bookRevision !== book.revision ||
         chapter.revisionId !== data.expectedRevisionId) conflict('目标章节已有新稿，请重新选择固定版本后预览。')
     if (documentToText(chapter.document) !== chapter.plainText) throw storageFailure()
@@ -293,7 +298,7 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
       ? readAiCharacterContext(studio, data.bookId, book.revision, book.knowledge_revision, data.characterScope, evidence) : undefined
     const contextSummaries = readAiContextSummaries(db, data.bookId, chapter.id, chapter.revisionId, data.summaryRefs ?? [])
     const creativeResources = readCreativeResources(studio, db, data.bookId, chapter.id, data.resourceRefs ?? [], data.resourceApplication ?? '', data.purpose === 'study')
-    const livingContext = data.useLivingContext ? readLivingWritingContext(db, data.bookId, chapter.id) : undefined
+    const livingContext = data.useLivingContext ? readLivingWritingContext(db, data.bookId, chapter.id, livingVersion, data.instruction) : undefined
     // 创作约定都是自由文本，无法保证没有结局信息；只向作者创作任务附加，整理和受限视角保持原证据边界。
     let writingContext: AiContextPacket['writingContext']
     if (includeWritingContext && !isAiMemoryTask(data.kind) && !reader && !character && !structuredReview && data.purpose !== 'study' && data.purpose !== 'living' && data.purpose !== 'forge') {
@@ -311,7 +316,7 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
       book.title.length + chapter.title.length + (isAiMemoryTask(data.kind) || character || structuredReview || data.purpose === 'study' || data.purpose === 'living' || forgeKind !== null ? 0 : chapter.goal.length + chapter.viewpoint.length + chapter.notes.length) +
       (characterContext ? JSON.stringify(characterContext).length : 0) + (writingContext ? JSON.stringify(writingContext).length : 0) +
       (creativeResources ? JSON.stringify(creativeResources).length : 0) +
-      (livingContext ? JSON.stringify(livingContext).length : 0) +
+      (livingContext && livingContext.version !== 2 ? JSON.stringify(livingContext).length : 0) +
       contextSummaries.reduce((size, item) => size + item.text.length + item.title.length + item.scopeTitle.length, 0)
     if (sourceLength > AI_CONTEXT_LIMIT) invalid('本次来源文本超过 80,000 个 UTF-16 字符，请缩小邻近范围、改稿目标或所选资料；整章范围不会自动截断。')
     const warnings = [...selected.warnings, BUDGET_WARNING]
@@ -329,8 +334,11 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
     }
     if (evidence.some((item) => item.sourceKind === 'chapter')) warnings.push('所选正文摘录属于原稿陈述，尚未判断冲突，不代表客观事实或角色已经知情。')
     if (contextSummaries.length) warnings.push('完整摘要仅覆盖目标章之前的来源；它是作者采用的整理结果，保留压缩与推断的不确定性，不代表人物已知情或读者已获披露。其他手选资料未按章序筛选。')
-    const messages: AiMessage[] = [
-      { role: 'system', content: forgeKind !== null ? FORGE_SYSTEM_RULES : data.purpose === 'living' ? LIVING_SYSTEM_RULES : data.purpose === 'study' ? studyRules : isAiMemoryTask(data.kind) ? MEMORY_SYSTEM_RULES : SYSTEM_RULES + (reader ? READER_CONTEXT_RULES : '') + (character ? characterContextRules(characterPromptVersion) : '') + (contextSummaries.length ? SUMMARY_CONTEXT_RULES : '') + (writingContext ? WRITING_CONTEXT_RULES : '') + (creativeResources ? CREATIVE_RESOURCE_RULES : '') + (data.purpose === 'review' ? structuredReview ? reviewPromptVersion === REVIEW_LEGACY_PROMPT_VERSION ? REVIEW_LEGACY_SYSTEM_RULES : REVIEW_SYSTEM_RULES : REVIEW_CONTEXT_RULES : '') + (livingContext ? LIVING_WRITING_RULES : '') },
+    const livingRules = livingContext?.version === 2
+      ? LIVING_WRITING_RULES.replace('最近三个前文章节内已发布的记忆', '邻近三章及按本次要求检索的较早有效记忆（较早部分最多五批，均早于目标章）')
+      : LIVING_WRITING_RULES
+    const buildMessages = (): AiMessage[] => [
+      { role: 'system', content: forgeKind !== null ? forgeRules : data.purpose === 'living' ? LIVING_SYSTEM_RULES : data.purpose === 'study' ? studyRules : isAiMemoryTask(data.kind) ? MEMORY_SYSTEM_RULES : SYSTEM_RULES + (reader ? READER_CONTEXT_RULES : '') + (character ? characterContextRules(characterPromptVersion) : '') + (contextSummaries.length ? SUMMARY_CONTEXT_RULES : '') + (writingContext ? WRITING_CONTEXT_RULES : '') + (creativeResources ? CREATIVE_RESOURCE_RULES : '') + (data.purpose === 'review' ? structuredReview ? reviewPromptVersion === REVIEW_LEGACY_PROMPT_VERSION ? REVIEW_LEGACY_SYSTEM_RULES : REVIEW_SYSTEM_RULES : REVIEW_CONTEXT_RULES : '') + (livingContext ? livingRules : '') },
       { role: 'user', content: JSON.stringify({
         ...(reader ? { perspective: 'reader' } : {}),
         ...(characterContext ? { perspective: 'character', characterContext } : {}),
@@ -348,11 +356,23 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
         ...(livingContext ? { livingContext } : {}),
       }) },
     ]
+    let messages = buildMessages()
+    const estimate = () => Math.ceil(Buffer.byteLength(JSON.stringify(messages), 'utf8') * 1.1) + 1024
+    const overBudget = () => messages.reduce((length, message) => length + message.content.length, 0) > AI_CONTEXT_LIMIT || estimate() + connection.maxOutputTokens > connection.contextWindow
+    let omittedMemories = 0
+    // 自动召回以完整批次为单位让出预算；不裁剪作者选择的原文，也不隐瞒本次覆盖范围。
+    if (livingContext?.version === 2) while (overBudget() && livingContext.memories.length) {
+      livingContext.memories.pop(); omittedMemories += 1
+      const warning = `本次自动记忆召回因预算省略 ${omittedMemories} 批，当前只发送预览列出的 ${livingContext.memories.length} 批；未发送的设定不代表模型已知。`
+      if (omittedMemories === 1) warnings.push(warning)
+      else warnings[warnings.length - 1] = warning
+      messages = buildMessages()
+    }
     if (messages.reduce((length, message) => length + message.content.length, 0) > AI_CONTEXT_LIMIT) {
       invalid('包含原文、出处标识与提示的上下文消息超过 80,000 个 UTF-16 字符，请缩小范围或所选资料后重新预览。')
     }
     // UTF-8 字节数加固定与比例余量只用于本地拒绝明显超预算的请求，不冒充模型 tokenizer。
-    const estimatedInputTokens = Math.ceil(Buffer.byteLength(JSON.stringify(messages), 'utf8') * 1.1) + 1024
+    const estimatedInputTokens = estimate()
     const reservedOutputTokens = connection.maxOutputTokens
     if (estimatedInputTokens + reservedOutputTokens > connection.contextWindow) {
       invalid(`上下文估算输入 ${estimatedInputTokens} 加预留输出 ${reservedOutputTokens} 超过窗口 ${connection.contextWindow}；请缩小范围或调整连接预算，原文未被自动截断。`)
@@ -377,7 +397,7 @@ export function buildAiContext(studio: StudioRepository, memorySearch: MemorySea
 }
 
 export function validateAiContext(studio: StudioRepository, memorySearch: MemorySearchRepository, packet: AiContextPacket,
-  currentBookRevision?: number): void {
+  currentBookRevision?: number, currentVersions?: Pick<AiContextPacket, 'bookRevision' | 'knowledgeRevision'>): void {
   const summaries = packet.contextSummaries === undefined ? [] : parseAiContextSummarySnapshots(packet.contextSummaries)
   const reader = packet.perspective === 'reader'
   const character = packet.perspective === 'character'
@@ -403,8 +423,8 @@ export function validateAiContext(studio: StudioRepository, memorySearch: Memory
   // 发送和采用都从原稿与固定资料重建，不能把旧候选悄悄重新指向当前的新稿。
   // 增量资格已由队列核对时，只保留原消息中的版本标签；当前原稿、标题、预算和完整消息仍逐项重建比对。
   const current = buildAiContext(studio, memorySearch, {
-    bookId: packet.bookId, chapterId: packet.chapterId, expectedBookRevision: currentBookRevision ?? packet.bookRevision,
-    expectedKnowledgeRevision: packet.knowledgeRevision, expectedRevisionId: packet.chapterRevisionId,
+    bookId: packet.bookId, chapterId: packet.chapterId, expectedBookRevision: currentVersions?.bookRevision ?? currentBookRevision ?? packet.bookRevision,
+    expectedKnowledgeRevision: currentVersions?.knowledgeRevision ?? packet.knowledgeRevision, expectedRevisionId: packet.chapterRevisionId,
     connectionId: packet.connection.id, connection: packet.connection, kind: packet.kind, instruction: packet.instruction,
     contextScope: packet.contextScope, selectedBlockIds: packet.selectedBlockIds, memoryChunkIds: packet.evidence.map((item) => item.chunkId),
     perspective: packet.perspective,
@@ -413,7 +433,7 @@ export function validateAiContext(studio: StudioRepository, memorySearch: Memory
     ...(characterContext ? { characterScope: characterScopeOf(characterContext) } : {}),
     ...(summaries.length ? { summaryRefs: summaries.map(contextSummaryRef) } : {}),
     ...(creativeResources ? { resourceRefs: creativeResources.items.map(creativeRef), resourceApplication: creativeResources.application } : {}),
-  }, currentBookRevision === undefined ? undefined : { bookRevision: packet.bookRevision, knowledgeRevision: packet.knowledgeRevision },
-  packet.writingContext !== undefined, character && !dedicatedPrompt ? packet.promptVersion : undefined, packet.promptVersion)
+  }, currentBookRevision === undefined && currentVersions === undefined ? undefined : { bookRevision: packet.bookRevision, knowledgeRevision: packet.knowledgeRevision },
+  packet.writingContext !== undefined, character && !dedicatedPrompt ? packet.promptVersion : undefined, packet.promptVersion, livingContext?.version ?? 1)
   if (current.contextHash !== packet.contextHash) conflict('上下文来源、发布批次或配置内容已变化，请保留候选并重新预览。')
 }

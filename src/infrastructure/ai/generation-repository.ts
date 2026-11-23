@@ -329,9 +329,9 @@ export class GenerationRepository {
         const person = 'slot' in candidate.value, value = candidate.value
         const revision = this.book(db).knowledge_revision
         const saved = knowledge.createItemWithSources({ bookId: data.bookId, expectedKnowledgeRevision: revision,
-          fields: { kind: person ? 'person' : 'rule', name: value.name, aliases: [], summary: value.summary, nature: 'author_setting', authorDecision: 'adopted', freshness: 'current', conflictState: 'unchecked',
+          fields: { kind: person ? 'person' : 'rule', name: value.name, aliases: [], summary: value.summary, nature: 'author_setting', authorDecision: 'adopted', freshness: 'current', conflictState: data.settingsReviewed ? 'clear' : 'unchecked',
             ...('profile' in value ? { characterProfile: parseCharacterProfile(value.profile) } : {}) } },
-        [{ sourceType: 'author_input', bookId: data.bookId, quote: `作者采纳开书提案 ${run.id}，候选 ${candidate.candidateId}。` }])
+        [{ sourceType: 'author_input', bookId: data.bookId, quote: `作者采纳开书提案 ${run.id}，候选 ${candidate.candidateId}。${data.settingsReviewed ? '作者已明确复核所选设定无冲突，可供后续创作引用。' : ''}` }])
         refs.push({ candidateId: candidate.candidateId, entityId: saved.id, resultingRevisionId: saved.revisions[0]!.id, kind: 'knowledge' })
       }
       const outline = selected.has(proposal.outline.candidateId) ? proposal.outline.value : null

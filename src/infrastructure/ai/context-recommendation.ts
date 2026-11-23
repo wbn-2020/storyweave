@@ -96,7 +96,7 @@ export class AiContextRecommendationRepository {
         const vectorRuns = this.memoryVectors.listSearchResults({ bookId: book.id, expectedPublicationVersion: book.index_publication_version })
         const candidates = new Map<number, Candidate>()
         const warnings = ['推荐只使用本地资料：要求取至多 4 个词，固定正文取样至多 6,000 字符，合计至多 8 路查询；最多核对 120 个候选，展示 20 个，每个来源至多 3 个片段。分词和有界排名可能遗漏相关资料，可补充手工检索。',
-          '推荐结果须由作者逐项选入；最终发送预览会再次核对来源、视角资格和完整预算。推荐不会改变已有选择或发起模型请求。']
+          '候选可手工选入，也可由已开启的自动推荐选入；最终发送预览会再次核对来源、视角资格和完整预算。读取推荐本身不会发起模型请求。']
         let truncated = false
         let incompleteIndex = false
         const merge = (hits: MemorySearchHit[], queryIndex?: number, vectorRunId?: string) => {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { activeChapterSql, supportsChapterArchive } from '../storage/chapter-lifecycle'
 import type Database from 'better-sqlite3'
 import { DomainError, isRecord, requiredId, requiredText } from '../../contracts/api'
 import { parseAiBookInput, type AiBookInput, type AiConnection, type AiMaintenanceBaseline, type AiRun, type AiRunState } from '../../contracts/ai'
@@ -421,7 +422,7 @@ export class AiMemoryTaskRepository {
     if (scope.kind === 'volume') {
       if (scope.volumeId === null) scopeTitle = '未分卷章节'
       else {
-        const volume = db.prepare('SELECT id, title FROM volumes WHERE id = ?').get(scope.volumeId) as { id: string; title: string } | undefined
+        const volume = db.prepare(`SELECT id, title FROM volumes WHERE id = ?${supportsChapterArchive(db) ? ' AND archived_at IS NULL' : ''}`).get(scope.volumeId) as { id: string; title: string } | undefined
         if (!volume) return { hash: null, scopeTitle: '', chapters: [] }
         if (storedId(volume.id) !== scope.volumeId) throw storageFailure()
         scopeTitle = storedText(volume.title, 120)
@@ -430,7 +431,7 @@ export class AiMemoryTaskRepository {
     // 只读取元数据来固定来源，不在任务建立或规划阶段装入全书正文。
     const selection = selectedIds === undefined ? '' : `AND c.id IN (${selectedIds.map(() => '?').join(', ')})`
     const chapters = db.prepare(`SELECT ${CHAPTER_COLUMNS} FROM chapters c LEFT JOIN volumes v ON v.id = c.volume_id
-      WHERE (? = 'book' OR c.volume_id IS ?) ${selection} ORDER BY c.position, c.id LIMIT ?`)
+      WHERE (? = 'book' OR c.volume_id IS ?) AND ${activeChapterSql(db)} ${selection} ORDER BY c.position, c.id LIMIT ?`)
       .all(scope.kind, scope.kind === 'volume' ? scope.volumeId : null, ...(selectedIds ?? []), MAX_CHAPTERS + 1) as ChapterMetadata[]
     if (chapters.length > MAX_CHAPTERS) throw storageFailure()
     checkChapters(chapters)
@@ -456,7 +457,7 @@ export class AiMemoryTaskRepository {
       LEFT JOIN ai_memory_task_units u ON u.task_id = r.task_id AND u.ordinal = r.unit_ordinal
       LEFT JOIN ai_memory_task_attempts a ON a.task_id = r.task_id AND a.unit_ordinal = r.unit_ordinal AND a.run_id = r.run_id
       LEFT JOIN ai_runs g ON g.id = r.run_id
-      WHERE (@scopeKind = 'book' OR c.volume_id IS @volumeId) ORDER BY c.position, c.id LIMIT @limit`)
+      WHERE (@scopeKind = 'book' OR c.volume_id IS @volumeId) AND ${activeChapterSql(db)} ORDER BY c.position, c.id LIMIT @limit`)
       .all({ bookId: book.id, consumer: AI_MEMORY_TASK_CONSUMER, kind, scopeKind: scope.kind,
         volumeId: scope.kind === 'volume' ? scope.volumeId : null, limit: MAX_CHAPTERS + 1 }) as
         { id: string; receipt_run_id: string | null; has_history: number; qualified: number }[]

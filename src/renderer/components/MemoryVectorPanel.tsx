@@ -34,6 +34,7 @@ interface Pending {
   retryRead?: true
   receive: (run: MemoryVectorRun) => boolean
 }
+interface IndexJob { publication: number; connection: AiConnection; model: string; batches: number; tokens: number; completed: number; spent: number; sent: string[] }
 const stateLabels = { prepared: '待发送', running: '请求中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' }
 const kindLabels = { index: '向量整理', search: '混合检索' }
 function uncertain(result: Result<unknown>): boolean {
@@ -64,6 +65,10 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
   const [embeddingModel, setEmbeddingModel] = useState('')
   const [status, setStatus] = useState<MemoryVectorStatus | null>(null)
   const [run, setRun] = useState<MemoryVectorRun | null>(null)
+  const [job, setJob] = useState<IndexJob | null>(null)
+  const jobRef = useRef<IndexJob | null>(null)
+  const [jobConfirmed, setJobConfirmed] = useState(false)
+  const [batchLimit, setBatchLimit] = useState(100), [tokenLimit, setTokenLimit] = useState(500_000)
   const [working, setWorking] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
@@ -90,13 +95,15 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
 
   useEffect(() => {
     mounted.current = true
-    return () => { mounted.current = false; busyCallback.current(false) }
+    return () => { mounted.current = false; jobRef.current = null; busyCallback.current(false) }
   }, [])
-  useEffect(() => { busyCallback.current(working || checking || unresolved) }, [working, checking, unresolved])
+  useEffect(() => { busyCallback.current(working || checking || unresolved || job !== null) }, [working, checking, unresolved, job])
+  useEffect(() => { setJobConfirmed(false) }, [bookId, connectionId, embeddingModel, publicationVersion, batchLimit, tokenLimit])
+  useEffect(() => { setStatus(null) }, [bookId, connectionId, selected?.version, embeddingModel, publicationVersion])
   useEffect(() => { setRecoveryConfirmed(false) }, [recovery])
 
   async function readConnections() {
-    if (lock.current || disabled || unresolved || locatingInitial) return
+    if (lock.current || disabled || unresolved || locatingInitial || jobRef.current) return
     lock.current = true; setWorking(true); setMessage(null)
     const result = await request(() => api.listAiConnections({ bookId }))
     if (mounted.current) {
@@ -125,7 +132,7 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
   }, [initialRunId, run])
 
   async function refreshCoverage() {
-    if (lock.current || blocked || unresolved) return
+    if (lock.current || blocked || unresolved || jobRef.current) return
     try {
       const input = parseMemoryVectorProfileInput(form)
       lock.current = true; setWorking(true); setMessage(null)
@@ -153,8 +160,9 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
       const result = await request(operation)
       if (!mounted.current) return
       if (result.ok) {
-        if (!receive(result.data)) { setPending(held); setMessage('回执与本次输入不符，已保留表单，请先核对原记录。') }
+        if (!receive(result.data)) { pauseJob(); setPending(held); setMessage('回执与本次输入不符，已保留表单，请先核对原记录。') }
       } else {
+        pauseJob()
         setMessage(result.error.message)
         if (uncertain(result) || result.error.code === 'STORAGE_ERROR' || result.error.code === 'WORKSPACE_BUSY' && result.error.requestId) {
           setPending({ ...held, requestId: result.error.requestId })
@@ -162,7 +170,8 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
       }
     } finally { lock.current = false; if (mounted.current) setWorking(false) }
   }
-  async function prepare(kind: MemoryVectorKind) {
+  async function prepare(kind: MemoryVectorKind, automated = false) {
+    if (jobRef.current && (!automated || kind !== 'index')) return
     if (archived || unresolved || blocked) return
     try {
       const input = parseMemoryVectorPrepareInput({ ...form, expectedPublicationVersion: publicationVersion, kind,
@@ -172,7 +181,7 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
         if (!matchesPrepared(input, value) || !expectedConnection || !sameConnection(value.context.connection, expectedConnection)) return false
         return accept(value)
       }, ['ai.connection.list'])
-    } catch (error) { setMessage(error instanceof DomainError ? error.message : '向量预览参数无效。') }
+    } catch (error) { pauseJob(); setMessage(error instanceof DomainError ? error.message : '向量预览参数无效。') }
   }
   function formMatches(value: MemoryVectorRun): boolean {
     try {
@@ -181,7 +190,8 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
       return matchesPrepared(input, value) && selected !== undefined && sameConnection(selected, value.context.connection)
     } catch { return false }
   }
-  async function start() {
+  async function start(automated = false) {
+    if (jobRef.current && !automated) return
     const current = runRef.current
     if (!current || archived || current.state !== 'prepared' || !formMatches(current)) return
     await write('发送向量请求', ['memory.vector.claim'], () => api.startMemoryVectorRun({ bookId, runId: current.id,
@@ -190,6 +200,7 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
       ['memory.vector.get', 'ai.connection.list'], current)
   }
   async function stop() {
+    pauseJob()
     const current = runRef.current
     if (!current || (current.state !== 'prepared' && current.state !== 'running')) return
     if (current.state === 'running' && current.active === undefined) { setMessage('请先读取原请求，核对本机网络状态后再取消或中断。'); return }
@@ -201,6 +212,7 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
       interrupt ? [] : ['memory.vector.get', 'ai.connection.list'], current)
   }
   async function readRun(id: string, polling = false) {
+    if (jobRef.current && runRef.current?.id !== id) return
     const retry = !polling && pending?.retryRead && pending.readRunId === id ? pending : null
     // 只解除同一记录的读取等待；准备、发送等未知写入仍须核对各自回执。
     if (lock.current || disabled || working || checking || (pending !== null && !retry) ||
@@ -216,6 +228,7 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
         if (retry) setPending(null)
         setMessage(null)
       } else {
+        pauseJob()
         setPollStopped(true)
         setMessage(result.ok ? '向量记录与原请求不符，请保留恢复内容。' : `${result.error.message}${polling ? ' 已暂停自动读取，可手动读取原请求。' : ''}`)
         if (retry || result.ok || uncertain(result) || result.error.code === 'STORAGE_ERROR' || result.error.requestId) {
@@ -233,6 +246,53 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
     const timer = window.setTimeout(() => { void readRun(run.id, true) }, 1500)
     return () => window.clearTimeout(timer)
   }, [run, blocked, pollStopped])
+
+  function pauseJob(notice?: string) {
+    jobRef.current = null; setJob(null); setJobConfirmed(false)
+    if (notice) setMessage(notice)
+  }
+  function startJob() {
+    if (blocked || unresolved || archived || !selected || !jobConfirmed || !status || status.publicationVersion !== publicationVersion ||
+      !Number.isSafeInteger(batchLimit) || batchLimit < 1 || batchLimit > 500 || !Number.isSafeInteger(tokenLimit) || tokenLimit < 1 || tokenLimit > 10_000_000) return
+    if (status.indexedChunks >= status.eligibleChunks) { setMessage('当前范围已完成向量整理，无需发送新请求。'); return }
+    if (run?.state === 'prepared' && (run.kind !== 'index' || !formMatches(run))) { setMessage('请先取消当前待发送预览，再开始连续整理。'); return }
+    const next: IndexJob = { publication: publicationVersion, connection: { ...selected }, model: embeddingModel.trim(), batches: batchLimit, tokens: tokenLimit, completed: 0, spent: 0, sent: [] }
+    jobRef.current = next; setJob(next); setPollStopped(false); setMessage(null)
+    if (run?.state !== 'prepared') { runRef.current = null; setRun(null) }
+  }
+  async function advanceJob(currentJob: IndexJob, completedRun: MemoryVectorRun) {
+    if (lock.current) return
+    lock.current = true; setWorking(true)
+    try {
+      const result = await request(() => api.getMemoryVectorStatus({ bookId, connectionId: currentJob.connection.id, embeddingModel: currentJob.model }))
+      if (!mounted.current || jobRef.current !== currentJob || runRef.current?.id !== completedRun.id) return
+      if (!result.ok || result.data.bookId !== bookId || result.data.publicationVersion !== currentJob.publication) {
+        pauseJob(result.ok ? '索引发布已变化，连续整理已暂停。' : result.error.message); return
+      }
+      setStatus(result.data)
+      const next = { ...currentJob, completed: currentJob.completed + 1 }
+      if (result.data.indexedChunks >= result.data.eligibleChunks) { pauseJob(`当前范围已全部整理完成，本次共 ${next.completed} 批。`); return }
+      if (next.completed >= next.batches) { pauseJob(`本次已完成 ${next.completed} 批，达到授权上限。`); return }
+      jobRef.current = next; setJob(next); runRef.current = null; setRun(null)
+    } finally { lock.current = false; if (mounted.current) setWorking(false) }
+  }
+  useEffect(() => {
+    const currentJob = jobRef.current
+    if (!currentJob || currentJob !== job) return
+    if (archived || currentJob.publication !== publicationVersion || !selected || !sameConnection(currentJob.connection, selected) || currentJob.model !== embeddingModel.trim()) { pauseJob('索引批次或连接已变化，连续整理已暂停。'); return }
+    if (pending || pollStopped) { pauseJob('请求状态尚未确认，连续整理已暂停；请先核对原请求。'); return }
+    if (blocked || lock.current || run?.state === 'running') return
+    if (!run) { void prepare('index', true); return }
+    if (run.kind !== 'index' || !formMatches(run)) { pauseJob('本次预览已超出授权范围，连续整理已暂停。'); return }
+    if (run.state === 'prepared') {
+      if (currentJob.sent.includes(run.id)) { pauseJob('上一发送尚未确认，已暂停；请读取原请求。'); return }
+      if (currentJob.completed >= currentJob.batches || currentJob.spent + run.context.estimatedInputTokens > currentJob.tokens) { pauseJob('达到本次批数或输入预算上限。已保存的向量保留，当前预览尚未发送。'); return }
+      const next = { ...currentJob, spent: currentJob.spent + run.context.estimatedInputTokens, sent: [...currentJob.sent, run.id] }
+      jobRef.current = next; setJob(next); void start(true); return
+    }
+    if (run.state !== 'succeeded' || !currentJob.sent.includes(run.id)) { pauseJob('本批未确认成功，连续整理已暂停。'); return }
+    void advanceJob(currentJob, run)
+  }, [job, run, blocked, pending, pollStopped, archived, publicationVersion, selected, embeddingModel])
 
   async function checkReceipt() {
     if (!pending?.requestId || checking || lock.current || disabled) return
@@ -269,7 +329,7 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
     lock.current = false
   }
   function restoreForm() {
-    if (!run || blocked || unresolved) return
+    if (!run || blocked || unresolved || jobRef.current) return
     setConnectionId(run.context.connection.id); setEmbeddingModel(run.embeddingModel)
     if (run.context.search) onRestoreSearch(parseMemorySearchInput(run.context.search))
     setMessage('已恢复该预览的配置与检索条件；发送前会重新核对当前来源。')
@@ -285,13 +345,22 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
   }
 
   return <section ref={section} tabIndex={initialRunId ? -1 : undefined} className={styles.vector} aria-label="向量整理与混合检索">
-    <div className={styles.taskHeading}><h3>向量整理与混合检索</h3><button type="button" className={shared.button} disabled={blocked || unresolved} onClick={() => void readConnections()}>刷新连接</button></div>
+    <div className={styles.taskHeading}><h3>向量整理与混合检索</h3><button type="button" className={shared.button} disabled={blocked || unresolved || job !== null} onClick={() => void readConnections()}>刷新连接</button></div>
     {locatingInitial && <div className={styles.actions} role="status"><p className={styles.note}>{working ? '正在读取指定向量任务' : '待核对指定向量任务'} · {initialRunId}</p>
       <button type="button" className={shared.button} disabled={disabled || working || checking || pending !== null || initialRequested} onClick={() => void readRun(initialRunId!)}>重新读取指定任务</button></div>}
-    <p className={styles.note}>先预览，明确发送后才向所选接口传递文本。每批最多 8 个有效片段；混合检索仅发送上方查询文字。后续批次需再次准备与发送，向量进度独立于本地索引覆盖。</p>
-    <div className={styles.vectorForm}><label>模型连接<select value={connectionId} disabled={blocked || unresolved} onChange={(event) => { setConnectionId(event.target.value); setStatus(null) }}><option value="">选择本书连接</option>{connections.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}</select></label><label>向量模型<input value={embeddingModel} maxLength={200} disabled={blocked || unresolved} placeholder="填写接口支持的向量模型" onChange={(event) => { setEmbeddingModel(event.target.value); setStatus(null) }} /></label></div>
+    <p className={styles.note}>每批最多 8 个有效片段；混合检索仅发送查询文字。可逐批预览发送，也可明确授权下方连续整理。连续整理只跳过已成功保存的片段，遇到失败或未知回执即暂停。</p>
+    <details><summary>连续整理本次索引</summary>
+      <p className={styles.note}>向当前连接发送本次索引中尚未整理的有效文本，直到全部完成或达到下列任一上限。输入预算为保守估算，不是价格承诺；离开页面后不会自动续跑。</p>
+      <label>最多批数（每批最多8片段）<input type="number" min={1} max={500} step={1} value={batchLimit} disabled={blocked || unresolved || job !== null} onChange={(event) => setBatchLimit(event.target.valueAsNumber)} /></label>
+      <label>最多估算输入 token<input type="number" min={1} max={10000000} step={1} value={tokenLimit} disabled={blocked || unresolved || job !== null} onChange={(event) => setTokenLimit(event.target.valueAsNumber)} /></label>
+      <label className={shared.checkLabel}><input type="checkbox" checked={jobConfirmed} disabled={blocked || unresolved || job !== null} onChange={(event) => setJobConfirmed(event.target.checked)} />允许向 {selected?.name ?? '所选连接'} / {embeddingModel || '所选向量模型'} 连续发送发布批次 {publicationVersion} 的待整理文本</label>
+      <button type="button" className={shared.primaryButton} disabled={blocked || unresolved || archived || job !== null || !selected || !jobConfirmed || !status || status.indexedChunks >= status.eligibleChunks} onClick={startJob}>按上述授权开始连续整理</button>
+      {!status && <p className={styles.note}>请先刷新覆盖情况，再确认发送范围。</p>}
+      {job && <p role="status">已完成 {job.completed}/{job.batches} 批，已发送估算输入 {job.spent}/{job.tokens}。<button type="button" className={shared.button} onClick={() => pauseJob('已暂停后续批次；当前请求仍保留，可单独取消或等其完成。')}>暂停后续批次</button></p>}
+    </details>
+    <div className={styles.vectorForm}><label>模型连接<select value={connectionId} disabled={blocked || unresolved || job !== null} onChange={(event) => { setConnectionId(event.target.value); setStatus(null) }}><option value="">选择本书连接</option>{connections.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}</select></label><label>向量模型<input value={embeddingModel} maxLength={200} disabled={blocked || unresolved || job !== null} placeholder="填写接口支持的向量模型" onChange={(event) => { setEmbeddingModel(event.target.value); setStatus(null) }} /></label></div>
     {connections.length === 0 && <p className={styles.note}>请先在 AI 协作中保存本书连接。远端密钥只在本次应用会话使用；此处沿用相同连接。</p>}
-    <div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || unresolved || !selected || !embeddingModel.trim()} onClick={() => void refreshCoverage()}>读取向量覆盖</button><button type="button" className={shared.button} disabled={blocked || unresolved || archived || !selected || !embeddingModel.trim() || publicationVersion < 1} onClick={() => void prepare('index')}>预览下一批向量整理</button><button type="button" className={shared.button} disabled={blocked || unresolved || archived || !selected || !embeddingModel.trim() || !searchInput.query.trim() || publicationVersion < 1} onClick={() => void prepare('search')}>预览混合检索</button></div>
+    <div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || unresolved || job !== null || !selected || !embeddingModel.trim()} onClick={() => void refreshCoverage()}>读取向量覆盖</button><button type="button" className={shared.button} disabled={blocked || unresolved || job !== null || archived || !selected || !embeddingModel.trim() || publicationVersion < 1} onClick={() => void prepare('index')}>预览下一批向量整理</button><button type="button" className={shared.button} disabled={blocked || unresolved || job !== null || archived || !selected || !embeddingModel.trim() || !searchInput.query.trim() || publicationVersion < 1} onClick={() => void prepare('search')}>预览混合检索</button></div>
     {status && <p className={styles.note}>发布批次 {status.publicationVersion} · 已有向量 {status.indexedChunks.toLocaleString()} / {status.eligibleChunks.toLocaleString()} 个有效片段 · {status.dimensions === null ? '尚无成功结果' : `${status.dimensions} 维，返回模型 ${status.responseModel}`}。覆盖仅表示派生索引范围。</p>}
     {message && <p className={shared.formError} role="status">{message}</p>}
     {pending && <div className={layout.pending} role="alert"><h4>{pending.label}尚未确认</h4><p>请求编号：{pending.requestId ?? '不可用'}。写入已锁定，请核对原回执并留存恢复内容。</p><label>配置与请求恢复内容<textarea className={styles.vectorRecovery} readOnly rows={7} value={recovery} onFocus={(event) => event.target.select()} /></label><label className={shared.checkLabel}><input type="checkbox" checked={recoveryConfirmed} disabled={working || checking} onChange={(event) => setRecoveryConfirmed(event.target.checked)} />我已复制留存配置、查询与原请求编号，允许进入恢复</label><div className={styles.actions}><button type="button" className={shared.button} disabled={working || checking || disabled || !pending.requestId} onClick={() => void checkReceipt()}>查询原请求回执</button>
@@ -301,11 +370,11 @@ export function MemoryVectorPanel({ api, bookId, initialRunId, archived, publica
       {run.state === 'prepared' && !formMatches(run) && <p className={styles.note}>当前配置、查询或发布版本与此预览不同。请重新准备，或明确恢复该预览的表单。</p>}
       <details open><summary>将发送的完整输入（{run.context.input.length} 项）</summary>{run.context.input.map((text, index) => <div key={index}><p className={styles.note}>输入 {index + 1}{run.context.items[index] && ` · ${run.context.items[index].title} · 修订 ${run.context.items[index].revisionId} · 片段 ${run.context.items[index].chunkId}`}</p><pre>{text}</pre></div>)}</details>
       {run.error && <p className={shared.formError}>{run.error}</p>}
-      <div className={styles.actions}>{run.state === 'prepared' && <><button type="button" className={shared.primaryButton} disabled={blocked || archived || !formMatches(run)} onClick={() => void start()}>发送这份预览</button><button type="button" className={shared.button} disabled={blocked} onClick={() => void stop()}>取消此预览</button><button type="button" className={shared.button} disabled={blocked} onClick={restoreForm}>恢复该预览表单</button></>}{run.state === 'running' && <button type="button" className={shared.button} disabled={blocked || run.active === undefined} onClick={() => void stop()}>{run.active === undefined ? '请先读取本机请求状态' : run.active ? '取消当前网络请求' : '明确中断孤立请求'}</button>}<button type="button" className={shared.button} disabled={blocked} onClick={() => void readRun(run.id)}>读取原请求</button>{run.result && <button type="button" className={shared.button} disabled={blocked} onClick={results}>显示本次混合结果快照</button>}</div>
+      <div className={styles.actions}>{run.state === 'prepared' && <><button type="button" className={shared.primaryButton} disabled={blocked || job !== null || archived || !formMatches(run)} onClick={() => void start()}>发送这份预览</button><button type="button" className={shared.button} disabled={blocked} onClick={() => void stop()}>取消此预览</button><button type="button" className={shared.button} disabled={blocked || job !== null} onClick={restoreForm}>恢复该预览表单</button></>}{run.state === 'running' && <button type="button" className={shared.button} disabled={blocked || run.active === undefined} onClick={() => void stop()}>{run.active === undefined ? '请先读取本机请求状态' : run.active ? '取消当前网络请求' : '明确中断孤立请求'}</button>}<button type="button" className={shared.button} disabled={blocked} onClick={() => void readRun(run.id)}>读取原请求</button>{run.result && <button type="button" className={shared.button} disabled={blocked} onClick={results}>显示本次混合结果快照</button>}</div>
       {run.usage && <p className={styles.note}>接口报告输入 token：{run.usage.inputTokens ?? '未提供'}；总 token：{run.usage.totalTokens ?? '未提供'}。</p>}
-      {run.state === 'succeeded' && run.kind === 'index' && <p className={styles.note}>本批已保存。可刷新覆盖，再明确准备下一批；不会自动继续发送。</p>}
+      {run.state === 'succeeded' && run.kind === 'index' && <p className={styles.note}>本批已保存。{job ? '正在按本次授权准备后续批次。' : '可刷新覆盖或重新授权连续整理。'}</p>}
     </div>}
     {(run || pending || embeddingModel) && <details className={styles.history}><summary>可复制的恢复内容</summary><textarea className={styles.vectorRecovery} readOnly rows={7} value={recovery} aria-label="向量请求恢复内容" /></details>}
-    {status && status.recentRuns.length > 0 && <details className={styles.history}><summary>最近 20 批请求</summary><ul>{status.recentRuns.map((item) => <li key={item.id}><span>{kindLabels[item.kind]} · {stateLabels[item.state]} · {item.embeddingModel} · {displayTime(item.updatedAt)}</span><button type="button" className={shared.button} disabled={blocked || unresolved} onClick={() => void readRun(item.id)}>查看固定记录</button></li>)}</ul></details>}
+    {status && status.recentRuns.length > 0 && <details className={styles.history}><summary>最近 20 批请求</summary><ul>{status.recentRuns.map((item) => <li key={item.id}><span>{kindLabels[item.kind]} · {stateLabels[item.state]} · {item.embeddingModel} · {displayTime(item.updatedAt)}</span><button type="button" className={shared.button} disabled={blocked || unresolved || job !== null} onClick={() => void readRun(item.id)}>查看固定记录</button></li>)}</ul></details>}
   </section>
 }

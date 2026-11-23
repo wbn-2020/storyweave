@@ -76,6 +76,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
   switch (request.command) {
     case 'living.get': return living.get(request.payload)
     case 'living.archive': return living.archive(request.payload)
+    case 'living.syncMemory': return living.syncMemory(request.payload)
     case 'living.save': return living.save(request.payload)
     case 'living.history': return living.history(request.payload)
     case 'living.restore': return living.restore(request.payload)
@@ -218,6 +219,7 @@ async function dispatch(request: ServiceRequest): Promise<ServiceOutput> {
     case 'chapter.read': return repository.readChapter(request.payload)
     case 'chapter.save': return repository.saveChapter(request.payload)
     case 'book.update': return repository.updateBook(request.payload)
+    case 'book.archiveStructure': return repository.archiveStructure(request.payload)
     case 'volume.create': return repository.createVolume(request.payload)
     case 'volume.rename': return repository.renameVolume(request.payload)
     case 'volume.reorder': return repository.reorderVolumes(request.payload)

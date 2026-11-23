@@ -4,7 +4,7 @@ import { join, normalize, resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import {
   DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText, parseCreateBookInput,
-  type BookInput, type BookSnapshot, type BookSummary, type ChapterInput,
+  type ArchiveStructureInput, type BookInput, type BookSnapshot, type BookSummary, type ChapterInput,
   type ChapterSnapshot, type ChapterSummary, type CreateBookInput,
   type CreateChapterInput, type SaveChapterInput, type SaveChapterOutput,
   type WorkspaceSnapshot, type UpdateBookInput, type CreateVolumeInput, type RenameVolumeInput,
@@ -43,6 +43,8 @@ import type { WritingDay } from '../../contracts/workbench'
 import { MAX_IMPORT_BYTES, renderTextExport } from '../text/manuscript-text'
 import { BOOK_APPLICATION_ID, BOOK_SCHEMA, BOOK_SCHEMA_VERSION, STUDIO_APPLICATION_ID, STUDIO_SCHEMA, STUDIO_SCHEMA_VERSION } from './schema'
 import { storageError } from './storage-error'
+import { CHAPTER_ARCHIVE_SCHEMA, activeChapterSql, supportsChapterArchive, requireActiveChapter } from './chapter-lifecycle'
+import { LIVING_MEMORY_PROJECTION_SCHEMA } from '../workbench/living-projection'
 
 interface BookRow {
   id: string; title: string; genre: string; synopsis: string; archived_at: string | null
@@ -428,6 +430,12 @@ export class StudioRepository {
       const volumes = db.prepare('SELECT id, title, position FROM volumes ORDER BY position, id LIMIT ?').all(MAX_VOLUMES + 1) as VolumeSummary[]
       if (volumes.length > MAX_VOLUMES) throw storageFailure()
       this.updateCatalog(book)
+      if (supportsChapterArchive(db)) {
+        const activeIds = new Set((db.prepare(`SELECT c.id FROM chapters c WHERE ${activeChapterSql(db)}`).all() as { id: string }[]).map((row) => row.id))
+        const archivedVolumes = new Set((db.prepare('SELECT id FROM volumes WHERE archived_at IS NOT NULL').all() as { id: string }[]).map((row) => row.id))
+        return { book, chapters: rows.filter((row) => activeIds.has(row.id)).map(chapterSummary), volumes: volumes.filter((volume) => !archivedVolumes.has(volume.id)),
+          archivedChapters: rows.filter((row) => !activeIds.has(row.id)).map(chapterSummary), archivedVolumes: volumes.filter((volume) => archivedVolumes.has(volume.id)), chapterArchiveSupported: true }
+      }
       return { book, chapters: rows.map(chapterSummary), volumes }
     })
   }
@@ -462,6 +470,28 @@ export class StudioRepository {
     })
   }
 
+  archiveStructure(input: ArchiveStructureInput): BookSnapshot {
+    return perform(() => {
+      const data = payload(input), bookId = requiredId(data.bookId).toLowerCase(), id = requiredId(data.id).toLowerCase()
+      if (data.kind !== 'chapter' && data.kind !== 'volume' || typeof data.archived !== 'boolean') throw new DomainError({ code: 'INVALID_INPUT', message: '卷章归档操作无效。' })
+      const db = this.openBook(bookId), table = data.kind === 'chapter' ? 'chapters' : 'volumes'
+      db.transaction(() => {
+        this.requireWritable(db, bookId, requiredInteger(data.expectedBookRevision, '作品版本'))
+        if (!supportsChapterArchive(db)) throw new DomainError({ code: 'FORBIDDEN', message: '请先在知识库备份升级作品至 v28，再使用卷章归档。' })
+        const row = db.prepare(`SELECT archived_at FROM ${table} WHERE id = ?`).get(id) as { archived_at: string | null } | undefined
+        if (!row) throw new DomainError({ code: 'NOT_FOUND', message: '本书不存在这个卷或章。' })
+        if (data.kind === 'chapter' && !data.archived && db.prepare('SELECT 1 FROM chapters c JOIN volumes v ON v.id = c.volume_id WHERE c.id = ? AND v.archived_at IS NOT NULL').get(id)) {
+          throw new DomainError({ code: 'FORBIDDEN', message: '请先恢复所属分卷，再恢复这一章。' })
+        }
+        if (Boolean(row.archived_at) === data.archived) return
+        const now = new Date().toISOString()
+        db.prepare(`UPDATE ${table} SET archived_at = ?, updated_at = ? WHERE id = ?`).run(data.archived ? now : null, now, id)
+        this.recordMutation(db, 'book.structure', now)
+      }).immediate()
+      return this.getBook({ bookId })
+    })
+  }
+
   readChapter(input: ChapterInput): ChapterSnapshot {
     return perform(() => {
       const data = payload(input)
@@ -470,7 +500,8 @@ export class StudioRepository {
       const db = this.openBook(bookId)
       const row = this.readChapterRow(db, chapterId)
       const document = verifyDocument(row)
-      return { ...chapterSummary(row), bookId, document, plainText: row.plain_text, bookRevision: this.readBookMetadata(db, bookId).revision }
+      const archived = supportsChapterArchive(db) && !db.prepare(`SELECT 1 FROM chapters c WHERE c.id = ? AND ${activeChapterSql(db)}`).get(chapterId)
+      return { ...chapterSummary(row), bookId, document, plainText: row.plain_text, bookRevision: this.readBookMetadata(db, bookId).revision, ...(archived ? { archived: true } : {}) }
     })
   }
 
@@ -488,6 +519,7 @@ export class StudioRepository {
       const db = this.openBook(bookId)
       const changed = db.transaction(() => {
         this.requireWritable(db, bookId)
+        requireActiveChapter(db, chapterId)
         const current = this.readChapterRow(db, chapterId)
         if (current.current_revision_id !== expectedRevisionId) {
           throw new DomainError({ code: 'REVISION_CONFLICT', message: '章节已有更新版本。当前草稿已保留，请重新读取后比较，不能直接覆盖。', currentRevisionId: current.current_revision_id })
@@ -602,6 +634,7 @@ export class StudioRepository {
       db.transaction(() => {
         this.requireWritable(db, bookId, expected)
         const current = this.readChapterRow(db, chapterId)
+        requireActiveChapter(db, chapterId)
         this.requireVolume(db, volumeId)
         const now = new Date().toISOString()
         db.prepare(`UPDATE chapters SET title = ?, volume_id = ?, goal = ?, viewpoint = ?, target_characters = ?, notes = ?, status = ?, updated_at = ? WHERE id = ?`)
@@ -625,6 +658,7 @@ export class StudioRepository {
       db.transaction(() => {
         this.requireWritable(db, bookId, expected)
         const chapter = this.readChapterRow(db, chapterId)
+        requireActiveChapter(db, chapterId)
         if (chapter.current_revision_id !== revisionId) this.revisionConflict(chapter.current_revision_id)
         const now = new Date().toISOString()
         db.prepare("UPDATE chapters SET finalized_revision_id = ?, finalized_at = ?, status = 'finalized', updated_at = ? WHERE id = ?")
@@ -673,6 +707,7 @@ export class StudioRepository {
       db.transaction(() => {
         this.requireWritable(db, bookId)
         const current = this.readChapterRow(db, chapterId)
+        requireActiveChapter(db, chapterId)
         if (current.current_revision_id !== expected) this.revisionConflict(current.current_revision_id)
         const source = this.historyRow(db, chapterId, sourceId)
         verifyDocument(source)
@@ -884,7 +919,7 @@ export class StudioRepository {
         const column = data.scope === 'finalized' ? 'finalized_revision_id' : 'current_revision_id'
         const rows = db.prepare(`SELECT c.title, r.document_json, r.plain_text, r.content_hash, r.character_count
           FROM chapters c JOIN chapter_revisions r ON r.id = c.${column} AND r.chapter_id = c.id
-          ORDER BY c.position, c.id LIMIT ?`).iterate(MAX_CHAPTERS + 1) as Iterable<{ title: string; document_json: string; plain_text: string; content_hash: string; character_count: number }>
+          WHERE ${activeChapterSql(db)} ORDER BY c.position, c.id LIMIT ?`).iterate(MAX_CHAPTERS + 1) as Iterable<{ title: string; document_json: string; plain_text: string; content_hash: string; character_count: number }>
         let chapterCount = 0
         let characterCount = 0
         for (const row of rows) {
@@ -1022,6 +1057,7 @@ export class StudioRepository {
           db.exec(AI_PRESETS_V25_UPGRADE)
         }
         if (previousVersion < 26) db.exec(KNOWLEDGE_ADJUDICATION_SCHEMA)
+        if (previousVersion < 28) db.exec(`${CHAPTER_ARCHIVE_SCHEMA}${LIVING_MEMORY_PROJECTION_SCHEMA}`)
         if (db.prepare('PRAGMA foreign_key_check').get()) throw storageFailure()
         db.pragma(`user_version = ${BOOK_SCHEMA_VERSION}`)
         validateAiPresetsDatabase(db, bookId)
@@ -1366,7 +1402,7 @@ export class StudioRepository {
   }
 
   private requireVolume(db: Database.Database, volumeId: string | null): void {
-    if (volumeId !== null && !db.prepare('SELECT id FROM volumes WHERE id = ?').get(volumeId)) {
+    if (volumeId !== null && !db.prepare(`SELECT id FROM volumes WHERE id = ?${supportsChapterArchive(db) ? ' AND archived_at IS NULL' : ''}`).get(volumeId)) {
       throw new DomainError({ code: 'NOT_FOUND', message: '当前作品中不存在这个卷。' })
     }
   }
@@ -1402,16 +1438,19 @@ export class StudioRepository {
       db.transaction(() => {
         this.requireWritable(db, bookId, expected)
         const rows = db.prepare(`SELECT id, position FROM ${table} ORDER BY position, id LIMIT ?`).all(maximum + 1) as { id: string; position: number }[]
-        const existing = new Set(rows.map((row) => row.id))
-        if (rows.length !== ids.length || ids.some((id) => !existing.has(id))) throw new DomainError({ code: 'REVISION_CONFLICT', message: '排序必须包含当前作品的全部项目，请刷新后重试。' })
-        if (ids.every((id, index) => rows[index]?.id === id)) return
+        const activeRows = supportsChapterArchive(db) ? db.prepare(`SELECT c.id FROM ${table} c WHERE ${table === 'chapters' ? activeChapterSql(db) : 'c.archived_at IS NULL'}`).all() as { id: string }[] : rows
+        const existing = new Set(activeRows.map((row) => row.id))
+        if (activeRows.length !== ids.length || ids.some((id) => !existing.has(id))) throw new DomainError({ code: 'REVISION_CONFLICT', message: '排序必须包含当前作品的全部未归档项目，请刷新后重试。' })
+        let index = 0
+        const ordered = rows.map((row) => existing.has(row.id) ? ids[index++]! : row.id)
+        if (ordered.every((id, at) => rows[at]?.id === id)) return
         const now = new Date().toISOString()
         const maxPosition = rows.reduce((max, row) => Math.max(max, row.position), -1)
         if (!Number.isSafeInteger(maxPosition) || maxPosition > Number.MAX_SAFE_INTEGER / 3) throw storageFailure()
         // UNIQUE(position) 在逐行更新时生效，先搬到不重叠的临时区间再写最终次序。
-        db.prepare(`UPDATE ${table} SET position = position + ?`).run(maxPosition + ids.length + 1)
+        db.prepare(`UPDATE ${table} SET position = position + ?`).run(maxPosition + rows.length + 1)
         const update = db.prepare(`UPDATE ${table} SET position = ?, updated_at = ? WHERE id = ?`)
-        ids.forEach((id, index) => update.run(index, now, id))
+        ordered.forEach((id, index) => update.run(index, now, id))
         this.normalizeChapterPositions(db, now)
         this.recordMutation(db, 'book.structure', now)
       }).immediate()

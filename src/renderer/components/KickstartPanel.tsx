@@ -39,6 +39,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const [step, setStep] = useState(bookId ? 2 : 0)
   const [lastProposalRun, setLastProposalRun] = useState<GenerationRun | null>(null)
   const [confirmAdopt, setConfirmAdopt] = useState(false)
+  const [settingsReviewed, setSettingsReviewed] = useState(false)
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [connections, setConnections] = useState<StudioAiConnection[]>([])
   const [keyIds, setKeyIds] = useState<string[]>([])
@@ -81,6 +82,8 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   const proposal = proposalRun?.proposal ?? null
   const selection = new Set(run?.selectedIds ?? [])
   const visibleSelection = new Set(proposalRun?.selectedIds ?? [])
+  const reviewIdentity = JSON.stringify([run?.id, proposalRun?.proposal, run?.selectedIds])
+  useEffect(() => { setSettingsReviewed(false) }, [reviewIdentity])
   const proposalLocked = locked || run !== proposalRun || Boolean(snapshot?.adoption)
   const seedMatchesRun = Boolean(run && same(seed, run.seed))
   const selectedConnection = connections.find((connection) => connection.id === connectionId)
@@ -275,7 +278,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
   async function adopt() {
     if (!snapshot || !run || !proposal || locked || seedDirty || configDirty || !seedMatchesRun) return
     const input = { bookId: run.bookId, runId: run.id, expectedVersion: run.version,
-      expectedBookRevision: snapshot.book.book.revision, expectedKnowledgeRevision: run.knowledgeRevision }
+      expectedBookRevision: snapshot.book.book.revision, expectedKnowledgeRevision: run.knowledgeRevision, settingsReviewed }
     await tool.write('generation.adopt', () => api.adoptGeneration(input),
       (value) => value.book.book.id === input.bookId && value.run?.id === input.runId && value.adoption?.runId === input.runId
         && value.book.book.lifecycle === 'active' && value.book.chapters.some((chapter) => chapter.id === value.adoption?.firstChapterId),
@@ -364,6 +367,7 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
       <label className={styles.check}><input type="checkbox" checked={isDefault} onChange={(event) => { setDefault(event.target.checked); setDefaultConfirmed(false) }} />作为工作区默认连接</label>
       {replacingDefault && <label className={`${styles.check} ${styles.full}`}><input type="checkbox" checked={defaultConfirmed} onChange={(event) => setDefaultConfirmed(event.target.checked)} />确认替换“{oldDefault?.name}”的默认状态</label>}
     </fieldset>
+    <p className={styles.hint}>地址和模型名称请从服务方复制。文本生成使用流式 Chat Completions、max_completion_tokens 和 stream_options.include_usage；仅支持 max_tokens 的接口暂不适用。窗口填写服务方公布的限制，最大输出是单次生成上限；密钥在重开应用后需重新填写。</p>
     <p className={styles.hint}>首次在旧书库保存连接，会先在 studio-backups 留存目录库备份，再增加配置表。作品正文不参与这次升级。</p>
     <div className={styles.actions}><button className={styles.primary} type="submit" disabled={locked || !configDirty || replacingDefault && !defaultConfirmed} aria-busy={processing('configure')} title={lockedReason ?? (!configDirty ? '模型配置尚未修改，无需重复保存' : replacingDefault && !defaultConfirmed ? '请先确认替换原默认连接' : undefined)}>{processing('configure') ? '正在保存模型配置…' : '保存模型配置'}</button>
       {configDirty && <button type="button" disabled={locked} title={lockedReason} onClick={onClose}>放弃修改或离开</button>}
@@ -542,6 +546,8 @@ export function KickstartPanel({ api, bookId, initialGenre = '', disabled, onDir
     </Dialog></DialogDisplayContext.Provider>}
     {confirmAdopt && snapshot && run && <DialogDisplayContext.Provider value="modal"><Dialog title="采纳所选开书提案？" onClose={() => setConfirmAdopt(false)} busy={tool.busy || operation !== null || opening}>
       <div className={styles.leaveContent}><p>将建立《{selectedTitle?.value.title}》，写入所选人物、规则和大纲，并打开第一章。</p>
+        <label className={styles.check}><input type="checkbox" checked={settingsReviewed} disabled={tool.busy || operation !== null} onChange={(event) => setSettingsReviewed(event.target.checked)} />我已核对所选人物和规则，没有尚待处理的冲突，允许后续创作引用</label>
+        <p className={styles.hint}>不勾选也能开书；设定将标为待复核，需要在知识库复核后才能进入 AI 资料与人物试戏。</p>
         <p className={styles.hint}>作品版本 {snapshot.book.book.revision} · 提案版本 {run.version} · 知识版本 {run.knowledgeRevision}。版本变化时停止采用，不覆盖现有修改。</p>
         {tool.error && <p className={styles.error} role="alert">{tool.error}</p>}
         <div className={styles.actions}><button type="button" disabled={tool.busy || operation !== null} title={tool.busy || operation !== null ? '正在处理开书操作，请稍候再返回' : undefined} onClick={() => setConfirmAdopt(false)}>返回核对</button><button className={styles.primary} type="button" disabled={!canAdopt} aria-busy={processing('adopt')} title={adoptReason} onClick={() => void perform('adopt', adopt)}>{processing('adopt') ? '正在采纳并建立作品…' : '确认采纳'}</button></div>

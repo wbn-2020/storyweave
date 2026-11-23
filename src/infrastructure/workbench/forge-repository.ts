@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 import { storedRunIds } from './stored-run-ids'
-import { DomainError, requiredId, requiredText } from '../../contracts/api'
+import { DomainError, isRecord, requiredId, requiredText } from '../../contracts/api'
 import { FORGE_INSTRUCTION_LIMIT, forgeUsesChapter, parseForgeAdoptInput, parseForgePrepareInput, parseForgeProposal, parseForgeReadInput, parseForgeRunInput,
   type ForgeAdoptInput, type ForgeAdoptReceipt, type ForgeCard, type ForgePrepareInput, type ForgeProposal, type ForgeReadInput, type ForgeRef, type ForgeRelationProposal, type ForgeRunDetail, type ForgeRunInput, type ForgeSnapshot } from '../../contracts/forge'
 import { CHARACTER_ABILITIES, CHARACTER_PROFILE_FIELDS, type CharacterProfile } from '../../contracts/character-profile'
@@ -11,6 +11,7 @@ import { parseStoryFields } from '../../contracts/story'
 import type { AiRepository } from '../ai/ai-repository'
 import { KnowledgeRepository } from '../knowledge/knowledge-repository'
 import { StoryRepository } from '../story/story-repository'
+import { chapterDependenciesCurrent } from '../memory/source-projection'
 import type { StudioRepository } from '../storage/studio-repository'
 import { forgeConflict, forgeEntity, forgeFailure, forgeInvalid, forgeJson, forgeReviewed, readForgePerson, requireForge } from './forge-state'
 
@@ -31,11 +32,14 @@ function writable(db: Database.Database, input: { bookId: string; expectedBookRe
   if (book.revision !== input.expectedBookRevision) return forgeConflict('作品已有新版本，请保留表单并重新读取资料。')
   return book
 }
-function sources(db: Database.Database, request: ForgePrepareInput, knowledgeRevision: number) {
+function sources(db: Database.Database, request: ForgePrepareInput, knowledgeRevision: number, currentSources = false) {
   const entities = request.entityIds.map((id) => forgeEntity(db, request.bookId, id, knowledgeRevision))
   if (entities.some((entity) => !forgeReviewed(entity.fields))) return forgeInvalid('选入的实体须已采用、标记为当前，并完成冲突复核。')
+  if (currentSources && [...request.entityIds, ...(request.personId ? [request.personId] : [])]
+    .some((id) => !chapterDependenciesCurrent(db, 'knowledge', request.bookId, id))) return forgeInvalid('所选人物或实体的正文来源已变化，请补充当前稿引文并复核后再生成。')
   if (request.kind === 'audition') {
-    const person = readForgePerson(db, request.bookId, request.personId!, request.storyOrder, knowledgeRevision)
+    const person = readForgePerson(db, request.bookId, request.personId!, request.storyOrder, knowledgeRevision,
+      { currentSources, cognitionIds: request.cognitionIds, stateIds: request.stateIds })
     if (!forgeReviewed(person.entity.fields)) return forgeInvalid('试戏人物须先采用并完成复核。')
     let profile: { revisionId: string; values: CharacterProfile } | null = null
     if (request.profileRevisionId) {
@@ -68,7 +72,7 @@ function sources(db: Database.Database, request: ForgePrepareInput, knowledgeRev
   if (person && (person.fields.kind !== 'person' || !forgeReviewed(person.fields))) return forgeInvalid('目标须是已采用且完成复核的人物。')
   return { entities, person, profile: null, storyOrder: null, cognitions: [], states: [] }
 }
-function envelope(db: Database.Database, request: ForgePrepareInput, knowledgeRevision: number, preparing = false) {
+function envelope(db: Database.Database, request: ForgePrepareInput, knowledgeRevision: number, preparing = false, version: 1 | 2 = 1) {
   let reference: { runId: string; contextHash: string; text: string } | null = null
   if (request.referenceRunId) {
     const row = db.prepare(`SELECT a.context_hash, a.output_text, a.state FROM forge_runs f JOIN ai_runs a ON a.id = f.run_id
@@ -80,16 +84,32 @@ function envelope(db: Database.Database, request: ForgePrepareInput, knowledgeRe
   const existingNames = request.kind === 'names' || request.kind === 'cast' ? db.prepare(`SELECT json_extract(r.fields_json, '$.name') AS name,
     json_extract(r.fields_json, '$.aliases') AS aliases_json FROM knowledge_item_revisions r
     WHERE r.knowledge_revision <= ? AND NOT EXISTS (SELECT 1 FROM knowledge_item_revisions newer
-      WHERE newer.item_id = r.item_id AND newer.knowledge_revision > r.knowledge_revision AND newer.knowledge_revision <= ?) ORDER BY r.item_id LIMIT 1001`)
+      WHERE newer.item_id = r.item_id AND newer.knowledge_revision > r.knowledge_revision AND newer.knowledge_revision <= ?) ORDER BY r.item_id LIMIT ${version === 1 ? 1001 : 120}`)
     .all(knowledgeRevision, knowledgeRevision) as { name: string; aliases_json: string }[] : []
-  if (existingNames.length > 1000) return forgeInvalid('全书避名检查超过本次一千实体范围，请在设定库核对名字，或使用指定人物补全。')
-  const excludedNames = [...new Set([...request.excludedNames, ...existingNames.flatMap((row) => {
+  if (version === 1 && existingNames.length > 1000) return forgeInvalid('旧格式全书避名超过一千实体，请先在知识库备份升级作品。')
+  const knownNames = existingNames.flatMap((row) => {
     const aliases = forgeJson(row.aliases_json)
     if (!Array.isArray(aliases) || aliases.length > 50) return forgeFailure()
     return [requiredText(row.name, '既有名称', 120), ...aliases.map((alias) => requiredText(alias, '既有别名', 120))]
-  })])]
-  return { workflow: 'forge-v1', kind: request.kind, goal: request.instruction, requestedCount: request.count,
-    excludedNames, reference, sources: sources(db, request, knowledgeRevision) }
+  })
+  let nameCharacters = 0
+  const hints = version === 1 ? knownNames : knownNames.filter((name) => { if (nameCharacters + name.length > 8000) return false; nameCharacters += name.length; return true })
+  const excludedNames = [...new Set([...request.excludedNames, ...hints])]
+  return { workflow: version === 1 ? 'forge-v1' : 'forge-v2', kind: request.kind, goal: request.instruction, requestedCount: request.count,
+    excludedNames, reference, sources: sources(db, request, knowledgeRevision, preparing),
+    ...(version === 2 ? { nameScope: '既有名称仅提供有界提示；生成名字在本地按固定知识版本核对全书名称和别名。' } : {}) }
+}
+function nameCollision(db: Database.Database, names: string[], knowledgeRevision: number): boolean {
+  const targets = new Set(names.map((name) => name.normalize('NFKC').toLowerCase()))
+  for (const value of db.prepare(`SELECT json_extract(r.fields_json, '$.name') AS name, json_extract(r.fields_json, '$.aliases') AS aliases_json
+    FROM knowledge_item_revisions r WHERE r.knowledge_revision <= ? AND NOT EXISTS
+      (SELECT 1 FROM knowledge_item_revisions newer WHERE newer.item_id = r.item_id AND newer.knowledge_revision > r.knowledge_revision AND newer.knowledge_revision <= ?)`)
+    .iterate(knowledgeRevision, knowledgeRevision)) {
+    const row = value as { name: string; aliases_json: string }, aliases = forgeJson(row.aliases_json)
+    if (!Array.isArray(aliases)) return forgeFailure()
+    if ([row.name, ...aliases].some((name) => targets.has(requiredText(name, '已有名称', 120).normalize('NFKC').toLowerCase()))) return true
+  }
+  return false
 }
 type Envelope = ReturnType<typeof envelope>
 function output(run: AiRun): ForgeProposal {
@@ -160,9 +180,13 @@ export class ForgeRepository {
         const result: ForgeSnapshot = { bookId: data.bookId, bookRevision: book.revision, knowledgeRevision: book.knowledge_revision, schemaVersion, requiresUpgrade: schemaVersion < 17,
           entities: [], entityTotal: 0, person: null, runs: [], auditionRuns: [] }
         if (schemaVersion < 17) return result
-        result.entityTotal = (db.prepare('SELECT COUNT(*) AS count FROM knowledge_items').get() as { count: number }).count
-        result.entities = db.prepare('SELECT id, name, kind FROM knowledge_items ORDER BY kind, name, id LIMIT 200').all() as ForgeSnapshot['entities']
-        if (data.personId) result.person = readForgePerson(db, data.bookId, data.personId, data.storyOrder, book.knowledge_revision)
+        const query = data.entityQuery ?? '', offset = data.entityOffset ?? 0
+        const filter = "(? = '' OR instr(name, ?) > 0 OR instr(aliases_json, ?) > 0)"
+        result.entityTotal = (db.prepare(`SELECT COUNT(*) AS count FROM knowledge_items WHERE ${filter}`).get(query, query, query) as { count: number }).count
+        result.entities = db.prepare(`SELECT id, name, kind FROM knowledge_items WHERE ${filter} ORDER BY kind, name, id LIMIT 200 OFFSET ?`)
+          .all(query, query, query, offset) as ForgeSnapshot['entities']
+        if (data.personId) result.person = readForgePerson(db, data.bookId, data.personId, data.storyOrder, book.knowledge_revision,
+          { currentSources: true, offset: data.historyOffset ?? 0 })
         result.runs = db.prepare(`SELECT f.run_id AS id, f.kind, a.state, f.created_at AS createdAt FROM forge_runs f JOIN ai_runs a ON a.id = f.run_id
           WHERE a.book_id = ? ORDER BY a.sequence DESC LIMIT 30`).all(data.bookId) as ForgeSnapshot['runs']
         // 人物台词不受全书任务历史窗口影响，身份以不可变的准备请求为准。
@@ -183,7 +207,7 @@ export class ForgeRepository {
       return db.transaction(() => {
         const book = writable(db, data)
         const chapter = this.studio.readChapter({ bookId: data.bookId, chapterId: data.chapterId })
-        const instruction = JSON.stringify(envelope(db, data, book.knowledge_revision, true))
+        const instruction = JSON.stringify(envelope(db, data, book.knowledge_revision, true, Number(db.pragma('user_version', { simple: true })) >= 28 ? 2 : 1))
         if (instruction.length > FORGE_INSTRUCTION_LIMIT) return forgeInvalid('固定资料超过工坊预算，请减少选项或缩短要求；资料未被截断。')
         const connection = this.ai.listConnections({ bookId: data.bookId }).connections.find((item) => item.id === data.connectionId)
         if (!connection) return forgeInvalid('请先保存本书的模型连接。')
@@ -208,6 +232,7 @@ export class ForgeRepository {
           try {
             const original = output(run); validateProposal(original, request, run)
             if (original.kind === 'names' && original.names.some((item) => fixed.excludedNames.some((name) => name.normalize('NFKC').toLowerCase() === item.name.normalize('NFKC').toLowerCase()))) return forgeInvalid('模型名字与既有名字、别名或避用名称重复，原始输出已保留。')
+            if (original.kind === 'names' && fixed.workflow === 'forge-v2' && nameCollision(db, original.names.map((item) => item.name), run.context.knowledgeRevision)) return forgeInvalid('候选与全书已有名称或别名重复，请调整要求后重新生成；原始输出保留。')
             proposal = run.state === 'adopted' ? parseForgeProposal(forgeJson(run.acceptedText)) : original
             validateProposal(proposal, request, run, original)
           } catch (error) { proposal = null; parseError = error instanceof DomainError ? error.detail.message : '工坊提案无法解析，原文已保留。' }
@@ -339,7 +364,9 @@ export class ForgeRepository {
       run.context.purpose !== 'forge' || run.kind !== 'plan' || run.context.instruction !== row.envelope_json || row.envelope_json.length > FORGE_INSTRUCTION_LIMIT) return forgeFailure()
     if (JSON.stringify(request) !== row.request_json || request.referenceRunId && !db.prepare('SELECT 1 FROM ai_runs earlier JOIN ai_runs target ON target.id = ? WHERE earlier.id = ? AND earlier.sequence < target.sequence')
       .get(runId, request.referenceRunId)) return forgeFailure('工坊任务引用顺序或固定请求无效。')
-    const fixed = envelope(db, request, run.context.knowledgeRevision)
+    const storedEnvelope = forgeJson(row.envelope_json)
+    if (!isRecord(storedEnvelope) || !['forge-v1', 'forge-v2'].includes(String(storedEnvelope.workflow))) return forgeFailure()
+    const fixed = envelope(db, request, run.context.knowledgeRevision, false, storedEnvelope.workflow === 'forge-v2' ? 2 : 1)
     if (JSON.stringify(fixed) !== row.envelope_json) return forgeFailure('工坊固定资料与历史修订无法对应。')
     return { request, run, fixed }
   }

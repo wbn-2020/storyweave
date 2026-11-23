@@ -11,6 +11,8 @@ import {
 import { projectMemoryChunks, readMemoryProjection, type MemoryProjection } from './source-projection'
 import { toSearchText } from './search-text'
 import { BOOK_SCHEMA_VERSION } from '../storage/schema'
+import { activeChapterSql } from '../storage/chapter-lifecycle'
+import { currentLivingProjectionSql } from '../workbench/living-projection'
 
 interface BookState {
   id: string; revision: number; knowledge_revision: number; index_publication_version: number; archived_at: string | null
@@ -52,6 +54,10 @@ export const MEMORY_CURRENT_SOURCES_SQL = `
     (SELECT r.id FROM story_record_revisions r WHERE r.record_id = s.id ORDER BY r.knowledge_revision DESC LIMIT 1) AS revision_id,
     s.title FROM story_records s WHERE s.book_id = (SELECT id FROM book_meta WHERE singleton = 1)
 `
+export function currentMemorySourcesSql(db: Database.Database): string {
+  return MEMORY_CURRENT_SOURCES_SQL.replace('FROM chapters c', `FROM chapters c WHERE ${activeChapterSql(db)}`)
+    .replace('WHERE k.book_id =', `WHERE ${currentLivingProjectionSql(db, 'k')} AND k.book_id =`)
+}
 
 /** 半批产物和历史批次均不可见；已发布来源也必须仍匹配当前原对象。 */
 export const MEMORY_CURRENT_ARTIFACTS_SQL = `
@@ -65,6 +71,10 @@ export const MEMORY_CURRENT_ARTIFACTS_SQL = `
   WHERE h.publication_version = (SELECT index_publication_version FROM book_meta WHERE singleton = 1)
     AND a.complete = 1 AND a.projection_version = ${MEMORY_PROJECTION_VERSION}
 `
+export function currentMemoryArtifactsSql(db: Database.Database): string {
+  return MEMORY_CURRENT_ARTIFACTS_SQL.replace(MEMORY_CURRENT_SOURCES_SQL, currentMemorySourcesSql(db))
+    .replace('dependency.current_revision_id != d.revision_id', `dependency.current_revision_id != d.revision_id OR NOT (${activeChapterSql(db, 'dependency')})`)
+}
 
 function storageFailure(): DomainError {
   return new DomainError({ code: 'STORAGE_ERROR', message: '记忆整理资料读写失败，请保留作品文件并检查磁盘与资料完整性。' })
@@ -120,9 +130,15 @@ function readTask(db: Database.Database, bookId: string, taskId: string): TaskRo
   summary(row, bookId)
   return row
 }
-function matches(task: TaskRow, book: BookState): boolean {
-  return task.target_book_revision === book.revision && task.target_knowledge_revision === book.knowledge_revision &&
-    task.expected_publication_version === book.index_publication_version
+function matches(task: TaskRow, book: BookState, db?: Database.Database): boolean {
+  if (task.target_knowledge_revision !== book.knowledge_revision || task.expected_publication_version !== book.index_publication_version) return false
+  if (task.target_book_revision === book.revision) return true
+  if (!db || task.phase === 'planning') return false
+  const current = count(db, `SELECT count(*) AS total FROM (${currentMemorySourcesSql(db)})`)
+  if (current !== task.planned_sources) return false
+  const matching = count(db, `SELECT count(*) AS total FROM memory_task_units u JOIN (${currentMemorySourcesSql(db)}) c
+    ON c.source_kind = u.source_kind AND c.source_id = u.source_id AND c.revision_id = u.revision_id AND c.title = u.title WHERE u.task_id = ?`, task.id)
+  return matching === current
 }
 function active(task: TaskRow): boolean { return (ACTIVE_STATES as readonly string[]).includes(task.state) }
 function checkTaskVersion(task: TaskRow, expected: number): void {
@@ -173,7 +189,7 @@ export class MemoryRepository {
           .get(data.bookId) as TaskRow | undefined
         if (existing) {
           summary(existing, data.bookId)
-          if (matches(existing, book)) conflict('已有可继续的整理任务，请继续、重试或取消该任务。')
+          if (matches(existing, book, db)) conflict('已有可继续的整理任务，请继续、重试或取消该任务。')
           existing.state = 'superseded'
           existing.error = '作品输入或发布批次已变化，旧任务已停止。'
           advanceTask(db, existing)
@@ -199,7 +215,7 @@ export class MemoryRepository {
           const task = readTask(db, data.bookId, data.taskId)
           checkTaskVersion(task, data.expectedTaskVersion)
           if (task.state !== 'planning' && task.state !== 'running') invalid('这个任务当前不能处理下一批，请先继续或重试。')
-          if (!matches(task, book)) {
+          if (!matches(task, book, db)) {
             task.state = 'superseded'
             task.error = '原稿、资料或发布批次已变化，请按当前版本创建新任务。'
           } else {
@@ -219,7 +235,7 @@ export class MemoryRepository {
           checkTaskVersion(task, data.expectedTaskVersion)
           if (task.state !== 'planning' && task.state !== 'running') throw storageFailure()
           const book = readBook(db, data.bookId)
-          task.state = matches(task, book) ? 'failed' : 'superseded'
+          task.state = matches(task, book, db) ? 'failed' : 'superseded'
           task.error = task.state === 'failed' ? '本批整理未完成，检查点已保留。请检查来源和磁盘后重试。' : '作品输入已变化，请按当前版本创建新任务。'
           advanceTask(db, task)
           return this.receipt(db, data.bookId, task.id)
@@ -238,7 +254,7 @@ export class MemoryRepository {
         const book = readBook(db, data.bookId)
         checkTaskVersion(task, data.expectedTaskVersion)
         if (!active(task)) invalid('任务已结束，不能再修改它的运行状态。')
-        if (!matches(task, book)) {
+        if (!matches(task, book, db)) {
           task.state = 'superseded'
           task.error = '作品输入或发布批次已变化，旧任务不能继续。'
         } else if (data.action === 'cancel') {
@@ -263,7 +279,7 @@ export class MemoryRepository {
   private readStatus(db: Database.Database, bookId: string): MemoryStatus {
     const version = versionOf(db)
     const book = readBook(db, bookId)
-    let sourceCount = count(db, 'SELECT count(*) AS total FROM chapters')
+    let sourceCount = count(db, `SELECT count(*) AS total FROM chapters c WHERE ${activeChapterSql(db)}`)
     let pendingEventCount = count(db, "SELECT count(*) AS total FROM outbox WHERE state = 'pending'")
     if (version >= 3) {
       sourceCount += count(db, 'SELECT count(*) AS total FROM knowledge_items WHERE book_id = ?', bookId)
@@ -289,8 +305,8 @@ export class MemoryRepository {
     const publication = db.prepare('SELECT version, book_revision, knowledge_revision, source_count FROM memory_publications WHERE version = ?')
       .get(book.index_publication_version) as PublicationRow | undefined
     if (book.index_publication_version !== 0 && !publication) throw storageFailure()
-    const indexedSourceCount = count(db, `SELECT count(*) AS total FROM (${MEMORY_CURRENT_ARTIFACTS_SQL})`)
-    const changedDependencyCount = count(db, `SELECT count(*) AS total FROM (${MEMORY_CURRENT_ARTIFACTS_SQL}) WHERE dependency_state = 'source_changed'`)
+    const indexedSourceCount = count(db, `SELECT count(*) AS total FROM (${currentMemoryArtifactsSql(db)})`)
+    const changedDependencyCount = count(db, `SELECT count(*) AS total FROM (${currentMemoryArtifactsSql(db)}) WHERE dependency_state = 'source_changed'`)
     const rows = db.prepare(`SELECT ${TASK_COLUMNS} FROM memory_tasks WHERE book_id = ? ORDER BY updated_at DESC, id DESC LIMIT 10`)
       .all(bookId) as TaskRow[]
     const activeRow = db.prepare(`SELECT ${TASK_COLUMNS} FROM memory_tasks WHERE book_id = ? AND ${ACTIVE_SQL}`)
@@ -314,8 +330,8 @@ export class MemoryRepository {
     }
     const kind = MEMORY_SOURCE_KINDS[task.planning_kind]
     const sql = kind === 'chapter'
-      ? `SELECT 'chapter' AS source_kind, id AS source_id, current_revision_id AS revision_id, title
-         FROM chapters WHERE id > @afterId ORDER BY id LIMIT @limit`
+      ? `SELECT 'chapter' AS source_kind, c.id AS source_id, c.current_revision_id AS revision_id, c.title
+         FROM chapters c WHERE c.id > @afterId AND ${activeChapterSql(db)} ORDER BY c.id LIMIT @limit`
       : kind === 'knowledge'
         ? `SELECT 'knowledge' AS source_kind, k.id AS source_id, k.name AS title,
             (SELECT r.id FROM knowledge_item_revisions r WHERE r.item_id = k.id ORDER BY r.knowledge_revision DESC LIMIT 1) AS revision_id
@@ -415,12 +431,12 @@ export class MemoryRepository {
 
   private publish(db: Database.Database, bookId: string, task: TaskRow): void {
     const book = readBook(db, bookId)
-    if (!matches(task, book)) conflict('发布前作品已有新版本，本批整理没有覆盖新资料。')
-    const sourceCount = count(db, `SELECT count(*) AS total FROM (${MEMORY_CURRENT_SOURCES_SQL})`)
+    if (!matches(task, book, db)) conflict('发布前作品已有新版本，本批整理没有覆盖新资料。')
+    const sourceCount = count(db, `SELECT count(*) AS total FROM (${currentMemorySourcesSql(db)})`)
     const ready = count(db, `SELECT count(*) AS total FROM memory_task_units u
       JOIN memory_artifacts a ON a.id = u.artifact_id AND a.source_kind = u.source_kind AND a.source_id = u.source_id
         AND a.revision_id = u.revision_id AND a.title = u.title
-      JOIN (${MEMORY_CURRENT_SOURCES_SQL}) current ON current.source_kind = u.source_kind AND current.source_id = u.source_id
+      JOIN (${currentMemorySourcesSql(db)}) current ON current.source_kind = u.source_kind AND current.source_id = u.source_id
         AND current.revision_id = u.revision_id AND current.title = u.title
       WHERE u.task_id = ? AND u.state = 'completed' AND a.complete = 1 AND a.projection_version = ?`, task.id, MEMORY_PROJECTION_VERSION)
     if (task.completed_sources !== task.planned_sources || ready !== sourceCount || ready !== task.planned_sources ||

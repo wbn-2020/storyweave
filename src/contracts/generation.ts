@@ -52,7 +52,7 @@ export interface GenerationPrepareInput extends KickstartDraftInput {
 export interface GenerationVersionInput { bookId: string; runId: string; expectedVersion: number }
 export interface GenerationStartInput extends GenerationVersionInput { contextHash: string }
 export interface GenerationSelectionInput extends GenerationVersionInput { selectedIds: string[] }
-export interface GenerationAdoptInput extends GenerationVersionInput { expectedBookRevision: number; expectedKnowledgeRevision: number }
+export interface GenerationAdoptInput extends GenerationVersionInput { expectedBookRevision: number; expectedKnowledgeRevision: number; settingsReviewed?: boolean }
 export interface GenerationCheckpointInput extends GenerationVersionInput { outputText: string }
 export interface GenerationFinishInput extends GenerationCheckpointInput { state: 'succeeded' | 'failed' | 'cancelled' | 'interrupted'; usage: AiUsage | null; error: string | null }
 export interface GenerationApi {
@@ -126,8 +126,10 @@ export function parseGenerationSelectionInput(value: unknown): GenerationSelecti
   return { ...versionFields(v), selectedIds }
 }
 export function parseGenerationAdoptInput(value: unknown): GenerationAdoptInput {
-  const v = object(value, ['bookId', 'runId', 'expectedVersion', 'expectedBookRevision', 'expectedKnowledgeRevision'])
-  return { ...versionFields(v), expectedBookRevision: requiredInteger(v.expectedBookRevision, '作品版本'), expectedKnowledgeRevision: requiredInteger(v.expectedKnowledgeRevision, '知识版本') }
+  const v = object(value, ['bookId', 'runId', 'expectedVersion', 'expectedBookRevision', 'expectedKnowledgeRevision', 'settingsReviewed'])
+  if (v.settingsReviewed !== undefined && typeof v.settingsReviewed !== 'boolean') invalid('设定复核确认无效。')
+  return { ...versionFields(v), expectedBookRevision: requiredInteger(v.expectedBookRevision, '作品版本'), expectedKnowledgeRevision: requiredInteger(v.expectedKnowledgeRevision, '知识版本'),
+    ...(v.settingsReviewed === undefined ? {} : { settingsReviewed: v.settingsReviewed as boolean }) }
 }
 export function parseGenerationCheckpointInput(value: unknown): GenerationCheckpointInput {
   const v = object(value, ['bookId', 'runId', 'expectedVersion', 'outputText'])

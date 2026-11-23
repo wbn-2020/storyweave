@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type Ipc
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, DomainError, IPC_CHANNEL, failure, isRecord, requiredId, type CompletedRequest, type RendererCommand, type Result, type SaveChapterOutput, type WorkspaceSnapshot } from '../../contracts/api'
+import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, INTERFACE_FAULT_CHANNEL, INTERFACE_RECOVERY_CHANNEL, DomainError, IPC_CHANNEL, failure, isRecord, requiredId, type CompletedRequest, type RendererCommand, type Result, type SaveChapterOutput, type WorkspaceSnapshot } from '../../contracts/api'
 import { storageError, storageFailureReason } from '../../infrastructure/storage/storage-error'
 import { parseServiceRequest } from '../request-validation'
 import { checkedLocalDirectory } from '../file-access'
@@ -27,6 +27,8 @@ let service: ServiceClient | null = null
 let expectedRendererUrl = ''
 let initialRendererLoadFailed = false
 let rendererSessionStarted = false
+let interfaceFault = false
+let rendererSaveUnavailable = false
 let closing = false
 let draining = false
 let shutdownAuthorized = false
@@ -61,7 +63,7 @@ function closeConnectionKeyPage(sessionId?: string): void {
 }
 
 const rendererCommands = new Set<RendererCommand>([
-  'living.get', 'living.archive', 'living.save', 'living.history', 'living.restore', 'living.prepare', 'living.run', 'living.adopt',
+  'living.get', 'living.archive', 'living.syncMemory', 'living.save', 'living.history', 'living.restore', 'living.prepare', 'living.run', 'living.adopt',
   'forge.get', 'forge.prepare', 'forge.run', 'forge.adopt',
   'generation.connections', 'generation.configure', 'generation.draft', 'generation.get', 'generation.prepare',
   'generation.start', 'generation.cancel', 'generation.select', 'generation.adopt',
@@ -78,7 +80,7 @@ const rendererCommands = new Set<RendererCommand>([
   'book.media.get', 'book.media.read', 'book.media.save', 'book.media.exportFile',
   'book.image.connections', 'book.image.list', 'book.image.get', 'book.image.start', 'book.image.cancel', 'book.image.jpeg', 'book.image.discard',
   'chapter.create', 'chapter.read', 'chapter.save', 'request.status',
-  'book.update', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
+  'book.update', 'book.archiveStructure', 'volume.create', 'volume.rename', 'volume.reorder', 'chapter.reorder', 'chapter.update', 'chapter.finalize',
   'revision.list', 'revision.read', 'revision.restore', 'workspace.orphans', 'workspace.register',
   'revision.merge', 'book.export.prepare', 'book.export.chapter', 'book.export.directory', 'book.export.commitFile', 'book.export.reveal',
   'import.select', 'import.reparse', 'import.chapter', 'import.commit', 'book.exportFile', 'draft.copy', 'service.restart',
@@ -231,7 +233,7 @@ function setupIpc(): void {
       if (command === 'draft.checkpoint' || command === 'draft.list' || command === 'draft.rotate') {
         if (choosingFile || restarting || draining) return failure('WORKSPACE_BUSY', '桌面正在切换或关闭，请稍后再处理草稿副本。')
         if (command === 'draft.rotate' && closing) return failure('WORKSPACE_BUSY', '正在关闭，请返回工作室后再建立检查点新代。')
-        return { ok: true, data: command === 'draft.checkpoint' ? draftRecovery.checkpoint(payload)
+        return { ok: true, data: command === 'draft.checkpoint' ? await draftRecovery.checkpoint(payload)
           : command === 'draft.rotate' ? draftRecovery.rotate(payload) : draftRecovery.list(payload) }
       }
       if (command === 'service.restart') {
@@ -530,6 +532,45 @@ function setupIpc(): void {
     if (!trustedSender(event) || !closeResponse || requestId !== closeResponse.id) return
     closeResponse.resolve(ready === true)
   })
+  ipcMain.on(INTERFACE_FAULT_CHANNEL, (event) => {
+    if (!trustedSender(event)) return
+    interfaceFault = true
+    closeResponse?.resolve(false)
+  })
+  ipcMain.handle(INTERFACE_RECOVERY_CHANNEL, async (event, action: unknown) => {
+    if (!trustedSender(event) || !interfaceFault || action !== 'reload' && action !== 'reveal') return failure('FORBIDDEN', '当前不能使用故障恢复入口。')
+    if (closing || choosingFile || restarting || draftRecovery.hasPending() || pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false) || imageSessions.hasActive(false)) return failure('WORKSPACE_BUSY', '仍有本地操作或模型请求正在进行，请等待完成后再恢复界面。')
+    const window = mainWindow
+    if (!window || window.isDestroyed()) return failure('SERVICE_UNAVAILABLE', '桌面窗口不可用。')
+    try {
+      if (action === 'reveal') {
+        if (!rememberedWorkspaceRoot) return failure('WORKSPACE_REQUIRED', '本次尚未选择作品库。')
+        const error = await shell.openPath(checkedLocalDirectory(rememberedWorkspaceRoot))
+        return error ? failure('STORAGE_ERROR', '无法打开作品库目录。') : { ok: true, data: null }
+      }
+      if (!await preservePendingAiResult(window)) return failure('WORKSPACE_BUSY', '请先按提示留存待保存的模型结果，再重新打开界面。')
+      choosingFile = true
+      if (await confirmInterfaceRecovery(window, false) === 'reload') await reloadInterface(window)
+      return { ok: true, data: null }
+    } catch { return failure('SERVICE_UNAVAILABLE', '恢复未完成，作品库和已有恢复文件保持保留。') }
+    finally { choosingFile = false }
+  })
+}
+
+async function confirmInterfaceRecovery(window: BrowserWindow, allowClose: boolean): Promise<'cancel' | 'reload' | 'close'> {
+  const decision = await dialog.showMessageBox(window, {
+    type: 'warning', title: '界面故障恢复', message: '界面无法确认全部输入已保存。',
+    detail: '已保存的正文、候选和自动检查点会保留。尚未进入检查点的输入无法保证恢复。请先保留可见内容；重新打开后到草稿恢复中核对检查点。继续表示接受这些未确认输入可能丢失。',
+    buttons: ['保留窗口', '接受风险并重新打开界面', ...(allowClose ? ['接受风险并关闭'] : [])], defaultId: 0, cancelId: 0,
+  })
+  return decision.response === 1 ? 'reload' : decision.response === 2 && allowClose ? 'close' : 'cancel'
+}
+async function reloadInterface(window: BrowserWindow): Promise<void> {
+  closeConnectionKeyPage()
+  interfaceFault = false
+  try { await window.loadURL(expectedRendererUrl) }
+  catch (error) { interfaceFault = true; throw error }
+  rendererSessionStarted = true
 }
 
 async function chooseDraftCopy(payload: unknown) {
@@ -550,9 +591,11 @@ async function chooseDraftCopy(payload: unknown) {
 }
 
 function askRendererToSave(window: BrowserWindow): Promise<boolean> {
+  rendererSaveUnavailable = false
+  if (interfaceFault) return Promise.resolve(false)
   return new Promise((resolve) => {
     const id = randomUUID()
-    const timer = setTimeout(() => finish(false), 45_000)
+    const timer = setTimeout(() => { rendererSaveUnavailable = true; finish(false) }, 45_000)
     const finish = (ready: boolean): void => {
       if (closeResponse?.id !== id) return
       clearTimeout(timer)
@@ -561,9 +604,9 @@ function askRendererToSave(window: BrowserWindow): Promise<boolean> {
     }
     closeResponse = { id, resolve: finish }
     try {
-      if (window.webContents.isDestroyed() || window.webContents.isCrashed()) finish(false)
+      if (window.webContents.isDestroyed() || window.webContents.isCrashed()) { rendererSaveUnavailable = true; finish(false) }
       else window.webContents.send(CLOSE_REQUEST_CHANNEL, id)
-    } catch { finish(false) }
+    } catch { rendererSaveUnavailable = true; finish(false) }
   })
 }
 
@@ -602,7 +645,7 @@ async function preservePendingAiResult(window: BrowserWindow): Promise<boolean> 
 async function requestClose(): Promise<void> {
   const window = mainWindow
   if (!window || window.isDestroyed() || closing) return
-  if (choosingFile || restarting || pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false) || imageSessions.hasActive(false)) {
+  if (choosingFile || restarting || draftRecovery.hasPending() || pendingAiCommands > 0 || aiSessions.hasActive(false) || generationSessions.hasActive(false) || imageSessions.hasActive(false)) {
     try { window.webContents.send(CLOSE_CANCELLED_CHANNEL) } catch { /* 保留当前窗口和未完成操作。 */ }
     return
   }
@@ -615,13 +658,13 @@ async function requestClose(): Promise<void> {
       rememberedWorkspaceRoot === null && (service === null || service.getWorkspaceRoot() === null)
     const ready = failedBeforeSession || await askRendererToSave(window)
     if (!ready) {
-      await dialog.showMessageBox(window, {
-        type: 'warning', title: '窗口已保留', message: '尚未确认稿件已经保存。',
-        detail: '请回到编辑器检查保存状态。若界面已失去响应，请先保留可见稿件再处理故障。', buttons: ['返回编辑器'],
-      })
-      return
+      if (!interfaceFault && !rendererSaveUnavailable) return
+      const action = await confirmInterfaceRecovery(window, true)
+      if (action === 'reload') { await reloadInterface(window); return }
+      if (action !== 'close') return
     }
     draining = true
+    if (draftRecovery.hasPending()) { draining = false; return }
     const result = failedBeforeSession && (service === null || service.hasExited())
       ? { ok: true as const, data: null }
       : service ? await service.close() : failure('SERVICE_UNAVAILABLE', '本地作品服务不可用。')
@@ -669,7 +712,7 @@ function createWindow(): void {
   window.webContents.on('will-frame-navigate', (event) => event.preventDefault())
   window.webContents.on('will-redirect', (event) => event.preventDefault())
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
-  window.webContents.on('render-process-gone', () => closeConnectionKeyPage())
+  window.webContents.on('render-process-gone', () => { interfaceFault = true; closeConnectionKeyPage(); closeResponse?.resolve(false) })
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   window.webContents.session.setPermissionCheckHandler(() => false)
   window.webContents.session.on('will-download', (event) => event.preventDefault())

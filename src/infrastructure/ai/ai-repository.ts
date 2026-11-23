@@ -529,7 +529,8 @@ export class AiRepository {
           if (candidate.kind === 'plan') {
             adoptedNotes = previous.notes ? `${previous.notes}\n\n${data.acceptedText}` : data.acceptedText
             if (adoptedNotes.length > 20_000) invalid('采用后章节备注超过 20,000 个字符，请缩短采用内容。')
-            chapter = this.appendPlan(db, previous, candidate.context, adoptedNotes)
+            const latest = readBook(db, candidate.bookId)
+            chapter = this.appendPlan(db, previous, { ...candidate.context, bookRevision: latest.revision, knowledgeRevision: latest.knowledge_revision }, adoptedNotes)
           } else {
             const blocks = textToDocument(data.acceptedText).content
             let content = [...previous.document.content]
@@ -630,8 +631,9 @@ export class AiRepository {
     const context = candidate.context
     const book = readBook(db, candidate.bookId)
     writable(book)
+    const sourceScoped = !context.purpose && !context.summary && !isAiMemoryTask(candidate.kind)
     if (maintenanceBaseline) new AiMemoryTaskRepository(this.studio, this).verifyMaintenanceBaseline(candidate, maintenanceBaseline)
-    else if (book.revision !== context.bookRevision || book.knowledge_revision !== context.knowledgeRevision) conflict('作品或知识已变化，请保留候选并按当前版本重新预览。')
+    else if (!sourceScoped && (book.revision !== context.bookRevision || book.knowledge_revision !== context.knowledgeRevision)) conflict('作品或知识已变化，请保留候选并按当前版本重新预览。')
     if (context.purpose === 'living') {
       requireLiving(db)
       const fixed = db.prepare('SELECT envelope_json FROM living_runs WHERE run_id = ?').get(candidate.id) as { envelope_json: string } | undefined
@@ -652,7 +654,9 @@ export class AiRepository {
     }
     const chapter = this.studio.readChapter({ bookId: candidate.bookId, chapterId: candidate.chapterId })
     if (chapter.revisionId !== context.chapterRevisionId || chapter.title !== context.chapterTitle) conflict('章节已变化，请保留候选并按当前版本重新预览。')
-    validateAiContext(this.studio, this.memorySearch, context, maintenanceBaseline?.expectedBookRevision)
+    // 版本标签沿用原预览，实际正文、资料、预算和完整消息仍重建比对；无关修改不使普通创作候选报废。
+    validateAiContext(this.studio, this.memorySearch, context, maintenanceBaseline?.expectedBookRevision,
+      sourceScoped ? { bookRevision: book.revision, knowledgeRevision: book.knowledge_revision } : undefined)
     return chapter
   }
 

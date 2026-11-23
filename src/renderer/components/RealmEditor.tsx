@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { BookSnapshot, StudioApi } from '../../contracts/api'
 import type { KnowledgeItemPage, KnowledgeItemSummary } from '../../contracts/knowledge'
-import { COMBAT_AXES, COMBAT_LABELS, MAX_REALM_VALUE, realmAvailable, type CombatCharacter, type RealmCondition, type RealmSnapshot, type RealmState } from '../../contracts/realm'
+import { COMBAT_AXES, COMBAT_LABELS, MAX_REALM_LEVELS, MAX_REALM_VALUE, realmAvailable, type CombatCharacter, type RealmCondition, type RealmSnapshot, type RealmState } from '../../contracts/realm'
 import { request } from '../request'
 import { StudioIcon } from './StudioIcon'
 import styles from './StellarCharacters.module.css'
@@ -73,13 +73,34 @@ export function RealmEditor({ api, book, fields, people, disabled, saving, compa
   function condition(levelId: string, next: RealmCondition) {
     onChange({ ...fields, levels: fields.levels.map((level) => level.id === levelId ? { ...level, conditions: level.conditions.map((item) => item.id === next.id ? next : item) } : level) })
   }
+  function moveLevel(index: number, delta: number) {
+    const target = index + delta
+    if (target < 0 || target >= fields.levels.length) return
+    const levels = [...fields.levels]
+    ;[levels[index], levels[target]] = [levels[target]!, levels[index]!]
+    changeLevels(levels)
+  }
+  function changeLevels(levels: RealmState['levels']) {
+    onChange({ ...fields, levels, characters: fields.characters.map((person) => {
+      const before = fields.levels[fields.levels.findIndex((level) => level.id === person.realmId) + 1]?.id
+      const after = levels[levels.findIndex((level) => level.id === person.realmId) + 1]?.id
+      return before === after ? person : { ...person, projectedPower: null }
+    }) })
+  }
   function submit(event: FormEvent) { event.preventDefault(); if (!disabled && !conflict) onSave() }
   return <form className={styles.editor} onSubmit={submit}
     onInvalidCapture={(event) => { if (event.target instanceof HTMLElement) { const details = event.target.closest('details'); if (details) details.open = true } }}>
     <fieldset disabled={disabled}>
       <section className={styles.settingsSection}><h3>境界阶梯 · 从低到高</h3>
+        <p className={styles.note}>v28 作品可设置 1–{MAX_REALM_LEVELS} 级。调整顺序会改变下一阶突破目标，相应的预期战力将恢复为未知；人物仍关联原境界。仅能移除没有人物占用且没有条件的境界。</p>
         {fields.levels.map((level, index) => <details key={level.id} className={styles.levelEditor} open={index === 0}>
           <summary>第 {index + 1} 级 · {level.name || '未命名境界'}</summary>
+          <div className={styles.actions}>
+            <button className={styles.button} type="button" disabled={index === 0} onClick={() => moveLevel(index, -1)}>降低一级</button>
+            <button className={styles.button} type="button" disabled={index === fields.levels.length - 1} onClick={() => moveLevel(index, 1)}>升高一级</button>
+            <button className={styles.button} type="button" disabled={fields.levels.length === 1 || level.conditions.length > 0 || fields.characters.some((person) => person.realmId === level.id)}
+              onClick={() => changeLevels(fields.levels.filter((item) => item.id !== level.id))}>移除空境界</button>
+          </div>
           <div className={styles.fieldGrid}><label>境界名称<input required maxLength={40} value={level.name} onChange={(event) => onChange({ ...fields, levels: fields.levels.map((item) => item.id === level.id ? { ...item, name: event.target.value } : item) })} /></label>
             <label>境界说明<input maxLength={500} value={level.description} onChange={(event) => onChange({ ...fields, levels: fields.levels.map((item) => item.id === level.id ? { ...item, description: event.target.value } : item) })} /></label></div>
           <h4>进入此境界的条件</h4>
@@ -95,6 +116,8 @@ export function RealmEditor({ api, book, fields, people, disabled, saving, compa
             onClick={() => onChange({ ...fields, levels: fields.levels.map((item) => item.id === level.id ? { ...item, conditions: [...item.conditions, { id: crypto.randomUUID(), name: '', kind, required: 1, consume: false }] } : item) })}>
             <StudioIcon name="plus" size={20} />{kind === 'quantity' ? '数量条件' : '里程碑'}</button>)}</div>
         </details>)}
+        <button className={styles.button} type="button" disabled={fields.levels.length >= MAX_REALM_LEVELS}
+          onClick={() => changeLevels([...fields.levels, { id: crypto.randomUUID(), name: '', description: '', conditions: [] }])}>添加境界 · {fields.levels.length}/{MAX_REALM_LEVELS}</button>
       </section>
       <section className={styles.settingsSection}><h3>人物战力</h3>
         <label>主角<select value={fields.protagonistId ?? ''} onChange={(event) => onChange({ ...fields, protagonistId: event.target.value || null })}><option value="">未指定</option>

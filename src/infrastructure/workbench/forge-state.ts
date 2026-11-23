@@ -3,6 +3,7 @@ import { DomainError } from '../../contracts/api'
 import type { ForgeEntity, ForgePerson, ForgeRelation, ForgeStateChange } from '../../contracts/forge'
 import { parseKnowledgeFields } from '../../contracts/knowledge'
 import { MAX_COGNITION_STATES, cognitionStateAt, parseStoryFields, type CognitionState, type StoryTime } from '../../contracts/story'
+import { chapterDependenciesCurrent } from '../memory/source-projection'
 
 export function forgeFailure(message = '工坊资料无法核对，请保留作品与候选后检查来源。'): never {
   throw new DomainError({ code: 'STORAGE_ERROR', message })
@@ -26,7 +27,8 @@ export function forgeReviewed(fields: { authorDecision: string; freshness: strin
 const timeOrder = (time: StoryTime) => time.kind === 'unknown' ? null : time.order
 
 /** 按任务固定的知识版本重建历史，后续编辑不能改写旧试戏的资料。 */
-export function readForgePerson(db: Database.Database, bookId: string, personId: string, storyOrder: number | null, knowledgeRevision: number): ForgePerson {
+export function readForgePerson(db: Database.Database, bookId: string, personId: string, storyOrder: number | null, knowledgeRevision: number,
+  options: { currentSources?: boolean; offset?: number; cognitionIds?: string[]; stateIds?: string[] } = {}): ForgePerson {
   const entity = forgeEntity(db, bookId, personId, knowledgeRevision)
   if (entity.fields.kind !== 'person') return forgeInvalid('请选择本书的人物实体。')
   const profiles = db.prepare(`SELECT id, fields_json, created_at FROM knowledge_item_revisions
@@ -41,10 +43,15 @@ export function readForgePerson(db: Database.Database, bookId: string, personId:
       AND (json_extract(r.fields_json, '$.personId') = ? OR json_extract(r.fields_json, '$.fromEntityId') = ?
         OR json_extract(r.fields_json, '$.toEntityId') = ? OR EXISTS
           (SELECT 1 FROM json_each(r.fields_json, '$.stateChanges') change WHERE json_extract(change.value, '$.entityId') = ?))
-    ORDER BY r.knowledge_revision LIMIT 201`).all(bookId, knowledgeRevision, knowledgeRevision, personId, personId, personId, personId) as
-    { id: string; record_id: string; fields_json: string }[]
-  if (rows.length > 200) return forgeInvalid('该人物的历史记录超过本次 200 条读取范围，请在故事记录中按时间查看；工坊未截断后继续推断。')
-  const records = rows.map((row) => ({ id: row.record_id, revisionId: row.id, fields: parseStoryFields(forgeJson(row.fields_json), bookId) }))
+    ORDER BY r.knowledge_revision`).iterate(bookId, knowledgeRevision, knowledgeRevision, personId, personId, personId, personId) as
+    Iterable<{ id: string; record_id: string; fields_json: string }>
+  const records = Array.from(rows, (row) => ({ id: row.record_id, revisionId: row.id, fields: parseStoryFields(forgeJson(row.fields_json), bookId) }))
+  const sourceChecks = new Map<string, boolean>()
+  const sourceCurrent = (id: string): boolean => {
+    if (!options.currentSources) return true
+    if (!sourceChecks.has(id)) sourceChecks.set(id, chapterDependenciesCurrent(db, 'story', bookId, id))
+    return sourceChecks.get(id)!
+  }
   const states = new Map<string, CognitionState>(), revisions = new Map<string, string>()
   for (const record of records) if (record.fields.kind === 'cognition') {
     if (record.fields.personId !== personId) return forgeFailure()
@@ -81,13 +88,13 @@ export function readForgePerson(db: Database.Database, bookId: string, personId:
       .get(bookId, eventId, knowledgeRevision) as { fields_json: string } | undefined
     const event = row ? parseStoryFields(forgeJson(row.fields_json), bookId) : null
     const formed = timeOrder(state.fields.storyTime), at = event?.kind === 'event' ? timeOrder(event.storyTime) : null
-    const usable = event?.kind === 'event' && forgeReviewed(event) && ['author_setting', 'narrative_claim'].includes(event.nature) && formed !== null && at !== null && at <= formed
+    const usable = event?.kind === 'event' && forgeReviewed(event) && sourceCurrent(eventId) && ['author_setting', 'narrative_claim'].includes(event.nature) && formed !== null && at !== null && at <= formed
     acquisitions.set(key, usable); return usable
   }
   const cognitions = [...states.values()].map((state) => ({ id: state.id, revisionId: revisions.get(state.id)!,
     title: state.fields.title, description: state.fields.description, attitude: state.fields.attitude, concealed: state.fields.concealed,
     formedAt: state.fields.storyTime, effectiveUntil: state.effectiveUntil, acquisitionEventId: state.fields.acquisitionEventId,
-    usable: storyOrder !== null && cognitionStateAt([state], storyOrder) !== null && forgeReviewed(state.fields) && acquisitionUsable(state) && state.fields.nature === 'character_belief' &&
+    usable: storyOrder !== null && cognitionStateAt([state], storyOrder) !== null && forgeReviewed(state.fields) && sourceCurrent(state.id) && acquisitionUsable(state) && state.fields.nature === 'character_belief' &&
       !['forgotten', 'refuted'].includes(state.fields.evolution?.kind ?? '') }))
   const changes: (ForgeStateChange & { eligible: boolean })[] = records.flatMap((record) => {
     const fields = record.fields
@@ -98,22 +105,44 @@ export function readForgePerson(db: Database.Database, bookId: string, personId:
   })
   if (new Set(changes.map((change) => change.id)).size !== changes.length) return forgeFailure('人物状态变化标识在多个事件中重复，不能明确选择来源。')
   // 同属性只采用时点前的最后一项；同一时点出现两项时保留冲突，不能任挑一个。
+  const latest = new Map<string, { order: number; count: number }>(), unknownTime = new Set<string>()
+  // 按固定知识版本汇总竞争资格；来源过期只阻止选用，不让更早状态复活，也不改变历史重建结果。
   for (const change of changes) {
+    if (!change.eligible || storyOrder === null) continue
     const at = timeOrder(change.storyTime)
-    if (storyOrder === null || at === null || at > storyOrder || !change.eligible || !change.after.trim()) continue
-    if (changes.some((other) => other.attribute === change.attribute && timeOrder(other.storyTime) === null)) continue
-    const later = changes.filter((other) => other.attribute === change.attribute && timeOrder(other.storyTime) !== null && timeOrder(other.storyTime)! <= storyOrder && timeOrder(other.storyTime)! >= at)
-    change.usable = later.length === 1
+    if (at === null) { unknownTime.add(change.attribute); continue }
+    if (at > storyOrder) continue
+    const previous = latest.get(change.attribute)
+    if (!previous || at > previous.order) latest.set(change.attribute, { order: at, count: 1 })
+    else if (at === previous.order) previous.count += 1
+  }
+  for (const change of changes) {
+    const current = latest.get(change.attribute)
+    change.usable = change.eligible && sourceCurrent(change.recordId) && Boolean(change.after.trim()) && !unknownTime.has(change.attribute) &&
+      current?.count === 1 && current.order === timeOrder(change.storyTime)
   }
   const relations: ForgeRelation[] = records.flatMap((record): ForgeRelation[] => {
     if (record.fields.kind !== 'relation') return []
     const start = timeOrder(record.fields.validFrom), end = timeOrder(record.fields.validUntil)
-    const active = storyOrder === null || !forgeReviewed(record.fields) || start === null || record.fields.validUntil.kind !== 'unknown' && end === null ? 'unknown'
+    const active = storyOrder === null || !forgeReviewed(record.fields) || !sourceCurrent(record.id) || start === null || record.fields.validUntil.kind !== 'unknown' && end === null ? 'unknown'
       : storyOrder < start || end !== null && storyOrder >= end ? 'inactive' : 'active'
     return [{ id: record.id, revisionId: record.revisionId, fields: record.fields, active }]
   })
   const result: ForgePerson = { entity, profileTotal, profiles: profiles.map((row) => ({ revisionId: row.id, createdAt: row.created_at, fields: parseKnowledgeFields(forgeJson(row.fields_json)) })),
     cognitions, states: changes.map(({ eligible: _eligible, ...change }) => change), relations }
+  if (options.cognitionIds) result.cognitions = result.cognitions.filter((item) => options.cognitionIds!.includes(item.id))
+  if (options.stateIds) result.states = result.states.filter((item) => options.stateIds!.includes(item.id))
+  if (options.offset !== undefined) {
+    result.historyOffset = options.offset
+    result.historyTotal = Math.max(result.cognitions.length, result.states.length, result.relations.length)
+    result.cognitions = result.cognitions.slice(options.offset, options.offset + 50)
+    result.states = result.states.slice(options.offset, options.offset + 50)
+    result.relations = result.relations.slice(options.offset, options.offset + 50)
+  }
+  if (options.currentSources && (!chapterDependenciesCurrent(db, 'knowledge', bookId, personId) || [...sourceChecks.values()].some((current) => !current))) {
+    result.sourceWarning = '部分资料引用的正文已修改，相关认知与状态暂不可选。请按当前正文复核并补充新稿引文。'
+  }
+  if (options.cognitionIds && options.stateIds) result.relations = []
   if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 1_000_000) return forgeInvalid('人物历史资料超过本次一百万字节预算，请缩小档案说明后再读取。')
   return result
 }

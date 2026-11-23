@@ -23,6 +23,7 @@ export interface ForgeRelation { id: string; revisionId: string; fields: Relatio
 export interface ForgePerson {
   entity: ForgeEntity; profiles: { revisionId: string; createdAt: string; fields: KnowledgeItemFields }[]; profileTotal: number
   cognitions: ForgeCognition[]; states: ForgeStateChange[]; relations: ForgeRelation[]
+  historyOffset?: number; historyTotal?: number; sourceWarning?: string
 }
 export interface ForgeSnapshot {
   bookId: string; bookRevision: number; knowledgeRevision: number; schemaVersion: number; requiresUpgrade: boolean
@@ -31,7 +32,7 @@ export interface ForgeSnapshot {
   /** 当前人物最近两份已完成试戏，独立于全书最近任务窗口。 */
   auditionRuns: { id: string; state: AiRunState; createdAt: string }[]
 }
-export interface ForgeReadInput extends BookInput { personId: string | null; storyOrder: number | null }
+export interface ForgeReadInput extends BookInput { personId: string | null; storyOrder: number | null; entityQuery?: string; entityOffset?: number; historyOffset?: number }
 export interface ForgePrepareInput extends BookMutationInput {
   chapterId: string; connectionId: string; kind: ForgeKind; instruction: string; count: number
   personId: string | null; profileRevisionId: string | null; storyOrder: number | null
@@ -81,8 +82,11 @@ function order(value: unknown): number | null {
   return value
 }
 export function parseForgeReadInput(value: unknown): ForgeReadInput {
-  const v = object(value, ['bookId', 'personId', 'storyOrder'])
-  return { bookId: id(v.bookId), personId: nullableId(v.personId), storyOrder: order(v.storyOrder) }
+  const v = object(value, ['bookId', 'personId', 'storyOrder', 'entityQuery', 'entityOffset', 'historyOffset'])
+  return { bookId: id(v.bookId), personId: nullableId(v.personId), storyOrder: order(v.storyOrder),
+    ...(v.entityQuery === undefined ? {} : { entityQuery: text(v.entityQuery, '实体检索', 120, true) }),
+    ...(v.entityOffset === undefined ? {} : { entityOffset: requiredInteger(v.entityOffset, '实体页起点') }),
+    ...(v.historyOffset === undefined ? {} : { historyOffset: requiredInteger(v.historyOffset, '历史页起点') }) }
 }
 export function parseForgePrepareInput(value: unknown): ForgePrepareInput {
   const v = object(value, ['bookId', 'expectedBookRevision', 'chapterId', 'connectionId', 'kind', 'instruction', 'count', 'personId', 'profileRevisionId', 'storyOrder', 'referenceRunId', 'traitFields', 'entityIds', 'cognitionIds', 'stateIds', 'excludedNames'])
@@ -110,7 +114,7 @@ export function parseForgeRunInput(value: unknown): ForgeRunInput { const v = ob
 export function forgeInstructionKind(instruction: string): ForgeKind {
   let value: unknown
   try { value = JSON.parse(instruction) } catch { return invalid('工坊预览缺少固定来源。') }
-  if (!isRecord(value) || value.workflow !== 'forge-v1' || !FORGE_KINDS.includes(value.kind as ForgeKind)) invalid('工坊预览格式无效。')
+  if (!isRecord(value) || !['forge-v1', 'forge-v2'].includes(String(value.workflow)) || !FORGE_KINDS.includes(value.kind as ForgeKind)) invalid('工坊预览格式无效。')
   return value.kind as ForgeKind
 }
 function citations(value: unknown): MemoryCitation[] {

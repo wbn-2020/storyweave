@@ -1,7 +1,7 @@
 import { DomainError, isRecord, requiredId, requiredInteger, requiredText } from './api'
 
 export const MAX_CREATIVE_RESOURCES = 8
-export const RESOURCE_SOURCES = ['scene', 'note', 'inspiration', 'builtin', 'foreshadow'] as const
+export const RESOURCE_SOURCES = ['scene', 'note', 'inspiration', 'builtin', 'foreshadow', 'realm', 'weave'] as const
 export type CreativeResourceSource = typeof RESOURCE_SOURCES[number]
 export interface CreativeResourceRef { source: CreativeResourceSource; id: string; revision: number }
 export interface CreativeResource extends CreativeResourceRef { title: string; text: string; role: 'plan' | 'material' | 'method' }

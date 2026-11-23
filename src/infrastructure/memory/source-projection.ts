@@ -11,6 +11,8 @@ import {
 import { parseStoryFields, plannedPayoffText, type Disclosure, type StoryRecordFields, type StoryTime } from '../../contracts/story'
 import { toSearchText } from './search-text'
 import { readKnowledgeAdjudicationContext } from '../knowledge/knowledge-repository'
+import { activeChapterSql } from '../storage/chapter-lifecycle'
+import { currentLivingProjectionSql } from '../workbench/living-projection'
 
 export interface MemorySourceIdentity {
   sourceKind: MemorySourceKind
@@ -111,7 +113,7 @@ function storyText(fields: StoryRecordFields): { text: string; entityIds: string
   return { text: lines.filter((line) => line !== '').join('\n'), entityIds: Array.from(new Set(entityIds)) }
 }
 
-function chapterDependencies(db: Database.Database, kind: 'knowledge' | 'story', bookId: string, sourceId: string) {
+export function chapterDependencies(db: Database.Database, kind: 'knowledge' | 'story', bookId: string, sourceId: string) {
   const sql = kind === 'knowledge'
     ? `SELECT s.chapter_id, s.revision_id, r.sequence FROM knowledge_sources s
        JOIN chapter_revisions r ON r.chapter_id = s.chapter_id AND r.id = s.revision_id
@@ -131,6 +133,14 @@ function chapterDependencies(db: Database.Database, kind: 'knowledge' | 'story',
     if ((byChapter.get(chapterId)?.sequence ?? 0) < row.sequence) byChapter.set(chapterId, { chapterId, revisionId, sequence: row.sequence })
   }
   return Array.from(byChapter.values(), ({ chapterId, revisionId }) => ({ chapterId, revisionId }))
+}
+
+/** 新任务共用索引的复核基线；历史引用保留，作者补充新稿引文后推进基线。 */
+export function chapterDependenciesCurrent(db: Database.Database, kind: 'knowledge' | 'story', bookId: string, sourceId: string): boolean {
+  if (kind === 'knowledge' && !db.prepare(`SELECT 1 FROM knowledge_items item WHERE item.id = ? AND ${currentLivingProjectionSql(db, 'item')}`).get(sourceId)) return false
+  const current = db.prepare(`SELECT c.current_revision_id FROM chapters c WHERE c.id = ? AND ${activeChapterSql(db)}`)
+  return chapterDependencies(db, kind, bookId, sourceId).every((dependency) =>
+    (current.get(dependency.chapterId) as { current_revision_id: string } | undefined)?.current_revision_id === dependency.revisionId)
 }
 
 export function readMemoryProjection(db: Database.Database, bookId: string, identity: MemorySourceIdentity): MemoryProjection {

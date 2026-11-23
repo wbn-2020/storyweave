@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, IPC_CHANNEL, type Result, type StudioApi, type RendererCommand } from '../../contracts/api'
+import { CLOSE_CANCELLED_CHANNEL, CLOSE_REQUEST_CHANNEL, CLOSE_RESPONSE_CHANNEL, INTERFACE_FAULT_CHANNEL, INTERFACE_RECOVERY_CHANNEL, IPC_CHANNEL, type Result, type StudioApi, type RendererCommand } from '../../contracts/api'
 
 async function invoke<T>(command: RendererCommand, payload?: unknown): Promise<Result<T>> {
   try {
@@ -12,8 +12,14 @@ async function invoke<T>(command: RendererCommand, payload?: unknown): Promise<R
 let closeListener: ((_event: IpcRendererEvent, requestId: unknown) => void) | null = null
 let cancelListener: (() => void) | null = null
 const api: StudioApi = {
+  reportInterfaceFault: () => ipcRenderer.send(INTERFACE_FAULT_CHANNEL),
+  recoverInterface: async (action) => {
+    try { return await ipcRenderer.invoke(INTERFACE_RECOVERY_CHANNEL, action) as Result<null> }
+    catch { return { ok: false, error: { code: 'SERVICE_UNAVAILABLE', message: '恢复请求未确认，请保留窗口并通过窗口关闭按钮进入恢复选项。' } } }
+  },
   getLiving: (input) => invoke('living.get', input),
   listMemoryArchive: (input) => invoke('living.archive', input),
+  syncLivingMemory: (input) => invoke('living.syncMemory', input),
   saveOutline: (input) => invoke('living.save', input),
   listOutlineHistory: (input) => invoke('living.history', input),
   restoreOutline: (input) => invoke('living.restore', input),
@@ -85,6 +91,7 @@ const api: StudioApi = {
   getBook: (input) => invoke('book.get', input),
   getBookSummary: (input) => invoke('book.summary', input),
   updateBook: (input) => invoke('book.update', input),
+  archiveStructure: (input) => invoke('book.archiveStructure', input),
   createVolume: (input) => invoke('volume.create', input),
   renameVolume: (input) => invoke('volume.rename', input),
   reorderVolumes: (input) => invoke('volume.reorder', input),

@@ -9,6 +9,7 @@ import {
 import { writeNewText } from '../file-access'
 import { PendingAiResults, type PendingAiFile, type PendingAiPreflight } from './pending-ai-results'
 import type { ServiceClient } from './service-client'
+import { chatCompletionBody, modelHttpError } from './model-request'
 
 interface ActiveGeneration { root: string; bookId: string; runId: string; service: ServiceClient; controller: AbortController; cancelled: boolean; preflight: PendingAiPreflight }
 interface PendingGeneration { root: string; contextHash: string; input: GenerationFinishInput; file?: PendingAiFile }
@@ -225,8 +226,8 @@ export class GenerationSessions {
     try {
       const response = await fetch(`${run.connection.baseUrl}/chat/completions`, { method: 'POST', redirect: 'error', signal: active.controller.signal,
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-        body: JSON.stringify({ model: run.connection.model, messages: run.messages, max_tokens: run.connection.maxOutputTokens, stream: true, stream_options: { include_usage: true }, n: 1 }) })
-      if (!response.ok) throw new Error(`模型请求返回 HTTP ${response.status}，未读取远端错误正文。`)
+        body: JSON.stringify(chatCompletionBody(run.connection, run.messages)) })
+      if (!response.ok) throw new Error(modelHttpError(response.status))
       if (!response.body || !/^text\/event-stream(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) throw protocol()
       reader = response.body.getReader()
       const decoder = new TextDecoder('utf-8', { fatal: true })

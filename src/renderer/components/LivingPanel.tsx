@@ -10,6 +10,7 @@ import styles from './StellarLiving.module.css'
 import { BeatCardPicker } from './BeatCardPicker'
 import { Dialog, DialogDisplayContext } from './Dialog'
 import { StudioIcon } from './StudioIcon'
+import { ReferencePicker } from './StoryFieldsEditor'
 
 interface Props {
   api: StudioApi; book: BookSnapshot; chapter: ChapterSnapshot | null; disabled: boolean
@@ -73,6 +74,10 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   const node = snapshot?.outlines.find((item) => item.id === selectedId)
   const run = detail?.run ?? null
   const blocked = tool.locked || book.book.archivedAt !== null || run?.state === 'running' || uncertain
+  useEffect(() => {
+    if (!node || node.detailsLoaded !== false || blocked || outlineDirty || proposalDirty || requestDirty || tool.error || tool.readFailure) return
+    void tool.read(() => api.getLiving({ bookId: book.book.id, outlineId: node.id }), (value) => receiveSnapshot(value))
+  }, [node, blocked, outlineDirty, proposalDirty, requestDirty])
   const canEdit = !blocked && !(node?.locked && locked)
   const editableProposal = !blocked && run?.state === 'succeeded' && !detail?.adopted
   const setGuard = (key: 'outline' | 'proposal' | 'request' | 'uncertain', value: boolean) => {
@@ -109,7 +114,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     setSnapshot(value)
     callbacks.current.onSnapshotChange(value)
     const next = value.outlines.find((item) => item.id === selectedId) ?? value.outlines[0]
-    if (next && (resetFields || !guard.current.outline)) { setSelectedId(next.id); setFields(next.fields); setLocked(next.locked) }
+    if (next && (resetFields || !guard.current.outline)) { setSelectedId(next.id); setFields(next.detailsLoaded === false ? null : next.fields); setLocked(next.locked) }
   }
   async function readArchive(beforeId?: string, previous = false) {
     if (blocked || outlineDirty || proposalDirty || requestDirty) return
@@ -121,9 +126,18 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
       setArchiveBefore((values) => beforeId ? previous ? values.slice(0, -1) : [...values, beforeId] : [])
     })
   }
+  async function syncMemory(batchId: string) {
+    if (blocked || !snapshot || outlineDirty || proposalDirty || requestDirty) return
+    const input = { bookId: book.book.id, expectedBookRevision: snapshot.bookRevision, batchId }
+    setLastAttempt({ command: 'living.syncMemory', input })
+    const saved = await tool.write('living.syncMemory', () => api.syncLivingMemory(input),
+      (value) => value.bookId === book.book.id && value.bookRevision >= input.expectedBookRevision && value.schemaVersion >= 28,
+      (value) => receiveSnapshot(value), '这批记忆已同步到知识库；请重新整理本地索引以供召回。')
+    if (saved) await syncBook()
+  }
   async function load() {
     if (outlineDirty || proposalDirty || requestDirty) { tool.setError('请先保存或明确放弃当前表单，再刷新资料。'); return }
-    const loaded = await tool.read(() => api.getLiving({ bookId: book.book.id }), (value) => receiveSnapshot(value, true))
+    const loaded = await tool.read(() => api.getLiving({ bookId: book.book.id, outlineId: selectedId }), (value) => receiveSnapshot(value, true))
     if (!loaded || !mounted.current) return
     await tool.read(() => api.listAiConnections({ bookId: book.book.id }), (value) => {
       if (value.bookId !== book.book.id) throw new Error('Connection identity mismatch')
@@ -138,6 +152,16 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   }
   function selectNode(value: LivingOutline, edit = false) {
     if (blocked || outlineDirty || proposalDirty) { tool.setError('请先保存或放弃当前改动。'); return }
+    if (value.detailsLoaded === false) {
+      void tool.read(() => api.getLiving({ bookId: book.book.id, outlineId: value.id }), (snapshot) => {
+        const loaded = snapshot.outlines.find((item) => item.id === value.id)
+        if (!loaded || loaded.detailsLoaded === false) throw new Error('Outline detail missing')
+        receiveSnapshot(snapshot)
+        setSelectedId(loaded.id); setFields(loaded.fields); setLocked(loaded.locked); setHistory(null); setEditorOpen(edit)
+        if (edit) window.requestAnimationFrame(() => outlineEditor.current?.scrollIntoView({ block: 'nearest' }))
+      })
+      return
+    }
     setSelectedId(value.id); setFields(value.fields); setLocked(value.locked); setHistory(null)
     setEditorOpen(edit)
     if (edit) window.requestAnimationFrame(() => outlineEditor.current?.scrollIntoView({ block: 'nearest' }))
@@ -196,7 +220,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
     const saved = await tool.write('living.prepare', () => api.prepareLiving(input),
       (value) => value.bookId === book.book.id && value.kind === kind && value.run.bookId === book.book.id && value.run.chapterId === input.chapterId && value.run.state === 'prepared' && value.run.context.purpose === 'living' && value.run.context.bookRevision === input.expectedBookRevision,
       (value) => { setDetail(value); setProposal(null); setPreviewInput(JSON.stringify(input)); setGuard('request', false); setPollStopped(false) }, '预览已保存。确认发送后才会调用模型。')
-    if (saved) await tool.read(() => api.getLiving({ bookId: book.book.id }), (value) => receiveSnapshot(value, true))
+    if (saved) await tool.read(() => api.getLiving({ bookId: book.book.id, outlineId: selectedId }), (value) => receiveSnapshot(value, true))
   }
   function receiveRun(value: LivingRunDetail) {
     if (value.bookId !== book.book.id || value.run.bookId !== book.book.id || value.run.context.purpose !== 'living' || (run && value.run.id !== run.id)) throw new Error('Run identity mismatch')
@@ -264,7 +288,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
   }
   function discard() {
     if (blocked) return
-    if (node) { setFields(node.fields); setLocked(node.locked) }
+    if (node) { setFields(node.detailsLoaded === false ? null : node.fields); setLocked(node.locked) }
     setProposal(detail?.proposal ?? null)
     if (detail) {
       const input = detail.request
@@ -394,7 +418,7 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
             ...memory.proposal.states.map((item) => ({ label: item.attribute, nature: item.nature, note: item })),
           ].filter((item) => memoryNature === 'all' || item.nature === memoryNature).map(({ label, nature, note }, index) => <div className={styles.evidence} key={index}>
             <p>{label} · {nature === null ? '整理资料' : natureLabels[nature]}</p><p>{note.text}</p>{note.citations.map((citation, at) => <blockquote key={at}>{citation.quote}<small>段落 {citation.blockId}</small></blockquote>)}
-          </div>)}</details><button className={shared.button} type="button" disabled={blocked || outlineDirty || proposalDirty} onClick={() => onNavigate(memory.chapterId)}>打开来源章节</button><small>定稿修订 {memory.revisionId} · {displayTime(memory.createdAt)}</small></article>)}
+          </div>)}</details><button className={shared.button} type="button" disabled={blocked || outlineDirty || proposalDirty || !book.chapters.some((item) => item.id === memory.chapterId)} onClick={() => onNavigate(memory.chapterId)}>打开来源章节</button>{memory.state === 'published' && snapshot.schemaVersion >= 28 && <button className={shared.button} type="button" disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={() => void syncMemory(memory.id)}>已复核，同步到知识库（已有条目会保留）</button>}<small>定稿修订 {memory.revisionId} · {displayTime(memory.createdAt)}</small></article>)}
         {!archiveCurrent && <p className={styles.note}>默认载入最近 {snapshot.memories.length} 个批次，共 {snapshot.memoryTotal} 个；查询所选章节可分页读取更早批次。</p>}
       </section>}
 
@@ -406,7 +430,10 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
           return <div key={item.id}><label className={styles.check}><input type="checkbox" checked={targets.includes(item.id)} disabled={blocked || !eligible || (!targets.includes(item.id) && targets.length >= 10)} onChange={(event) => editRequest(() => { setTargets((values) => event.target.checked ? [...values, item.id] : values.filter((value) => value !== item.id)); if (!event.target.checked) setManualIds((values) => values.filter((value) => value !== item.id)) })} />{item.fields.title}{item.locked ? ' · 已锁定' : !eligible ? ' · 已开始写作' : item.stale ? ' · 待复核' : ''}</label>
             {targets.includes(item.id) && item.manual && <label className={styles.check}><input type="checkbox" checked={manualIds.includes(item.id)} disabled={blocked} onChange={(event) => editRequest(() => setManualIds((values) => event.target.checked ? [...values, item.id] : values.filter((value) => value !== item.id)))} />允许本次替换这章已有的作者章纲</label>}</div>
         })}</fieldset>}
-        <details><summary>选择本次需要识别的实体（{entityIds.length}/30）</summary><p className={styles.note}>只列已采用、当前且无候选冲突的实体；未选实体的状态不会由本次整理自动补全。</p><div className={styles.entityChoices}>{snapshot.entities.map((entity) => <label className={styles.check} key={entity.id}><input type="checkbox" checked={entityIds.includes(entity.id)} disabled={blocked || (!entityIds.includes(entity.id) && entityIds.length >= 30)} onChange={(event) => editRequest(() => setEntityIds((values) => event.target.checked ? [...values, entity.id] : values.filter((value) => value !== entity.id)))} />{entity.name}</label>)}</div>{snapshot.entityTotal > snapshot.entities.length && <p>当前列出 {snapshot.entities.length}/{snapshot.entityTotal} 个可选实体。</p>}</details>
+        <ReferencePicker label={`选择本次需要识别的实体（${entityIds.length}/30）`} api={api} bookId={book.book.id} value={entityIds} maximum={30}
+          disabled={blocked} names={Object.fromEntries(snapshot.entities.map((entity) => [entity.id, entity.name]))}
+          onChange={(ids) => { if (ids.length <= 30) editRequest(() => setEntityIds(ids)) }} />
+        <p className={styles.note}>支持搜索和翻页，翻页保留选择。发送前会核对实体已采用、当前且完成冲突复核；未选实体的状态不会自动补全。</p>
         <label>你的要求<textarea value={instruction} rows={3} maxLength={2000} disabled={blocked} onChange={(event) => editRequest(() => setInstruction(event.target.value))} /></label>
         <button className={shared.primaryButton} type="button" disabled={blocked || outlineDirty || proposalDirty || !connectionId || !anchorId || !instruction.trim()} onClick={() => void prepare()}>保存并预览本次请求</button>
       </section>
@@ -431,7 +458,8 @@ export function LivingPanel({ api, book, chapter, disabled, initialTab = 'outlin
             </div>
           </section>
         })}
-        {proposal && run.state === 'succeeded' && !detail?.adopted && <div className={styles.adoptBar}><button type="button" className={shared.primaryButton} disabled={!editableProposal || outlineDirty} onClick={() => proposal.kind === 'memory' ? void adopt() : setConfirmAdopt(true)}><StudioIcon name="check" size={20} />{proposal.kind === 'memory' ? '确认发布所选记忆' : `采纳 ${proposal.chapters.length} 项章纲`}</button>{proposal.kind === 'rebase' && <button type="button" className={shared.button} disabled={blocked} onClick={() => { setReviewingRebase(false); window.requestAnimationFrame(() => generationPanel.current?.scrollIntoView({ block: 'start' })) }}>返回核对手改与修纲范围</button>}<span>作品修订 {snapshot.bookRevision} · 提案修订 {run.version}</span></div>}
+        {proposal?.kind === 'memory' && run.state === 'succeeded' && <p className={styles.note}>发布表示已核对所选内容、性质和原文引文。摘要将参与分层汇总；{snapshot.schemaVersion >= 28 ? '摘要、事件和状态同时存入知识库供本地索引检索，保留信念与推断性质，不自动改写人物档案或推定故事时间。重新整理本地索引后可供续写召回。' : '当前旧格式只发布定稿记忆，请在知识库备份升级后，在上方有效批次中同步到知识库。'}</p>}
+        {proposal && run.state === 'succeeded' && !detail?.adopted && <div className={styles.adoptBar}><button type="button" className={shared.primaryButton} disabled={!editableProposal || outlineDirty} onClick={() => proposal.kind === 'memory' ? void adopt() : setConfirmAdopt(true)}><StudioIcon name="check" size={20} />{proposal.kind === 'memory' ? snapshot.schemaVersion >= 28 ? '已复核，发布并存入知识库' : '已复核，发布定稿记忆' : `采纳 ${proposal.chapters.length} 项章纲`}</button>{proposal.kind === 'rebase' && <button type="button" className={shared.button} disabled={blocked} onClick={() => { setReviewingRebase(false); window.requestAnimationFrame(() => generationPanel.current?.scrollIntoView({ block: 'start' })) }}>返回核对手改与修纲范围</button>}<span>作品修订 {snapshot.bookRevision} · 提案修订 {run.version}</span></div>}
         <details open={run.state === 'running' || Boolean(detail?.parseError)}><summary>保留的模型原始输出（{run.outputText.length.toLocaleString()} 字符）</summary><pre>{run.outputText || '等待模型输出…'}</pre></details>
       </section>}
       {snapshot.runs.length > 0 && <section className={styles.runHistory}><h3>最近的整理与修纲提案</h3>{snapshot.runs.map((item) => <button className={shared.button} type="button" key={item.id} disabled={blocked || outlineDirty || proposalDirty || requestDirty} onClick={() => void refreshRun(item.id)}>{kindLabels[item.kind]} · {item.state} · {displayTime(item.createdAt)}</button>)}</section>}

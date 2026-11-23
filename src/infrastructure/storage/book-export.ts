@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, writeSync, type Stats } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import type Database from 'better-sqlite3'
+import { activeChapterSql } from './chapter-lifecycle'
 import { DomainError, requiredId, requiredInteger, requiredText, type ChapterStatus } from '../../contracts/api'
 import {
   BOOK_EXPORT_PREVIEW_TTL, MAX_EXPORT_BYTES, MAX_EXPORT_CHAPTERS, bookExportExtension,
@@ -67,7 +68,7 @@ function readOutline(db: Database.Database): OutlineRow[] {
   // 从目录出发，不能用正文内连接；版本丢失的章节也必须进入交付清单。
   const rows = db.prepare(`SELECT c.id, c.title, c.position, c.volume_id, v.title AS volume_title,
     c.current_revision_id, c.finalized_revision_id, c.status
-    FROM chapters c LEFT JOIN volumes v ON v.id = c.volume_id ORDER BY c.position, c.id LIMIT ?`).all(MAX_EXPORT_CHAPTERS + 1) as OutlineRow[]
+    FROM chapters c LEFT JOIN volumes v ON v.id = c.volume_id WHERE ${activeChapterSql(db)} ORDER BY c.position, c.id LIMIT ?`).all(MAX_EXPORT_CHAPTERS + 1) as OutlineRow[]
   if (rows.length > MAX_EXPORT_CHAPTERS) throw storageFailure('作品章节数超过导出上限，请先检查目录。')
   return rows.map((row) => {
     if (!Number.isSafeInteger(row.position) || row.position < 0 || !['planned', 'writing', 'review', 'finalized'].includes(row.status)) throw storageFailure()

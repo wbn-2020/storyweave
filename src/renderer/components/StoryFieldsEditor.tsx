@@ -198,8 +198,8 @@ export function SourceEditor({ value, api, book, disabled, onChange, onReadingCh
   </div></fieldset>
 }
 
-interface PickerProps { label: string; api: StudioApi; bookId: string; value: string[]; onChange: (value: string[]) => void; disabled: boolean; names: Record<string, string>; type?: 'entity' | 'event' | 'person'; single?: boolean }
-function ReferencePicker({ label, api, bookId, value, onChange, disabled, names, type = 'entity', single = false }: PickerProps) {
+interface PickerProps { label: string; api: StudioApi; bookId: string; value: string[]; onChange: (value: string[]) => void; disabled: boolean; names: Record<string, string>; type?: 'entity' | 'event' | 'person'; single?: boolean; maximum?: number }
+export function ReferencePicker({ label, api, bookId, value, onChange, disabled, names, type = 'entity', single = false, maximum = MAX_STORY_LINKS }: PickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -237,7 +237,7 @@ function ReferencePicker({ label, api, bookId, value, onChange, disabled, names,
     void load()
     return () => { active = false }
   }, [api, bookId, disabled, offset, open, refresh, search, type])
-  function toggle(id: string) { if (!disabled) onChange(value.includes(id) ? value.filter((item) => item !== id) : single ? [id] : value.length < MAX_STORY_LINKS ? [...value, id] : value) }
+  function toggle(id: string) { if (!disabled) onChange(value.includes(id) ? value.filter((item) => item !== id) : single ? [id] : value.length < maximum ? [...value, id] : value) }
   function searchReferences() {
     if (disabled || loading) return
     setSearch(query); setOffset(0); setRefresh((number) => number + 1)
@@ -245,7 +245,7 @@ function ReferencePicker({ label, api, bookId, value, onChange, disabled, names,
   return <fieldset className={styles.picker}><legend>{label}</legend><div className={styles.selected}>{value.length ? value.map((id) => <button key={id} type="button" disabled={disabled} title={`取消关联：${id}`} onClick={() => toggle(id)}>{names[id] ?? known[id] ?? `条目 ${id.slice(0, 8)}`} ×</button>) : <span className={styles.help}>尚未关联</span>}</div>
     <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}><summary>{single ? '选择 / 更换关联' : '查找并追加关联'}</summary><div className={styles.pickerSearch}><label>搜索本书{type === 'event' ? '事件' : type === 'person' ? '人物' : '知识实体'}<input value={query} maxLength={200} disabled={disabled} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); searchReferences() } }} /></label><button type="button" className={shared.button} disabled={disabled || loading} onClick={searchReferences}>搜索</button></div>
       {loading && <p className={styles.help} role="status">正在读取关联候选…</p>}{error && <p className={styles.error} role="alert">{error}</p>}
-      <ul className={styles.pickerResults}>{items.map((item) => <li key={item.id}><button type="button" disabled={disabled || (!single && value.length >= MAX_STORY_LINKS && !value.includes(item.id))} aria-pressed={value.includes(item.id)} onClick={() => toggle(item.id)}>{item.label}<small>{value.includes(item.id) ? '已关联' : '选择关联'} · {item.id.slice(0, 8)}</small></button></li>)}</ul>
+      <ul className={styles.pickerResults}>{items.map((item) => <li key={item.id}><button type="button" disabled={disabled || (!single && value.length >= maximum && !value.includes(item.id))} aria-pressed={value.includes(item.id)} onClick={() => toggle(item.id)}>{item.label}<small>{value.includes(item.id) ? '已关联' : '选择关联'} · {item.id.slice(0, 8)}</small></button></li>)}</ul>
       {!loading && !error && items.length === 0 && <p className={styles.help}>没有匹配项；可先在本书知识库建立实体，或在事件页建立事件。</p>}
       <div className={styles.paging}><button type="button" className={shared.button} disabled={disabled || loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 20))}>上一页</button><span>共 {total} 项</span><button type="button" className={shared.button} disabled={disabled || loading || next === null} onClick={() => { if (next !== null) setOffset(next) }}>下一页</button></div>
     </details>

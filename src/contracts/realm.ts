@@ -5,6 +5,7 @@ export const MAX_REALM_FIELDS_BYTES = 256 * 1024
 export const MAX_REALM_HISTORY = 10_000
 export const MAX_REALM_HISTORY_BYTES = 64 * 1024 * 1024
 export const MAX_REALM_VALUE = 1_000_000_000
+export const MAX_REALM_LEVELS = 32
 export const COMBAT_AXES = ['attack', 'defense', 'health', 'speed', 'magic', 'accuracy'] as const
 export type CombatAxis = typeof COMBAT_AXES[number]
 export const COMBAT_LABELS: Record<CombatAxis, string> = { attack: '攻击', defense: '防御', health: '生命', speed: '速度', magic: '法力', accuracy: '精准' }
@@ -57,7 +58,7 @@ function number(value: unknown, label: string) { return requiredInteger(value, l
 function nullableNumber(value: unknown, label: string) { return value === null ? null : number(value, label) }
 export function parseRealmState(value: unknown): RealmState {
   const v = object(value, ['levels', 'characters', 'protagonistId'])
-  const levels = list(v.levels, 5, (raw): RealmLevel => {
+  const levels = list(v.levels, MAX_REALM_LEVELS, (raw): RealmLevel => {
     const level = object(raw, ['id', 'name', 'description', 'conditions'])
     const conditions = list(level.conditions, 12, (entry): RealmCondition => {
       const condition = object(entry, ['id', 'name', 'kind', 'required', 'consume'])
@@ -69,8 +70,8 @@ export function parseRealmState(value: unknown): RealmState {
     if (new Set(conditions.map((item) => `${item.kind}:${item.name}`)).size !== conditions.length) return invalid('同一境界不能重复登记相同条件。')
     return { id: id(level.id), name: text(level.name, '境界名称', 40), description: text(level.description, '境界说明', 500, true), conditions }
   }, (item) => item.id)
-  if (levels.length !== 5) return invalid('请按从低到高的顺序填写五级境界。')
-  if (new Set(levels.map((item) => item.name)).size !== 5) return invalid('五级境界名称不能重复。')
+  if (!levels.length) return invalid('请按从低到高的顺序填写至少一级境界。')
+  if (new Set(levels.map((item) => item.name)).size !== levels.length) return invalid('境界名称不能重复。')
   const conditions = new Map(levels.flatMap((level) => level.conditions).map((item) => [item.id, item]))
   if (conditions.size !== levels.reduce((count, level) => count + level.conditions.length, 0)) return invalid('不同境界的条件身份不能重复。')
   const characters = list(v.characters, 200, (raw): CombatCharacter => {
@@ -79,7 +80,7 @@ export function parseRealmState(value: unknown): RealmState {
     for (const axis of COMBAT_AXES) if (rawAbilities[axis] !== undefined) abilities[axis] = requiredInteger(rawAbilities[axis], COMBAT_LABELS[axis], 100)
     const realmId = character.realmId === null ? null : id(character.realmId)
     if (realmId && !levels.some((level) => level.id === realmId)) return invalid('人物境界不在本书阶梯中。')
-    const progress = list(character.progress, 60, (entry) => {
+    const progress = list(character.progress, MAX_REALM_LEVELS * 12, (entry) => {
       const progress = object(entry, ['conditionId', 'value']), conditionId = id(progress.conditionId)
       const condition = conditions.get(conditionId), value = nullableNumber(progress.value, '当前条件数量')
       if (!condition || condition.kind === 'milestone' && value !== null && value > 1) return invalid('人物条件不属于本书或里程碑状态无效。')

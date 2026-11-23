@@ -227,7 +227,7 @@ export function CharacterComparison({ api, book, disabled, onClose, onOpen, onPl
             <div><strong title={level.name}>{level.name}</strong>{level.id === activeCharacter?.realmId && <span className={styles.current}>当前</span>}<p title={level.description}>{level.description}</p>
               <small title={requirements}>{requirements}</small></div>
           </li>
-        })}</ol> : <p className={styles.note}>尚未登记五级境界</p>}
+        })}</ol> : <p className={styles.note}>尚未登记境界阶梯</p>}
         <div className={styles.ladderScene} aria-hidden="true"><StudioIcon name="city" size={96} /></div>
       </aside>
       <section className={styles.comparison}><h3>人物战力对比 <StudioIcon name="spark" size={20} /><button type="button" className={styles.iconButton} disabled={tool.locked || Boolean(draft) || syncRequired || stale || snapshot.schemaVersion < 3} aria-label="选择最多三位人物" title="选择人物" onClick={() => setPicker(true)}><StudioIcon name="users" size={20} /></button></h3>

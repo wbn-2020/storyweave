@@ -16,7 +16,7 @@ import {
 import { parseDisclosure } from '../../contracts/story'
 import { BOOK_SCHEMA_VERSION } from '../storage/schema'
 import { MemorySearchRepository, MEMORY_SEARCH_SOURCE_FILTER_SQL } from './search-repository'
-import { MEMORY_CURRENT_ARTIFACTS_SQL } from './task-repository'
+import { currentMemoryArtifactsSql } from './task-repository'
 
 interface BookRow { id: string; index_publication_version: number; archived_at: string | null }
 interface ProfileRow { profile_hash: string; response_model: string; dimensions: number }
@@ -30,7 +30,7 @@ const RUN_COLUMNS = `id, book_id, version, state, kind, publication_version, con
   embedding_model, profile_hash, input_count, context_hash, context_integrity_hash, context_json,
   result_json, result_integrity_hash, usage_json, error, created_at, updated_at`
 const STATES = ['prepared', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'] as const
-const CURRENT = `WITH current_artifacts AS (${MEMORY_CURRENT_ARTIFACTS_SQL})`
+const current = (db: Database.Database) => `WITH current_artifacts AS (${currentMemoryArtifactsSql(db)})`
 // 与 JS trim 的空白集合一致，保留原片段文本，只排除没有向量输入意义的片段。
 const VECTOR_TEXT_FILTER = `instr(c.text, char(0)) = 0 AND length(trim(c.text, char(9, 10, 11, 12, 13, 32, 160, 5760,
   8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))) > 0`
@@ -176,8 +176,9 @@ function detail(row: RunRow): MemoryVectorRun {
     const scope = result.semantic as Record<string, unknown>
     const status = result.status as Record<string, unknown>
     if (scope.profileHash !== row.profile_hash || typeof scope.responseModel !== 'string' || !integer(scope.dimensions, 1, 4096) ||
-      !integer(scope.eligibleChunks) || !integer(scope.indexedChunks) || !integer(scope.scannedChunks) || scope.scanLimit !== MEMORY_VECTOR_SCAN_LIMIT ||
-      scope.scannedChunks > scope.indexedChunks || scope.indexedChunks > scope.eligibleChunks || scope.scannedChunks > MEMORY_VECTOR_SCAN_LIMIT ||
+      !integer(scope.eligibleChunks) || !integer(scope.indexedChunks) || !integer(scope.scannedChunks) || !integer(scope.scanLimit) ||
+      (scope.scanLimit !== MEMORY_VECTOR_SCAN_LIMIT && scope.scanLimit !== scope.indexedChunks) ||
+      scope.scannedChunks > scope.indexedChunks || scope.indexedChunks > scope.eligibleChunks || scope.scannedChunks > scope.scanLimit ||
       status.bookId !== row.book_id || status.publicationVersion !== row.publication_version || !integer(status.schemaVersion, 10, BOOK_SCHEMA_VERSION) ||
       typeof result.truncated !== 'boolean') throw storageFailure()
     const ids = new Set<number>()
@@ -244,7 +245,7 @@ export class MemoryVectorRepository {
         if (schemaVersion(db) < 10) return { ...base, requiresUpgrade: true, eligibleChunks: 0, indexedChunks: 0, dimensions: null, responseModel: null, recentRuns: [] }
         currentConnection(db, data.bookId, data.connection)
         const profile = readProfile(db, hash)
-        const counts = db.prepare(`${CURRENT} SELECT count(*) AS eligible,
+        const counts = db.prepare(`${current(db)} SELECT count(*) AS eligible,
           count(v.chunk_id) AS indexed FROM current_artifacts a JOIN memory_chunks c ON c.artifact_id = a.id
           LEFT JOIN memory_vectors v ON v.chunk_id = c.id AND v.profile_hash = ? WHERE ${INDEX_FILTER}`).get(hash) as { eligible: number; indexed: number }
         if (!integer(counts.eligible) || !integer(counts.indexed) || counts.indexed > counts.eligible) throw storageFailure()
@@ -292,7 +293,7 @@ export class MemoryVectorRepository {
         const hash = profileHash(data.connection, data.embeddingModel)
         let items: MemoryEvidence[] = []
         if (data.kind === 'index') {
-          const rows = db.prepare(`${CURRENT} SELECT c.id FROM current_artifacts a JOIN memory_chunks c ON c.artifact_id = a.id
+          const rows = db.prepare(`${current(db)} SELECT c.id FROM current_artifacts a JOIN memory_chunks c ON c.artifact_id = a.id
             WHERE ${INDEX_FILTER} AND NOT EXISTS (SELECT 1 FROM memory_vectors v WHERE v.profile_hash = ? AND v.chunk_id = c.id)
             ORDER BY c.id LIMIT ?`).all(hash, MEMORY_VECTOR_BATCH_SIZE) as { id: number }[]
           if (!rows.length) invalid('当前发布资料已没有需要处理的有效片段，请刷新覆盖状态。')
@@ -433,7 +434,7 @@ export class MemoryVectorRepository {
       throw new DomainError({ code: 'NOT_FOUND', message: '当前作品中不存在这个关联实体。' })
     }
     if (!readProfile(db, hash)) invalid('请先为这个连接和向量模型整理至少一批资料。')
-    const available = db.prepare(`${CURRENT} SELECT c.id FROM current_artifacts a
+    const available = db.prepare(`${current(db)} SELECT c.id FROM current_artifacts a
       JOIN memory_chunks c ON c.artifact_id = a.id JOIN memory_vectors v ON v.chunk_id = c.id AND v.profile_hash = @profileHash
       WHERE ${MEMORY_SEARCH_SOURCE_FILTER_SQL} AND ${VECTOR_TEXT_FILTER} LIMIT 1`)
       .get({ bookId: search.bookId, sourceKind: search.sourceKind ?? null, nature: search.nature ?? null,
@@ -448,16 +449,16 @@ export class MemoryVectorRepository {
       entityId: search.entityId ?? null, includeUnreviewed: search.includeUnreviewed === false ? 0 : 1,
       includeAffected: search.includeAffected === true ? 1 : 0, profileHash: run.context.profileHash }
     const { profileHash: selectedProfile, ...filters } = params
-    const eligible = count(db, `${CURRENT} SELECT count(*) AS total FROM current_artifacts a
+    const eligible = count(db, `${current(db)} SELECT count(*) AS total FROM current_artifacts a
       JOIN memory_chunks c ON c.artifact_id = a.id WHERE ${MEMORY_SEARCH_SOURCE_FILTER_SQL} AND ${VECTOR_TEXT_FILTER}`, filters)
-    const indexed = count(db, `${CURRENT} SELECT count(*) AS total FROM current_artifacts a
+    const indexed = count(db, `${current(db)} SELECT count(*) AS total FROM current_artifacts a
       JOIN memory_chunks c ON c.artifact_id = a.id JOIN memory_vectors v ON v.chunk_id = c.id AND v.profile_hash = @profileHash
       WHERE ${MEMORY_SEARCH_SOURCE_FILTER_SQL} AND ${VECTOR_TEXT_FILTER}`, { ...filters, profileHash: selectedProfile })
     if (!indexed) invalid('当前筛选范围没有可用向量，请先整理或调整范围。')
-    const rows = db.prepare(`${CURRENT} SELECT c.id, c.text, v.text_hash, v.vector_json FROM current_artifacts a
+    const rows = db.prepare(`${current(db)} SELECT c.id, c.text, v.text_hash, v.vector_json FROM current_artifacts a
       JOIN memory_chunks c ON c.artifact_id = a.id JOIN memory_vectors v ON v.chunk_id = c.id AND v.profile_hash = @profileHash
-      WHERE ${MEMORY_SEARCH_SOURCE_FILTER_SQL} AND ${VECTOR_TEXT_FILTER} ORDER BY c.id LIMIT @scanLimit`)
-      .iterate({ ...params, scanLimit: MEMORY_VECTOR_SCAN_LIMIT }) as Iterable<{ id: number; text: string; text_hash: string; vector_json: string }>
+      WHERE ${MEMORY_SEARCH_SOURCE_FILTER_SQL} AND ${VECTOR_TEXT_FILTER} ORDER BY c.id`)
+      .iterate(params) as Iterable<{ id: number; text: string; text_hash: string; vector_json: string }>
     const ranked: { id: number; score: number }[] = []
     let scanned = 0
     for (const row of rows) {
@@ -469,15 +470,20 @@ export class MemoryVectorRepository {
       if (!Number.isFinite(norm) || Math.abs(norm - 1) > 0.000001) throw storageFailure()
       const score = stored.reduce((sum, entry, index) => sum + entry * vector[index], 0)
       if (!Number.isFinite(score)) throw storageFailure()
-      ranked.push({ id: row.id, score })
-      ranked.sort((a, b) => b.score - a.score || a.id - b.id)
+      let low = 0, high = ranked.length
+      while (low < high) {
+        const middle = (low + high) >>> 1, entry = ranked[middle]!
+        if (entry.score > score || entry.score === score && entry.id < row.id) low = middle + 1
+        else high = middle
+      }
+      if (low < MEMORY_VECTOR_CANDIDATES) ranked.splice(low, 0, { id: row.id, score })
       if (ranked.length > MEMORY_VECTOR_CANDIDATES) ranked.pop()
       scanned += 1
     }
-    // shortcut: 每次最多按片段编号比较 5,000 个向量；大书须缩小筛选，D7 再验收容量与排名。
+    // 流式比较筛选范围内全部有效向量，只保留全局候选，片段编号不决定召回资格。
     return this.memorySearch.search(search, { chunkIds: ranked.map((entry) => entry.id),
       truncated: indexed < eligible || scanned < indexed || scanned > MEMORY_VECTOR_CANDIDATES,
       scope: { profileHash: run.context.profileHash, responseModel: profile.response_model, dimensions: profile.dimensions,
-        eligibleChunks: eligible, indexedChunks: indexed, scannedChunks: scanned, scanLimit: MEMORY_VECTOR_SCAN_LIMIT } })
+        eligibleChunks: eligible, indexedChunks: indexed, scannedChunks: scanned, scanLimit: indexed } })
   }
 }

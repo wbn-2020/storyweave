@@ -6,6 +6,8 @@ import { parseAiMemoryTaskScope, type AiMemoryTaskScope, type AiMemoryTaskState 
 import { AI_SUMMARY_TEXT_LIMIT, type AiSummarySource } from '../../contracts/ai-summary'
 import { BOOK_SCHEMA_VERSION } from '../storage/schema'
 import type { AiRepository } from './ai-repository'
+import { currentOutlineNodes, readMemoryBatch } from '../workbench/living-state'
+import { activeChapterSql, supportsChapterArchive } from '../storage/chapter-lifecycle'
 
 export interface SummaryBook {
   id: string; title: string; revision: number; knowledge_revision: number; archived_at: string | null; updated_at: string
@@ -129,7 +131,7 @@ export function readCurrentSummaryManifest(db: Database.Database, book: SummaryB
   if (scope.kind === 'volume') {
     if (scope.volumeId === null) scopeTitle = '未分卷章节'
     else {
-      const volume = db.prepare('SELECT title FROM volumes WHERE id = ?').get(scope.volumeId) as { title: string } | undefined
+      const volume = db.prepare(`SELECT title FROM volumes WHERE id = ?${supportsChapterArchive(db) ? ' AND archived_at IS NULL' : ''}`).get(scope.volumeId) as { title: string } | undefined
       if (!volume) return null
       scopeTitle = summaryText(volume.title, 120)
     }
@@ -146,8 +148,19 @@ export function readCurrentSummaryManifest(db: Database.Database, book: SummaryB
     v.title AS volumeTitle, v.position AS volumePosition, ${summaryRun} AS summaryRunId
     FROM chapters c LEFT JOIN volumes v ON v.id = c.volume_id
     WHERE (SELECT id FROM book_meta WHERE singleton = 1) = @bookId
-      AND (@scope = 'book' OR c.volume_id IS @volumeId) ORDER BY c.position, c.id LIMIT 20001`)
+      AND (@scope = 'book' OR c.volume_id IS @volumeId) AND ${activeChapterSql(db)} ORDER BY c.position, c.id LIMIT 20001`)
     .all({ bookId: book.id, scope: scope.kind, volumeId: scope.kind === 'volume' ? scope.volumeId : null }) as SummaryChapter[]
+  // 定稿整理与单章摘要共用分层汇总入口，保留真实的原任务身份和作者采用回执。
+  if (summarySchemaVersion(db) >= 16 && chapters.some((chapter) => chapter.summaryRunId === null)) {
+    const stale = currentOutlineNodes(db, book.id).stale
+    const published = db.prepare(`SELECT b.id, b.run_id FROM living_memory_publications p JOIN living_memory_batches b ON b.id = p.batch_id
+      JOIN living_receipts receipt ON receipt.run_id = b.run_id JOIN ai_runs r ON r.id = b.run_id
+      WHERE p.chapter_id = ? AND b.chapter_revision_id = ? AND b.chapter_title = ? AND b.state = 'published' AND r.state = 'adopted'`)
+    for (const chapter of chapters) if (chapter.summaryRunId === null) {
+      const batch = published.get(chapter.id, chapter.revisionId, chapter.title) as { id: string; run_id: string } | undefined
+      if (batch && !stale.has(`memory:${batch.id}`)) chapter.summaryRunId = batch.run_id
+    }
+  }
   checkChapters(chapters, scope)
   return { bookId: book.id, bookTitle: book.title, scope, scopeTitle, chapters }
 }
@@ -330,6 +343,22 @@ export function readSummarySources(db: Database.Database, ai: AiRepository, task
   return refs.map((ref): AiSummarySource => {
     const chapter = manifest.chapters[ref.ordinal - 1]!
     const candidate = ai.get({ bookId: task.book_id, runId: ref.id })
+    if (candidate.context.purpose === 'living' && summarySchemaVersion(db) >= 16) {
+      const row = db.prepare(`SELECT b.id, b.proposal_json, receipt.accepted_json, receipt.refs_json FROM living_memory_batches b
+        JOIN living_receipts receipt ON receipt.run_id = b.run_id WHERE b.run_id = ?`).get(ref.id) as
+        { id: string; proposal_json: string; accepted_json: string; refs_json: string } | undefined
+      if (!row || candidate.state !== 'adopted' || candidate.chapterId !== chapter.id || candidate.context.chapterRevisionId !== chapter.revisionId ||
+        candidate.adoptedRevisionId !== chapter.revisionId || row.proposal_json !== row.accepted_json || candidate.acceptedText !== row.accepted_json ||
+        row.refs_json !== JSON.stringify([row.id])) throw summaryStorageFailure()
+      const batch = readMemoryBatch(db, row.id, new Map())
+      if (batch.chapterId !== chapter.id || batch.revisionId !== chapter.revisionId || batch.chapterTitle !== chapter.title) throw summaryStorageFailure()
+      for (const citation of batch.proposal.summary.citations) {
+        const block = candidate.context.chapterBlocks.find((item) => item.blockId === citation.blockId)
+        if (!block || !block.text.includes(citation.quote)) throw summaryStorageFailure()
+      }
+      return { id: ref.id, kind: 'chapter', title: chapter.title, text: summaryText(batch.proposal.summary.text, AI_SUMMARY_TEXT_LIMIT), chapterCount: 1,
+        chapterId: chapter.id, chapterRevisionId: chapter.revisionId, chapterTitle: chapter.title, citations: batch.proposal.summary.citations }
+    }
     const entries = candidate.memoryAdoptions
     const entry = entries?.[0]
     if (candidate.id !== ref.id || candidate.bookId !== task.book_id || candidate.kind !== 'summarize' || candidate.state !== 'adopted' ||

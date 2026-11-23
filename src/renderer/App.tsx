@@ -92,6 +92,7 @@ type Modal =
   | { kind: 'models' }
   | { kind: 'newBook' } | { kind: 'kickstart'; bookId?: string; genre?: string } | { kind: 'newChapter'; volumeId: string | null }
   | { kind: 'volume'; volumeId?: string } | { kind: 'bookDetails'; book: BookSummary }
+  | { kind: 'archiveStructure'; targetKind: 'chapter' | 'volume'; id: string; archived: boolean }
   | { kind: 'chapterDetails' } | { kind: 'history' } | { kind: 'finalize' } | { kind: 'preferences' } | { kind: 'notes'; initialId?: string } | { kind: 'workbench'; tab?: 'review'; issueId?: string; reviewAction?: 'reply' | 'resolve' | 'reopen'; annotation?: { chapterId: string; blockIds: string[]; quote: string } } | { kind: 'inspiration' } | { kind: 'calendar' } | { kind: 'media'; scenePlaceId?: string; mapOffset?: number; initialRunId?: string }
   | { kind: 'import' } | { kind: 'export' } | { kind: 'orphans' } | { kind: 'recovery' } | { kind: 'bookRecovery' } | { kind: 'draftImport' } | { kind: 'story'; initialKind?: StoryKind; initialId?: string; initialCreate?: boolean } | { kind: 'timeline' } | { kind: 'galaxy'; view?: 'galaxy' | 'relationships' | 'world' | 'matrix' | 'radar'; initialPlaceId?: string; initialMapOffset?: number } | { kind: 'reader' } | { kind: 'memory'; initialTaskId?: string; initialVectorRunId?: string } | { kind: 'aiMemoryTasks'; initialTaskId?: string } | { kind: 'aiSummary'; initialTaskId?: string; initialPreset?: AiPreset } | null
 interface DraftReceipt { bookId: string; chapterId: string; editSequence: number; loadEpoch: number; filePath: string }
@@ -254,8 +255,9 @@ export function App({ api }: Props) {
   const session = useChapterSession(api, onSaved)
   const protection = useDraftProtection(api, workspace.recoveryScope, session)
   const chapter = session.session.chapter
-  const creative = useLivingSnapshot(api, book?.book.id, book?.book.revision)
-  const archived = Boolean(book?.book.archivedAt)
+  const chapterArchived = Boolean(chapter?.archived || book?.archivedChapters?.some((item) => item.id === chapter?.id))
+  const creative = useLivingSnapshot(api, book?.book.id, book?.book.revision, chapterArchived ? undefined : chapter?.id)
+  const archived = Boolean(book?.book.archivedAt || chapterArchived)
   const storageReason = session.session.error?.code === 'STORAGE_ERROR'
     && (session.session.error.storageReason === 'disk-full' || session.session.error.storageReason === 'database-full')
     ? session.session.error.storageReason : undefined
@@ -949,6 +951,22 @@ export function App({ api }: Props) {
     })
   }
 
+  async function archiveStructure() {
+    if (!api || modal?.kind !== 'archiveStructure') return
+    const target = modal
+    await changeView(async () => {
+      const current = bookRef.current
+      if (!current || current.book.archivedAt) return
+      await mutate('book.archiveStructure', () => api.archiveStructure({ bookId: current.book.id, expectedBookRevision: current.book.revision,
+        kind: target.targetKind, id: target.id, archived: target.archived }), (snapshot) => {
+        applyBook(snapshot)
+        const chapter = session.getCurrent().chapter
+        if (chapter && !snapshot.chapters.some((item) => item.id === chapter.id)) session.load(null)
+        setModal(null)
+      })
+    }, false, false, false, true)
+  }
+
   async function updateChapterDetails(fields: ChapterFields) {
     if (!api) return
     await changeView(async () => {
@@ -1413,7 +1431,7 @@ export function App({ api }: Props) {
   const composingReason = session.session.composing ? '输入法处理中，请先完成当前输入' : undefined
   const savingReason = session.session.saving ? '正在保存当前章节，请稍候' : undefined
   const checkingSavedReceipt = session.hasUncertainSave
-  const archivedReason = archived ? '归档作品仅供查阅，请先在作品资料中解除归档' : undefined
+  const archivedReason = chapterArchived ? '归档章节仅供查阅，请先在章节目录恢复所属卷和章节' : archived ? '归档作品仅供查阅，请先在作品资料中解除归档' : undefined
   const recoveryActionReason = !api ? '本地服务未连接' : savingReason ?? composingReason
     ?? (recoveryBusy ? '正在处理草稿恢复，请稍候' : checkingReceipt ? '正在核对原请求，请稍候' : busy && !pendingMessage ? busyReason : undefined)
   // 两处保存入口共用当前会话的提示；待确认时仍沿原保存流程核对，不能误导作者重新发送。
@@ -1740,7 +1758,7 @@ export function App({ api }: Props) {
           {inspectorRequested && <button type="button" className={styles.inspectorBackdrop} tabIndex={-1} aria-label="收起辅助栏" onClick={closeInspector} />}
           <div ref={outlineDrawer} tabIndex={-1} aria-label="章节目录" className={`${styles.chapterRail} ${styles.outlineColumn}`}>
             <button type="button" className={styles.outlineClose} aria-label="关闭章节目录" title="关闭章节目录" onClick={() => setOutlineOpen(false)}><StudioIcon name="close" size={20} /></button>
-            <ChapterOutline book={book} selectedId={chapter?.id} busy={busy} onOpen={(id) => void openChapter(id)} onCreate={(volumeId) => showDialog({ kind: 'newChapter', volumeId })} onVolume={(volumeId) => showDialog({ kind: 'volume', volumeId })} onMoveChapter={(id, direction) => void moveItem('chapter', id, direction)} onMoveVolume={(id, direction) => void moveItem('volume', id, direction)} />
+            <ChapterOutline book={book} selectedId={chapter?.id} busy={busy} onOpen={(id) => void openChapter(id)} onCreate={(volumeId) => showDialog({ kind: 'newChapter', volumeId })} onVolume={(volumeId) => showDialog({ kind: 'volume', volumeId })} onMoveChapter={(id, direction) => void moveItem('chapter', id, direction)} onMoveVolume={(id, direction) => void moveItem('volume', id, direction)} onArchive={(targetKind, id, archived) => showDialog({ kind: 'archiveStructure', targetKind, id, archived })} />
             {chapter && <ChapterBeatStrip outline={creative.snapshot?.outlines.find((item) => item.id === chapter.id)} reading={creative.reading} disabled={busy} onOpen={() => showDialog({ kind: 'living', initialId: chapter.id })} onExpand={(instruction) => showDialog({ kind: 'ai', initialInstruction: instruction, useLivingContext: true })} />}
           </div>
           <section ref={manuscriptScroll} onScroll={(event) => { if (chapter && studioView === 'write' && !isCanvasView) rememberWritingPosition(workspace.rootPath, chapter.bookId, chapter.id, { scrollTop: event.currentTarget.scrollTop }) }} className={styles.manuscript} aria-label="正文编辑区">{chapter ? <>
@@ -1843,6 +1861,7 @@ export function App({ api }: Props) {
     {modal?.kind === 'volume' && <NameDialog title={modal.volumeId ? '修改卷名' : '新建卷'} initialValue={book?.volumes.find((item) => item.id === modal.volumeId)?.title} submitLabel="保存卷名" onSubmit={(title) => void saveVolume(title, modal.volumeId)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'bookDetails' && <BookDetailsDialog key={modal.book.id} book={modal.book} onSubmit={(fields) => void updateBookDetails(modal.book, fields)} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmClose={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
     {modal?.kind === 'chapterDetails' && chapter && book && <ChapterDetailsDialog key={chapter.id} chapter={chapter} volumes={book.volumes} onSubmit={(fields) => void updateChapterDetails(fields)} onClose={closeModal} busy={busy} error={modalError} onDirtyChange={markDetailsDirty} confirmClose={detailsCloseRequested} onKeepEditing={() => setDetailsCloseRequested(false)} pendingRecovery={detailsRecovery} />}
+    {modal?.kind === 'archiveStructure' && <ConfirmDialog title={modal.archived ? '归档卷章' : '恢复卷章'} label={modal.archived ? '确认归档' : '确认恢复'} onSubmit={() => void archiveStructure()} onClose={closeModal} busy={busy} error={modalError}>当前编辑会先保存。归档保留全部正文、历史与旧引用，退出新创作、记忆和导出范围；恢复后重新加入。归档分卷会同时隐藏卷内章节。</ConfirmDialog>}
     {modal?.kind === 'finalize' && chapter && <ConfirmDialog title="作者定稿" label="确认当前稿为定稿" onSubmit={() => void finalizeChapter()} onClose={closeModal} busy={busy} error={modalError}>当前正文会先保存，再成为本章新的作者定稿。后续编辑会生成工作稿，导出时仍可单独选择这次定稿。</ConfirmDialog>}
     {modal?.kind === 'import' && api && <TextImportDialog api={api} onCommit={(token, title) => void commitImport(token, title)} onClose={closeModal} busy={busy} error={modalError} />}
     {modal?.kind === 'orphans' && api && <OrphanBooksDialog api={api} onRegister={(id) => void registerBook(id)} onClose={closeModal} busy={busy} error={modalError} />}

@@ -11,7 +11,7 @@ const labels: Record<CreativeDomain, string> = { idea: '脑洞', world: '世界'
 const states: Record<CreativeHealth, string> = { empty: '待建立', pending_proposal: '有待处理提案', stale: '待复核', in_progress: '创作中', ready: '已有资料' }
 const symbols: Record<CreativeDomain, StudioIconName> = { idea: 'bulb', world: 'globe', cast: 'user', outline: 'list', manuscript: 'pen' }
 
-export function useLivingSnapshot(api: StudioApi | undefined, bookId: string | undefined, revision: number | undefined) {
+export function useLivingSnapshot(api: StudioApi | undefined, bookId: string | undefined, revision: number | undefined, outlineId?: string) {
   const [snapshot, setSnapshot] = useState<LivingSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reading, setReading] = useState(false)
@@ -22,7 +22,7 @@ export function useLivingSnapshot(api: StudioApi | undefined, bookId: string | u
     const current = ++ticket.current
     if (!api || !bookId) { setSnapshot(null); setReading(false); setError(null); return }
     setReading(true); setError(null)
-    void request(() => api.getLiving({ bookId })).then((result) => {
+    void request(() => api.getLiving({ bookId, ...(outlineId ? { outlineId } : {}) })).then((result) => {
       if (!active || current !== ticket.current) return
       setReading(false)
       if (!result.ok) { setError(result.error.message); return }
@@ -30,10 +30,11 @@ export function useLivingSnapshot(api: StudioApi | undefined, bookId: string | u
       setSnapshot(result.data)
     })
     return () => { active = false }
-  }, [api, bookId, revision, epoch])
+  }, [api, bookId, revision, outlineId, epoch])
   return { snapshot: snapshot && !error && snapshot.bookId === bookId && snapshot.bookRevision >= (revision ?? 0) ? snapshot : null,
     error, reading, reload: () => setEpoch((value) => value + 1), receive: (value: LivingSnapshot) => {
       if (value.bookId !== bookId || value.bookRevision < (revision ?? 0)) return
+      if (outlineId && value.outlines.find((node) => node.id === outlineId)?.detailsLoaded === false) { setEpoch((current) => current + 1); return }
       // 保存回执带来的新快照优先；此前发出的读取即使迟到或失败，也不能覆盖这次确认。
       ticket.current += 1
       setSnapshot(value); setError(null); setReading(false)
@@ -60,7 +61,7 @@ export function CreativeSpine({ snapshot, reading, error, disabled, onNavigate, 
 export function ChapterBeatStrip({ outline, reading, disabled, onOpen, onExpand }: { outline: LivingOutline | undefined; reading: boolean; disabled: boolean; onOpen: () => void; onExpand: (instruction: string) => void }) {
   return <section className={styles.beatStrip} aria-label="本章目标、冲突与节拍">
     <h3>本章节拍</h3>
-    {reading ? <p role="status">正在核对本章章纲…</p> : outline ? <>
+    {reading ? <p role="status">正在核对本章章纲…</p> : outline?.detailsLoaded === false ? <p>本章详情尚未读取，请打开本章大纲查看。</p> : outline ? <>
       {outline.stale && <p>本章计划依赖的资料已变化，请在演进大纲中复核。</p>}
       {outline.fields.goal && <p>目标：{outline.fields.goal}</p>}
       {outline.fields.conflict && <p>冲突：{outline.fields.conflict}</p>}

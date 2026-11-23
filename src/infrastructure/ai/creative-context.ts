@@ -5,6 +5,8 @@ import { MAX_WORKBENCH_FIELDS_BYTES, parseInspirationFields, parseSceneFields } 
 import { isStudyCardKind, studyMaterialText } from '../../contracts/study-card'
 import { parseStoryFields, plannedPayoffText } from '../../contracts/story'
 import { NotesRepository } from '../notes/notes-repository'
+import { parseRealmState } from '../../contracts/realm'
+import { parseWeaveState } from '../../contracts/weave-system'
 import type { StudioRepository } from '../storage/studio-repository'
 
 function unavailable(message: string): never { throw new DomainError({ code: 'REVISION_CONFLICT', message }) }
@@ -16,6 +18,17 @@ export function readCreativeResources(studio: StudioRepository, db: Database.Dat
       const method = WRITING_METHODS.find((item) => item.id === ref.id && item.revision === ref.revision)
       if (!method) return unavailable('写作方法版本已改变，请重新选择。')
       return { ...method }
+    }
+    if (ref.source === 'realm' || ref.source === 'weave') {
+      if (ref.id !== bookId || Number(db.pragma('user_version', { simple: true })) < 28) return unavailable('请先在知识库备份升级至 v28，再将境界或织造设定选入写作上下文。')
+      const table = ref.source === 'realm' ? 'realm_state' : 'weave_state'
+      const row = db.prepare(`SELECT revision, CASE WHEN length(CAST(fields_json AS BLOB)) <= 262144 THEN fields_json END AS fields_json FROM ${table} WHERE singleton = 1`)
+        .get() as { revision: number; fields_json: string | null } | undefined
+      if (!row || row.revision !== ref.revision || !row.fields_json) return unavailable('境界或织造设定已经变化，请重新选择当前版本。')
+      const fields = ref.source === 'realm' ? parseRealmState(JSON.parse(row.fields_json)) : parseWeaveState(JSON.parse(row.fields_json))
+      const title = ref.source === 'realm' ? '境界阶梯与人物战力' : '织造系统设定'
+      const text = `作者明确选入的当前配置快照，不附带故事时间。阶梯与规则作为作者设定；人物数值、库存和进度不能自动视为本章时点的状态。涉及历史章节时须根据正文与作者要求核对，未知项不得补全。\n${JSON.stringify(fields)}`
+      return { ...ref, title, text, role: 'material' }
     }
     if (ref.source === 'note') {
       const note = new NotesRepository(studio).get({ bookId, id: ref.id })

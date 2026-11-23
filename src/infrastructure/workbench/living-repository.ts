@@ -3,13 +3,17 @@ import type Database from 'better-sqlite3'
 import { DomainError, isRecord, optionalText, requiredId, requiredInteger, requiredText, type BookInput, type BookMutationInput } from '../../contracts/api'
 import { LIVING_INSTRUCTION_LIMIT, LIVING_SCHEMA_VERSION, LIVING_SNAPSHOT_BYTES,
   parseLivingAdoptInput, parseLivingPrepareInput, parseLivingProposal, parseLivingRunInput, parseLivingWritingContext, parseOutlineFields,
-  parseOutlineHistoryInput, parseRestoreOutlineInput, parseSaveOutlineInput, parseMemoryArchiveInput,
+  parseOutlineHistoryInput, parseRestoreOutlineInput, parseSaveOutlineInput, parseMemoryArchiveInput, parseLivingReadInput, type LivingReadInput,
   type LivingAdoptInput, type LivingAdoptReceipt, type LivingOutline, type LivingPrepareInput, type LivingProposal,
   type LivingRunDetail, type LivingRunInput, type LivingSnapshot, type MemoryProposal, type OutlineFields,
    type OutlineHistoryInput, type OutlineHistoryPage, type RestoreOutlineInput, type SaveOutlineInput, type MemoryArchiveInput, type MemoryArchivePage } from '../../contracts/living'
 import type { AiRun } from '../../contracts/ai'
 import { documentToText, emptyDocument, parseManuscript } from '../../contracts/manuscript'
 import { parseKnowledgeFields } from '../../contracts/knowledge'
+import { KnowledgeRepository } from '../knowledge/knowledge-repository'
+import { parseSyncLivingMemoryInput, type SyncLivingMemoryInput } from '../../contracts/living'
+import { supportsChapterArchive } from '../storage/chapter-lifecycle'
+import { chapterDependenciesCurrent } from '../memory/source-projection'
 import { parseInspirationFields, parseWritingBrief, type WritingBrief } from '../../contracts/workbench'
 import type { AiRepository } from '../ai/ai-repository'
 import type { StudioRepository } from '../storage/studio-repository'
@@ -127,10 +131,10 @@ function validateSelection(accepted: LivingProposal, original: LivingProposal): 
 export class LivingRepository {
   constructor(private readonly studio: StudioRepository, private readonly ai: AiRepository) {}
 
-  get(input: BookInput): LivingSnapshot {
+  get(input: LivingReadInput): LivingSnapshot {
     return perform(() => {
-      const bookId = requiredId(input.bookId).toLowerCase(), db = this.studio.getMemoryDatabase(bookId)
-      return db.transaction(() => this.snapshot(db, bookId))()
+      const data = parseLivingReadInput(input), bookId = data.bookId, db = this.studio.getMemoryDatabase(bookId)
+      return db.transaction(() => this.snapshot(db, bookId, data.outlineId))()
     })
   }
 
@@ -146,12 +150,29 @@ export class LivingRepository {
       const rows = db.prepare(`SELECT id FROM living_memory_batches WHERE (? IS NULL OR chapter_id = ?)
         AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT 21`)
         .all(data.chapterId ?? null, data.chapterId ?? null, before?.id ?? null, before?.created_at ?? null, before?.created_at ?? null, before?.id ?? null) as { id: string }[]
-      const stale = currentOutlineNodes(db, data.bookId).stale
+      const stale = currentOutlineNodes(db, data.bookId, []).stale
       const items = rows.slice(0, 20).map((row) => readMemoryBatch(db, row.id, stale))
       const page: MemoryArchivePage = { bookId: data.bookId, bookRevision: book.revision, items, total, nextBeforeId: rows.length > 20 ? items[items.length - 1]!.id : null }
       if (Buffer.byteLength(JSON.stringify(page), 'utf8') > LIVING_SNAPSHOT_BYTES) return livingFailure('本页归档超过 8 MiB，未截断原始资料。')
       return page
     })())
+  }
+
+  syncMemory(input: SyncLivingMemoryInput): LivingSnapshot {
+    const data = parseSyncLivingMemoryInput(input)
+    return this.write(data, (db) => {
+      if (!supportsChapterArchive(db)) invalid('请先在知识库备份升级作品，再将历史定稿记忆存入知识库。')
+      const batch = readMemoryBatch(db, data.batchId, currentOutlineNodes(db, data.bookId).stale)
+      if (batch.state !== 'published') return livingConflict('这批记忆已失效或被替代，请选择当前有效批次。')
+      const { run, request, envelope } = this.readRun(db, data.bookId, batch.runId)
+      const receipt = db.prepare('SELECT accepted_json, refs_json FROM living_receipts WHERE run_id = ?').get(run.id) as { accepted_json: string; refs_json: string } | undefined
+      if (run.state !== 'adopted' || !receipt || receipt.accepted_json !== JSON.stringify(batch.proposal) ||
+        run.acceptedText !== receipt.accepted_json || receipt.refs_json !== JSON.stringify([batch.id])) return livingFailure('历史记忆与作者采用回执不一致。')
+      validateProposal(batch.proposal, run, request, envelope)
+      validateSelection(batch.proposal, parseOutput(run))
+      this.projectMemory(db, data.bookId, batch.id, batch.chapterId, batch.chapterTitle, batch.revisionId, run.id, batch.proposal, envelope.sources.entities)
+      return this.snapshot(db, data.bookId)
+    })
   }
 
   save(input: SaveOutlineInput): LivingSnapshot {
@@ -173,7 +194,7 @@ export class LivingRepository {
       // 切换锁定不表示作者已复核来源，也不应覆盖在其他入口修改的章节计划。
       if (lockOnly && node.revisionId) this.copyOutlineDependencies(db, node.revisionId, revisionId)
       this.touch(db)
-      return this.snapshot(db, data.bookId)
+      return this.snapshot(db, data.bookId, data.id)
     })
   }
 
@@ -204,7 +225,7 @@ export class LivingRepository {
       const restored = this.appendOutline(db, node, parseOutlineFields(storedJson(row.fields_json)), row.locked === 1, 'restored')
       this.copyOutlineDependencies(db, data.revisionId, restored)
       this.touch(db)
-      return this.snapshot(db, data.bookId)
+      return this.snapshot(db, data.bookId, data.id)
     })
   }
 
@@ -212,7 +233,7 @@ export class LivingRepository {
     const data = parseLivingPrepareInput(input)
     return this.write(data, (db) => {
       const book = bookState(db, data.bookId)
-      let state = currentOutlineNodes(db, data.bookId)
+      let state = currentOutlineNodes(db, data.bookId, [])
       const chapter = state.chapters.find((item) => item.id === data.chapterId)
       if (!chapter) invalid('请先选择本书中的章节。')
       if (data.kind === 'memory' && (chapter.finalized_revision_id !== chapter.current_revision_id || chapter.status !== 'finalized')) invalid('请先将当前工作稿定稿，再整理这个固定版本。')
@@ -229,9 +250,10 @@ export class LivingRepository {
       const tail = (firstTarget ? state.chapters.filter((item) => item.position < firstTarget.position) : state.chapters).slice(-3)
       const volumeId = firstTarget ? firstTarget.volume_id : tail[tail.length - 1]?.volume_id ?? null
       const sourceIds = data.kind === 'memory' ? [] : [data.bookId, ...(volumeId ? [volumeId] : []), ...tail.map((item) => item.id)]
+      state = currentOutlineNodes(db, data.bookId, [...sourceIds, ...data.targetIds])
       // 第一次显式预览为沿用资料建立基线历史；只固定身份和内容，不改变作品语义或版本。
       for (const node of state.outlines) if ([...sourceIds, ...data.targetIds].includes(node.id) && !node.revisionId) this.appendOutline(db, node, node.fields, false, node.manual ? 'manual' : 'ai', undefined, false)
-      state = currentOutlineNodes(db, data.bookId)
+      state = currentOutlineNodes(db, data.bookId, [...sourceIds, ...data.targetIds])
       const sources = state.outlines.filter((node) => sourceIds.includes(node.id) && !node.stale)
       const targets = state.outlines.filter((node) => data.targetIds.includes(node.id))
       const dependencies: LivingDependency[] = []
@@ -244,8 +266,8 @@ export class LivingRepository {
       const entities = data.entityIds.map((id) => {
         const entity = db.prepare(`SELECT i.id, i.name, i.kind, i.nature, i.summary, (SELECT r.id FROM knowledge_item_revisions r WHERE r.item_id = i.id ORDER BY r.knowledge_revision DESC LIMIT 1) AS revisionId
           FROM knowledge_items i WHERE i.id = ? AND i.book_id = ? AND i.author_decision = 'adopted' AND i.freshness = 'current'
-            AND i.conflict_state <> 'candidate'`).get(id, data.bookId) as LivingEnvelope['sources']['entities'][number] | undefined
-        if (!entity?.revisionId) invalid('所选实体须已采用、标记为当前，且没有待处理的冲突候选。')
+            AND i.conflict_state IN ('clear', 'explained')`).get(id, data.bookId) as LivingEnvelope['sources']['entities'][number] | undefined
+        if (!entity?.revisionId || !chapterDependenciesCurrent(db, 'knowledge', data.bookId, id)) invalid('所选实体须已采用、标记为当前，并完成冲突及正文来源复核。')
         dependencies.push({ kind: 'knowledge', id, revision: entity.revisionId }); return entity
       })
       const memories: ReturnType<typeof readMemoryBatch>[] = []
@@ -339,6 +361,8 @@ export class LivingRepository {
             db.prepare(`INSERT INTO living_memory_publications (chapter_id, batch_id) VALUES (?, ?)
               ON CONFLICT(chapter_id) DO UPDATE SET batch_id = excluded.batch_id`).run(chapter.id, batchId)
             this.dependencies(db, 'memory', batchId, envelope.dependencies)
+            if (supportsChapterArchive(db)) this.projectMemory(db, data.bookId, batchId, chapter.id, chapter.title,
+              chapter.current_revision_id, run.id, data.proposal, envelope.sources.entities)
             refs.push(batchId)
           } else {
             const tail = currentOutlineNodes(db, data.bookId).chapters.slice(-1)[0]
@@ -430,6 +454,13 @@ export class LivingRepository {
     for (const value of db.prepare('SELECT id FROM living_memory_batches').iterate()) {
       const batch = readMemoryBatch(db, (value as { id: string }).id, new Map())
       if (!db.prepare('SELECT 1 FROM living_receipts WHERE run_id = ?').get(batch.runId)) return livingFailure('记忆批次缺少作者采用回执。')
+      if (supportsChapterArchive(db)) {
+        const items = db.prepare('SELECT item_id, ordinal FROM living_memory_knowledge WHERE batch_id = ? ORDER BY ordinal').all(batch.id) as { item_id: string; ordinal: number }[]
+        const notes = [batch.proposal.summary, ...batch.proposal.events, ...batch.proposal.states]
+        if (items.length && (items.length !== notes.length || items.some((item, index) => item.ordinal !== index || notes[index]!.citations.some((citation) =>
+          !db.prepare("SELECT 1 FROM knowledge_sources WHERE item_id = ? AND source_type = 'chapter_text' AND chapter_id = ? AND revision_id = ? AND block_id = ? AND quote = ?")
+            .get(item.item_id, batch.chapterId, batch.revisionId, citation.blockId, citation.quote))))) return livingFailure('记忆入库关联与固定原文来源不一致。')
+      }
     }
     for (const value of db.prepare('SELECT target_kind, target_id, source_kind, source_id, source_revision FROM living_dependencies').iterate()) {
       const row = value as { target_kind: string; target_id: string; source_kind: string; source_id: string; source_revision: string }
@@ -441,28 +472,28 @@ export class LivingRepository {
     }
   }
 
-  private snapshot(db: Database.Database, bookId: string): LivingSnapshot {
+  private snapshot(db: Database.Database, bookId: string, outlineId = bookId): LivingSnapshot {
     const schemaVersion = Number(db.pragma('user_version', { simple: true }))
     const basic = db.prepare('SELECT revision, knowledge_revision FROM book_meta WHERE id = ?').get(bookId) as { revision: number; knowledge_revision: number } | undefined
     if (!basic) return livingFailure()
     const result: LivingSnapshot = { bookId, bookRevision: basic.revision, knowledgeRevision: basic.knowledge_revision, schemaVersion, requiresUpgrade: schemaVersion < LIVING_SCHEMA_VERSION,
       outlines: [], memories: [], memoryTotal: 0, entities: [], entityTotal: 0, runs: [], health: { idea: 'empty', world: 'empty', cast: 'empty', outline: 'empty', manuscript: 'empty' } }
     if (result.requiresUpgrade) return result
-    const state = currentOutlineNodes(db, bookId)
+    const state = currentOutlineNodes(db, bookId, [...new Set([bookId, outlineId])])
     result.outlines = state.outlines
     result.memoryTotal = (db.prepare('SELECT COUNT(*) AS count FROM living_memory_batches').get() as { count: number }).count
-    const batches = db.prepare('SELECT id FROM living_memory_batches ORDER BY created_at DESC, id DESC LIMIT 50').all() as { id: string }[]
+    const batches = db.prepare('SELECT id FROM living_memory_batches ORDER BY created_at DESC, id DESC LIMIT 20').all() as { id: string }[]
     result.memories = batches.map((row) => readMemoryBatch(db, row.id, state.stale))
-    result.entities = db.prepare("SELECT id, name, kind FROM knowledge_items WHERE author_decision = 'adopted' AND freshness = 'current' AND conflict_state <> 'candidate' ORDER BY kind, name, id LIMIT 200").all() as LivingSnapshot['entities']
+    result.entities = db.prepare("SELECT id, name, kind FROM knowledge_items WHERE author_decision = 'adopted' AND freshness = 'current' AND conflict_state IN ('clear', 'explained') ORDER BY kind, name, id LIMIT 200").all() as LivingSnapshot['entities']
     result.runs = db.prepare(`SELECT l.run_id AS id, l.kind, r.state, l.created_at AS createdAt FROM living_runs l JOIN ai_runs r ON r.id = l.run_id
       ORDER BY r.sequence DESC LIMIT 30`).all() as LivingSnapshot['runs']
     const meta = bookState(db, bookId)
-    const knowledgeCounts = db.prepare("SELECT kind, COUNT(*) AS count FROM knowledge_items WHERE author_decision = 'adopted' AND freshness = 'current' AND conflict_state <> 'candidate' GROUP BY kind").all() as { kind: string; count: number }[]
+    const knowledgeCounts = db.prepare("SELECT kind, COUNT(*) AS count FROM knowledge_items WHERE author_decision = 'adopted' AND freshness = 'current' AND conflict_state IN ('clear', 'explained') GROUP BY kind").all() as { kind: string; count: number }[]
     result.entityTotal = knowledgeCounts.reduce((total, item) => total + item.count, 0)
     result.health.idea = meta.logline || state.outlines[0]?.fields.summary ? 'ready' : 'empty'
     result.health.cast = knowledgeCounts.some((item) => item.kind === 'person' && item.count > 0) ? 'ready' : 'empty'
     result.health.world = knowledgeCounts.some((item) => item.kind !== 'person' && item.count > 0) ? 'ready' : 'empty'
-    result.health.outline = state.outlines.some((node) => node.stale) ? 'stale' : state.outlines.some((node) => node.fields.goal || node.fields.summary || node.fields.beats.length) ? 'ready' : 'empty'
+    result.health.outline = state.outlines.some((node) => node.stale) ? 'stale' : state.outlines.some((node) => node.hasContent || node.fields.goal || node.fields.summary || node.fields.beats.length) ? 'ready' : 'empty'
     const stalePublication = db.prepare('SELECT batch_id FROM living_memory_publications').all() as { batch_id: string }[]
     result.health.manuscript = stalePublication.some((item) => state.stale.has(`memory:${item.batch_id}`)) ? 'stale'
       : state.chapters.some((item) => item.character_count > 0) ? 'in_progress' : 'empty'
@@ -471,8 +502,32 @@ export class LivingRepository {
     return result
   }
 
+  private projectMemory(db: Database.Database, bookId: string, batchId: string, chapterId: string, chapterTitle: string,
+    revisionId: string, runId: string, proposal: MemoryProposal, entities: LivingEnvelope['sources']['entities']): void {
+    const notes = [
+      { name: `${chapterTitle} · 定稿摘要`, nature: 'ai_derived' as const, ...proposal.summary },
+      ...proposal.events.map((event) => ({ name: event.title, ...event })),
+      ...proposal.states.map((state) => ({ name: `${entities.find((entity) => entity.id === state.entityId)?.name ?? state.entityId} · ${state.attribute}`, ...state })),
+    ]
+    const existing = db.prepare('SELECT COUNT(*) AS count FROM living_memory_knowledge WHERE batch_id = ?').get(batchId) as { count: number }
+    if (existing.count) {
+      if (existing.count !== notes.length) return livingFailure('定稿记忆的入库关联不完整。')
+      return
+    }
+    const knowledge = new KnowledgeRepository(this.studio)
+    // 逐字来源、事实性质及批次身份共用发布事务；重复同步沿用原条目，不覆盖作者后续修改。
+    for (const [ordinal, note] of notes.entries()) {
+      const item = knowledge.createItemWithSources({ bookId, expectedKnowledgeRevision: bookState(db, bookId).knowledge_revision,
+        fields: { kind: 'other', name: Array.from(note.name).slice(0, 60).join(''), aliases: [], summary: note.text,
+          nature: note.nature, authorDecision: 'adopted', freshness: 'current', conflictState: 'clear' } },
+        [...note.citations.map((citation) => ({ sourceType: 'chapter_text' as const, bookId, chapterId, revisionId, blockId: citation.blockId, quote: citation.quote })),
+          { sourceType: 'author_input', bookId, quote: `作者复核并发布定稿记忆 ${batchId}，来源任务 ${runId}。` }])
+      db.prepare('INSERT INTO living_memory_knowledge (batch_id, item_id, ordinal) VALUES (?, ?, ?)').run(batchId, item.id, ordinal)
+    }
+  }
+
   private node(db: Database.Database, bookId: string, id: string): LivingOutline {
-    const node = currentOutlineNodes(db, bookId).outlines.find((item) => item.id === id)
+    const node = currentOutlineNodes(db, bookId, [id]).outlines.find((item) => item.id === id)
     if (!node) invalid('本书中不存在这个大纲节点。')
     return node
   }
@@ -532,10 +587,10 @@ export class LivingRepository {
       if (source.kind === 'outline') { const node = state.outlines.find((item) => item.id === source.id); current = node && !node.stale ? node.revisionId ?? undefined : undefined }
       if (source.kind === 'memory') { const batch = readMemoryBatch(db, source.id, state.stale); current = batch.state === 'published' ? batch.id : undefined }
       if (source.kind === 'knowledge') current = (db.prepare(`SELECT r.id FROM knowledge_item_revisions r JOIN knowledge_items i ON i.id = r.item_id
-        WHERE i.id = ? AND i.author_decision = 'adopted' AND i.freshness = 'current' AND i.conflict_state <> 'candidate'
+        WHERE i.id = ? AND i.author_decision = 'adopted' AND i.freshness = 'current' AND i.conflict_state IN ('clear', 'explained')
         ORDER BY r.knowledge_revision DESC LIMIT 1`).get(source.id) as { id: string } | undefined)?.id
       if (source.kind === 'brief') current = String((db.prepare('SELECT revision FROM workbench_settings WHERE singleton = 1').get() as { revision: number }).revision)
-      if (current !== source.revision) return livingConflict('依赖的来源或有效批次已变化，请按新来源重新生成。')
+      if (current !== source.revision || source.kind === 'knowledge' && !chapterDependenciesCurrent(db, 'knowledge', bookId, source.id)) return livingConflict('依赖的来源或有效批次已变化，请按新来源重新生成。')
     }
   }
 

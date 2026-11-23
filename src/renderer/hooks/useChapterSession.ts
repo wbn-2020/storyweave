@@ -141,7 +141,7 @@ export function useChapterSession(api: StudioApi | undefined, onSaved: (chapter:
 
   const changed = useCallback((draft: unknown, text: string) => {
     const previous = current.current
-    if (!previous.chapter) return
+    if (!previous.chapter || previous.chapter.archived) return
     publish({
       ...previous, draft, dirty: true, editSequence: previous.editSequence + 1,
       characterCount: countCharacters(text),

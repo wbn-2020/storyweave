@@ -7,7 +7,7 @@ import { studyMaterialText } from '../../contracts/study-card'
 
 interface Option extends CreativeResourceRef { title: string; description: string }
 interface Props { api: StudioApi; bookId: string; chapterId: string; bookRevision: number; disabled: boolean; limited: boolean; studyOnly?: boolean; value: CreativeSelection; onChange: (value: CreativeSelection) => void }
-const labels = { scene: '本章场景', builtin: '写作方法', note: '本书笔记', inspiration: '全局灵感与拆书', foreshadow: '待回收伏笔' }
+const labels = { scene: '本章场景', builtin: '写作方法', note: '本书笔记', inspiration: '全局灵感与拆书', foreshadow: '待回收伏笔', realm: '境界与人物战力', weave: '织造系统设定' }
 export function CreativeResourcePicker({ api, bookId, chapterId, bookRevision, disabled, limited, studyOnly = false, value, onChange }: Props) {
   const [selectedSource, setSource] = useState<CreativeResourceRef['source']>('scene')
   const source = studyOnly ? 'inspiration' : selectedSource
@@ -27,6 +27,13 @@ export function CreativeResourcePicker({ api, bookId, chapterId, bookRevision, d
       let items: Option[] = [], total = 0, next: number | null = null
       if (source === 'builtin') {
         items = WRITING_METHODS.filter((item) => `${item.title} ${item.text}`.includes(submitted)).map((item) => ({ ...creativeRef(item), title: item.title, description: item.text }))
+        total = items.length
+      } else if (source === 'realm' || source === 'weave') {
+        const result = source === 'realm' ? await request(() => api.getRealm({ bookId })) : await request(() => api.getWeaveSystem({ bookId }))
+        if (!result.ok) throw new Error(result.error.message)
+        if (result.data.bookId !== bookId || result.data.bookRevision !== bookRevision) throw new Error('作品版本已变化，请刷新后重新选择设定。')
+        if (result.data.requiresUpgrade || result.data.schemaVersion < 28) throw new Error('请先在知识库备份升级至 v28，再将此设定用于写作。')
+        if (result.data.fields && result.data.revision > 0) items = [{ source, id: bookId, revision: result.data.revision, title: labels[source], description: '当前配置快照，无故事时间。请核对是否适用于本章；完整内容会进入发送预览。' }]
         total = items.length
       } else if (source === 'scene') {
         const result = await request(() => api.getWorkbench({ bookId }))

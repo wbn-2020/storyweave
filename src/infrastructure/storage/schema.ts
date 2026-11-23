@@ -16,9 +16,11 @@ import { LIVING_SCHEMA } from '../workbench/living-schema'
 import { FORGE_SCHEMA } from '../workbench/forge-schema'
 import { WEAVE_SCHEMA } from '../workbench/weave-schema'
 import { REALM_SCHEMA } from '../workbench/realm-schema'
+import { CHAPTER_ARCHIVE_SCHEMA } from './chapter-lifecycle'
+import { LIVING_MEMORY_PROJECTION_SCHEMA } from '../workbench/living-projection'
 
 export const STUDIO_SCHEMA_VERSION = 3
-export const BOOK_SCHEMA_VERSION = 27
+export const BOOK_SCHEMA_VERSION = 28
 export const STUDIO_APPLICATION_ID = 0x53545753
 export const BOOK_APPLICATION_ID = 0x53545742
 
@@ -159,4 +161,5 @@ export const BOOK_V24_SCHEMA = `${BOOK_V23_SCHEMA}${FORESHADOW_THUMBNAIL_SCHEMA}
 export const BOOK_V25_SCHEMA = `${BOOK_V24_SCHEMA}${AI_PRESETS_V25_UPGRADE}`
 export const BOOK_V26_SCHEMA = `${BOOK_V25_SCHEMA}${KNOWLEDGE_ADJUDICATION_SCHEMA}`
 // v27 沿用表结构，以格式门禁防止旧客户端在编辑 JSON 字段时丢失批注回复。
-export const BOOK_SCHEMA = BOOK_V26_SCHEMA
+export const BOOK_V27_SCHEMA = BOOK_V26_SCHEMA
+export const BOOK_SCHEMA = `${BOOK_V27_SCHEMA}${CHAPTER_ARCHIVE_SCHEMA}${LIVING_MEMORY_PROJECTION_SCHEMA}`

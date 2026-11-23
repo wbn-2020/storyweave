@@ -2,7 +2,8 @@ import type { ManuscriptDocument } from './manuscript'
 import type { AiConnectionProbeInput, AiConnectionProbeResult } from './ai-connection-probe'
 import type { AiKeySessionInput, AiKeySessionReceipt } from './ai-key-session'
 import type { ImageGenerationApi } from './image-generation'
-import type { LivingApi, LivingSnapshot, LivingRunDetail, LivingPrepareInput, LivingRunInput, LivingAdoptInput, LivingAdoptReceipt, SaveOutlineInput, OutlineHistoryInput, OutlineHistoryPage, RestoreOutlineInput, MemoryArchiveInput, MemoryArchivePage } from './living'
+import type { LivingApi, LivingReadInput, LivingSnapshot, LivingRunDetail, LivingPrepareInput, LivingRunInput, LivingAdoptInput, LivingAdoptReceipt, SaveOutlineInput, OutlineHistoryInput, OutlineHistoryPage, RestoreOutlineInput, MemoryArchiveInput, MemoryArchivePage } from './living'
+import type { SyncLivingMemoryInput } from './living'
 import type { ForgeApi, ForgeSnapshot, ForgeReadInput, ForgePrepareInput, ForgeRunInput, ForgeRunDetail, ForgeAdoptInput, ForgeAdoptReceipt } from './forge'
 import type { GenerationApi, StudioAiConnections, StudioAiConnection, StudioAiConnectionInput, KickstartDraftInput, KickstartSnapshot, GenerationReadInput, GenerationPrepareInput, GenerationRun, GenerationStartInput, GenerationVersionInput, GenerationCheckpointInput, GenerationFinishInput, GenerationSelectionInput, GenerationAdoptInput } from './generation'
 import type { CreateKnowledgeItemInput, KnowledgeItemDetail, KnowledgeItemInput, KnowledgeItemPage, KnowledgeStatus, ListKnowledgeItemsInput, UpdateKnowledgeItemInput, UpgradeKnowledgeInput } from './knowledge'
@@ -41,6 +42,8 @@ export const IPC_CHANNEL = 'storyweave:request'
 export const CLOSE_REQUEST_CHANNEL = 'storyweave:close-request'
 export const CLOSE_RESPONSE_CHANNEL = 'storyweave:close-response'
 export const CLOSE_CANCELLED_CHANNEL = 'storyweave:close-cancelled'
+export const INTERFACE_FAULT_CHANNEL = 'storyweave:interface-fault'
+export const INTERFACE_RECOVERY_CHANNEL = 'storyweave:interface-recovery'
 
 export type ErrorCode =
   | 'INVALID_INPUT'
@@ -105,9 +108,13 @@ export interface BookSnapshot {
   book: BookSummary
   chapters: ChapterSummary[]
   volumes: VolumeSummary[]
+  archivedChapters?: ChapterSummary[]
+  archivedVolumes?: VolumeSummary[]
+  chapterArchiveSupported?: boolean
 }
 
 export interface ChapterSnapshot extends ChapterSummary {
+  archived?: boolean
   bookId: string
   document: ManuscriptDocument
   plainText: string
@@ -129,6 +136,7 @@ export interface SaveChapterOutput {
 }
 
 export interface BookMutationInput extends BookInput { expectedBookRevision: number }
+export interface ArchiveStructureInput extends BookMutationInput { kind: 'chapter' | 'volume'; id: string; archived: boolean }
 export interface UpdateBookInput extends BookMutationInput { title: string; genre: string; synopsis: string; archived: boolean }
 export interface CreateVolumeInput extends BookMutationInput { title: string }
 export interface RenameVolumeInput extends CreateVolumeInput { volumeId: string }
@@ -212,8 +220,9 @@ export interface DraftImportPreview extends SaveDraftCopyInput {
 export interface CommitDraftImportInput extends DraftScopeInput { token: string; title: string }
 
 export interface CommandMap {
-  'living.get': { input: BookInput; output: LivingSnapshot }
+  'living.get': { input: LivingReadInput; output: LivingSnapshot }
   'living.archive': { input: MemoryArchiveInput; output: MemoryArchivePage }
+  'living.syncMemory': { input: SyncLivingMemoryInput; output: LivingSnapshot }
   'living.save': { input: SaveOutlineInput; output: LivingSnapshot }
   'living.history': { input: OutlineHistoryInput; output: OutlineHistoryPage }
   'living.restore': { input: RestoreOutlineInput; output: LivingSnapshot }
@@ -274,6 +283,7 @@ export interface CommandMap {
   'book.get': { input: BookInput; output: BookSnapshot }
   'book.summary': { input: BookInput; output: BookSummary }
   'book.update': { input: UpdateBookInput; output: BookSnapshot }
+  'book.archiveStructure': { input: ArchiveStructureInput; output: BookSnapshot }
   'volume.create': { input: CreateVolumeInput; output: BookSnapshot }
   'volume.rename': { input: RenameVolumeInput; output: BookSnapshot }
   'volume.reorder': { input: ReorderVolumesInput; output: BookSnapshot }
@@ -417,6 +427,7 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   getBook(input: BookInput): Promise<Result<BookSnapshot>>
   getBookSummary(input: BookInput): Promise<Result<BookSummary>>
   updateBook(input: UpdateBookInput): Promise<Result<BookSnapshot>>
+  archiveStructure(input: ArchiveStructureInput): Promise<Result<BookSnapshot>>
   createVolume(input: CreateVolumeInput): Promise<Result<BookSnapshot>>
   renameVolume(input: RenameVolumeInput): Promise<Result<BookSnapshot>>
   reorderVolumes(input: ReorderVolumesInput): Promise<Result<BookSnapshot>>
@@ -518,6 +529,8 @@ export interface StudioApi extends AiPresetsApi, BookMediaApi, GenerationApi, Im
   getRequestStatus(input: { requestId: string }): Promise<Result<RequestStatus>>
   onCloseRequested(handler: () => Promise<boolean>): () => void
   onCloseCancelled(handler: () => void): () => void
+  reportInterfaceFault?(): void
+  recoverInterface?(action: 'reload' | 'reveal'): Promise<Result<null>>
 }
 
 export type RendererCommand = Exclude<ServiceCommand, 'workspace.open' | 'service.close' | 'import.prepare' | 'book.export' | 'book.export.commit' | 'book.media.export' | 'draft.import' | 'ai.connection.save' | 'ai.claim' | 'ai.checkpoint' | 'ai.finish' | 'memory.vector.claim' | 'memory.vector.finish' | 'recovery.export' | 'recovery.prepare' | 'generation.connection.save' | 'generation.claim' | 'generation.checkpoint' | 'generation.finish' | 'generation.interrupt'>

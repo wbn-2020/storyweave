@@ -128,6 +128,7 @@ export class RealmRepository {
       const receipt = db.transaction(() => {
         const current = snapshot(db, data.bookId)
         if (current.requiresUpgrade) return fail('请先备份并升级作品。', 'FORBIDDEN')
+        if (current.schemaVersion < 28 && data.action.kind === 'configure' && data.action.fields.levels.length !== 5) return fail('自定义境界数量需要先在知识库备份升级作品至 v28，以防旧客户端误读。', 'FORBIDDEN')
         const count = budget(db), json = JSON.stringify(data)
         if (Buffer.byteLength(json, 'utf8') > MAX_REALM_FIELDS_BYTES + 8192) return fail('境界提交超过容量限制。', 'INVALID_INPUT')
         const previous = db.prepare('SELECT * FROM realm_history WHERE id = ?').get(data.operationId) as HistoryRow | undefined

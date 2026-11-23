@@ -44,6 +44,7 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
   const [traitFields, setTraitFields] = useState<CharacterProfileField[]>([])
   const [cognitionIds, setCognitionIds] = useState<string[]>([]), [stateIds, setStateIds] = useState<string[]>([])
   const [entityIds, setEntityIds] = useState<string[]>([])
+  const [entityQuery, setEntityQuery] = useState(''), [entitySearch, setEntitySearch] = useState(''), [entityOffset, setEntityOffset] = useState(0)
   const [referenceRunId, setReferenceRunId] = useState('')
   const [excluded, setExcluded] = useState('')
   const [instruction, setInstruction] = useState(prompts[initialKind])
@@ -85,13 +86,13 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     if (!Number.isSafeInteger(value) || Math.abs(value) > 1_000_000_000) throw new Error('请填写明确的整数故事排序值。')
     return value
   }
-  async function readSnapshot(targetId = personId) {
+  async function readSnapshot(targetId = personId, offset = entityOffset, historyOffset = 0, query = entitySearch) {
     let order: number | null
     try { order = parsedOrder() } catch { tool.setError('请填写有效的故事排序值，或留空查看未筛选历史。'); return false }
     const id = targetId || null
-    return tool.read(() => api.getForge({ bookId: book.book.id, personId: id, storyOrder: order }), (value) => {
+    return tool.read(() => api.getForge({ bookId: book.book.id, personId: id, storyOrder: order, entityQuery: query, entityOffset: offset, historyOffset }), (value) => {
       if (value.bookId !== book.book.id || id !== (value.person?.entity.id ?? null) && !value.requiresUpgrade) throw new Error('Forge identity mismatch')
-      setSnapshot(value); setHistoryKey(`${id ?? ''}:${order ?? ''}`)
+      setSnapshot(value); setEntitySearch(query); setEntityOffset(offset); setHistoryKey(`${id ?? ''}:${order ?? ''}`)
     })
   }
   async function readConnections() {
@@ -274,7 +275,11 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
     </details>}
     {snapshot?.requiresUpgrade ? <section className={styles.callout}><h3>为本书启用角色与世界工坊</h3><p>会先保存本书数据库备份，再升级到 v17，加入工坊历史、采用回执、六维能力与关系层次。</p>
       <label className={styles.check}><input type="checkbox" checked={upgradeConfirmed} disabled={blocked} onChange={(event) => setUpgradeConfirmed(event.target.checked)} />同意先备份本书，再升级格式</label><button type="button" className={shared.primaryButton} disabled={blocked || !upgradeConfirmed} onClick={() => void upgrade()}>备份并启用工坊</button></section>
-      : snapshot && <><ForgeCharacterOverview api={api} snapshot={snapshot} selectedId={personId} disabled={blocked || requestDirty || proposalDirty}
+      : snapshot && <><div className={styles.actions} role="search"><input type="search" aria-label="查找人物或设定" maxLength={120} value={entityQuery} disabled={blocked} onChange={(event) => setEntityQuery(event.target.value)} />
+        <button type="button" className={shared.button} disabled={blocked} onClick={() => void readSnapshot(personId, 0, 0, entityQuery)}>查找人物或设定</button>
+        <button type="button" className={shared.button} disabled={blocked || entityOffset === 0} onClick={() => void readSnapshot(personId, Math.max(0, entityOffset - 200))}>上一页实体</button>
+        <button type="button" className={shared.button} disabled={blocked || entityOffset + snapshot.entities.length >= snapshot.entityTotal} onClick={() => void readSnapshot(personId, entityOffset + 200)}>下一页实体</button></div>
+      <ForgeCharacterOverview api={api} snapshot={snapshot} selectedId={personId} disabled={blocked || requestDirty || proposalDirty}
         detail={detail} proposal={proposal} excluded={excluded} onPrepare={prepareTask}
         onKnowledge={() => onKnowledge(person?.entity.id ?? null)} onMedia={onMedia} onCopy={(text) => void copy(text)} />
       <details ref={taskControls} className={styles.taskControls} open={initialKind !== 'cast' ? true : undefined}><summary>工坊任务、发送与审阅{requestDirty || proposalDirty ? ' · 有未保存修改' : ''}</summary>
@@ -294,6 +299,10 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
           {needsPerson && <div className={styles.history}>
             <label>故事时点 · 排序值<input type="number" step={1} min={-1000000000} max={1000000000} value={storyOrder} disabled={blocked} placeholder="试戏必填，不按章序推断" onChange={(event) => edit(() => { setStoryOrder(event.target.value); setCognitionIds([]); setStateIds([]) })} /></label>
             <button type="button" className={shared.button} disabled={blocked || !personId} onClick={() => void readSnapshot()}>读取该时点的人物历史</button>
+            {person?.sourceWarning && <p className={styles.callout}>{person.sourceWarning}</p>}
+            {person && historyCurrent && <div className={styles.actions}><button type="button" className={shared.button} disabled={blocked || !person.historyOffset} onClick={() => void readSnapshot(personId, entityOffset, Math.max(0, (person.historyOffset ?? 0) - 50))}>上一页历史</button>
+              <button type="button" className={shared.button} disabled={blocked || (person.historyOffset ?? 0) + 50 >= (person.historyTotal ?? 0)} onClick={() => void readSnapshot(personId, entityOffset, (person.historyOffset ?? 0) + 50)}>下一页历史</button><small>每类历史每页 50 条；已选认知 {cognitionIds.length} 项、状态 {stateIds.length} 项，翻页保留。</small>
+              <button type="button" className={shared.button} disabled={blocked || !cognitionIds.length && !stateIds.length} onClick={() => edit(() => { setCognitionIds([]); setStateIds([]) })}>清除历史选择</button></div>}
             {person && <><p className={styles.meta}>历史版本 {person.profileTotal} 份，本页列出最近 {person.profiles.length} 份。时点只筛选已记录认知和状态，档案版本由作者明确选择。</p><details><summary>当前人物档案</summary><CharacterProfileView profile={person.entity.fields.characterProfile} /></details></>}
             {kind === 'audition' && person && historyCurrent && <>
               <label>本次选用的历史档案<select value={profileRevisionId} disabled={blocked} onChange={(event) => edit(() => { setProfileRevisionId(event.target.value); setTraitFields([]) })}><option value="">不附加档案，未选字段未知</option>{person.profiles.map((item) => <option key={item.revisionId} value={item.revisionId}>{displayTime(item.createdAt)} · {item.revisionId.slice(0, 8)}</option>)}</select></label>
@@ -304,7 +313,7 @@ export function ForgePanel({ api, book, chapter, disabled, initialPersonId, init
             {person && historyCurrent && <details><summary>此时的表面与隐藏关系 · {person.relations.length}</summary>{person.relations.map((item) => <p key={item.id}><strong>{item.fields.title}</strong> · {item.fields.layer === 'surface' ? '表面' : item.fields.layer === 'hidden' ? '隐藏' : '层次未标注'} · {item.active === 'active' ? '记录有效' : item.active === 'inactive' ? '记录无效' : '有效性未知'}<small>{item.fields.description}</small></p>)}<p className={styles.help}>关系不会自动变成人物已知信息。人物知情与读者披露须独立记录。</p></details>}
           </div>}
           <label>{forgeUsesChapter(kind) ? '本次完整正文来源' : '任务所属章节（正文内容不发送）'}<select value={anchorId} disabled={blocked} onChange={(event) => edit(() => setAnchorId(event.target.value))}><option value="">选择已保存章节</option>{book.chapters.map((item) => <option key={item.id} value={item.id}>第 {item.position + 1} 章 · {item.title}</option>)}</select></label>
-          {kind !== 'audition' && <details><summary>明确选入的设定 · {entityIds.length}/20</summary><div className={styles.sourceList}>{snapshot.entities.map((item) => <label key={item.id} className={styles.check}><input type="checkbox" checked={entityIds.includes(item.id)} disabled={blocked || !entityIds.includes(item.id) && entityIds.length >= 20} onChange={(event) => edit(() => setEntityIds(toggle(entityIds, item.id, event.target.checked)))} />{item.name} · {item.kind}</label>)}</div><p className={styles.help}>列出前 {snapshot.entities.length}/{snapshot.entityTotal} 个实体；选入资料须已采用、当前且完成冲突复核。关系推断至少选两项。</p></details>}
+          {kind !== 'audition' && <details><summary>明确选入的设定 · {entityIds.length}/20</summary><div className={styles.sourceList}>{snapshot.entities.map((item) => <label key={item.id} className={styles.check}><input type="checkbox" checked={entityIds.includes(item.id)} disabled={blocked || !entityIds.includes(item.id) && entityIds.length >= 20} onChange={(event) => edit(() => setEntityIds(toggle(entityIds, item.id, event.target.checked)))} />{item.name} · {item.kind}</label>)}</div><p className={styles.help}>当前第 {Math.floor(entityOffset / 200) + 1} 页，显示 {snapshot.entities.length} 个，共 {snapshot.entityTotal} 个匹配实体；翻页保留选择。选入资料须已采用、当前且完成冲突复核。关系推断至少选两项。</p></details>}
           {kind === 'world' && <label>接续一轮世界提案 · 选填<select value={referenceRunId} disabled={blocked} onChange={(event) => edit(() => setReferenceRunId(event.target.value))}><option value="">从本次要求开始</option>{snapshot.runs.filter((item) => item.kind === 'world' && ['succeeded', 'adopted'].includes(item.state)).map((item) => <option key={item.id} value={item.id}>{displayTime(item.createdAt)} · 原始提案 {item.id.slice(0, 8)}</option>)}{referenceRunId && !snapshot.runs.some((item) => item.id === referenceRunId) && <option value={referenceRunId}>{referenceRunId}</option>}</select></label>}
           <label>{kind === 'audition' ? '试戏情境与本轮台词' : '这次的创作要求'}<textarea value={instruction} rows={5} maxLength={2000} disabled={blocked} onChange={(event) => edit(() => setInstruction(event.target.value))} /></label>
           {['names', 'cast', 'world'].includes(kind) && <div className={styles.columns}><label>{kind === 'names' ? '名字组数 · 每组3个' : '候选卡片数'}<input type="number" min={1} max={4} step={1} value={count} disabled={blocked} onChange={(event) => edit(() => setCount(event.target.valueAsNumber))} /></label><label>避用名称 · 逗号或换行分隔<textarea rows={2} value={excluded} maxLength={12000} disabled={blocked} onChange={(event) => edit(() => setExcluded(event.target.value))} /></label></div>}
